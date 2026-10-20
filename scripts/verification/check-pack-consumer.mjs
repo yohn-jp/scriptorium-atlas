@@ -409,7 +409,7 @@ createRoot(document.getElementById('root')).render(React.createElement(React.Fra
   const canvasPlugins = hasCanvas ? `import { fileURLToPath } from 'node:url';
 import { copyCanvasAssets, excalidrawWorkerVitePlugin } from '@scriptorium-atlas/canvas/assets';
 const plugins=[excalidrawWorkerVitePlugin(),{name:'packed-canvas-assets',async closeBundle(){await copyCanvasAssets(fileURLToPath(new URL('./browser-dist',import.meta.url)));}}];\n` : 'const plugins=[];\n';
-  await writeFile(join(consumerDirectory, 'vite.config.mjs'), `${canvasPlugins}export default { base: './', plugins, worker:{format:'es'}, build: { modulePreload:{polyfill:false}, outDir: 'browser-dist', emptyOutDir: true, manifest: true } };\n`, 'utf8');
+  await writeFile(join(consumerDirectory, 'vite.config.mjs'), `${canvasPlugins}export default { base: './', plugins, worker:{format:'es',${hasCanvas ? 'plugins:()=>[excalidrawWorkerVitePlugin()]' : ''}}, build: { modulePreload:{polyfill:false}, outDir: 'browser-dist', emptyOutDir: true, manifest: true } };\n`, 'utf8');
 
   const build = await run('pnpm', ['exec', 'vite', 'build', '--config', 'vite.config.mjs'], consumerDirectory);
   evidence.buildExitStatus = build.exitStatus;

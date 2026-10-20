@@ -8,6 +8,7 @@ import {collectWorkerImports} from '../../scripts/verification/worker-imports.mj
 const profileValue = process.env['ATLAS_PROFILE'] ?? 'combined';
 if (profileValue!=='atlas'&&profileValue!=='story'&&profileValue!=='combined') throw new Error('Invalid ATLAS_PROFILE');
 const profile=profileValue;
+const canvasWorkerPluginFactory = profile === 'story' ? undefined : (await import('@scriptorium-atlas/canvas/assets')).excalidrawWorkerVitePlugin;
 const enabled = profile === 'combined' ? ['atlas', 'story'] : [profile];
 const packages = { atlas: '@scriptorium-atlas/atlas', story: '@scriptorium-atlas/story-knowledge' };
 const repoRoot=resolve(fileURLToPath(new URL('.',import.meta.url)),'../..');
@@ -64,14 +65,14 @@ function composition(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [composition(), ...(profile === 'story' ? [] : [(await import('@scriptorium-atlas/canvas/assets')).excalidrawWorkerVitePlugin()])],
+  plugins: [composition(), ...(canvasWorkerPluginFactory ? [canvasWorkerPluginFactory()] : [])],
   define: { __ATLAS_PROFILE__: JSON.stringify(profile) },
   build: {
     modulePreload: { polyfill: false },
     outDir: `../../dist/${profile}`, emptyOutDir: true, sourcemap: true,
     rollupOptions: { input: { host: fileURLToPath(new URL('index.html', import.meta.url)), frame: fileURLToPath(new URL('frame.html', import.meta.url)) } },
   },
-  worker: { format: 'es',plugins:()=>[{
+  worker: { format: 'es',plugins:()=>[...(canvasWorkerPluginFactory ? [canvasWorkerPluginFactory()] : []),{
     name:'atlas-worker-inventory',
     generateBundle(_options,bundle){
       for(const chunk of Object.values(bundle)) if(chunk.type==='chunk') workerChunks.push({file:chunk.fileName,imports:chunk.imports,dynamicImports:chunk.dynamicImports,workerImports:[],workerEntry:chunk.isEntry,modules:Object.keys(chunk.modules).map(modulePath),bytes:new TextEncoder().encode(chunk.code).length});
