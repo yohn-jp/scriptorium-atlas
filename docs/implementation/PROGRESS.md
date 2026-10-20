@@ -19,3 +19,11 @@ The accepted Goal and F01–F31 / Q01–Q15 remain unchanged. This file records 
 4. Runtime Ajv compilation conflicts with the accepted strict frame CSP. Validators are generated as standalone functions at build time from the same canonical schema; CSP is not relaxed.
 
 No F/Q gate has been declared PASS at this checkpoint. An implementation PR is not a completion certificate.
+
+## 2026-10-21 — integrated Host checkpoint
+
+- Host composition now uses the real public persistence/Plugin APIs: author review of full before/after changes, journal recovery and staged assets, verified binary download, scoped source access, cancelable Provider leases, and separate-origin static frames. Source storage remains exclusively Host-owned.
+- React and React DOM are pinned to 18.3.1 with matching React 18 types. Strict peer validation rejected the earlier React 19 selection because Excalidraw 0.18.1's nested Radix dependencies require React 18; peer validation was retained. `pnpm install --no-frozen-lockfile` then exited 0.
+- On Host leaf parent `ad19264` plus the working Host changes: `pnpm -r --if-present typecheck` exited 0; `pnpm -r --if-present test` exited 0 (contracts 6, canvas 7, graph 14, layout 8, persistence 13, adapter 1, Story 23, Atlas 8); `node --test tests/verification/*.test.mjs` exited 0 (4 tests). These are intermediate checks, not final-HEAD gate evidence.
+- `pnpm build:profiles` failed after generating the Atlas bundle: license validation correctly rejected missing LICENSE/COPYING/NOTICE text in the published Excalidraw package. A pinned upstream legal-text supplement is being verified; the guard remains enabled. `pnpm --filter @scriptorium-atlas/standalone build:story` exited 0, including dependency notices. Product browser tests are in progress; other profiles, full closure, fault, accessibility, performance, and complete F/Q coverage remain NOT_CHECKED.
+- Bundle manifest shape is being added to the canonical schema, and matching Import/Export boundary and preservation tests are being strengthened. No Goal or quality-gate threshold was changed.

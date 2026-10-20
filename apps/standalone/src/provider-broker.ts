@@ -1,4 +1,5 @@
 import { assertContract, type PluginProviderRequest, type ProviderLease, type ProviderRequest, type ProviderRpcResponse, type WorkspaceHandle } from '@scriptorium-atlas/contracts';
+import {sha256} from '@scriptorium-atlas/persistence/bytes';
 
 export type FrameProviderConnection = {
   epoch: number;
@@ -7,6 +8,8 @@ export type FrameProviderConnection = {
 };
 const connections = new Map<string, FrameProviderConnection>();
 const leases = new Map<string, {owner: string; providerId: string; handle: string; connection: FrameProviderConnection; lease: ProviderLease}>();
+const owners=new Set<string>();
+export function registerProviderOwner(owner:string){owners.add(owner);}
 
 export function registerProvider(providerId: string, connection: FrameProviderConnection) {
   if (connections.has(providerId)) throw new Error('PROTOCOL_INVALID: Provider IDが重複しています');
@@ -18,18 +21,24 @@ export function registerProvider(providerId: string, connection: FrameProviderCo
 }
 
 export async function acquireProvider(owner: string, providerId: string, workspace: WorkspaceHandle): Promise<ProviderLease> {
+  if(!owners.has(owner))throw new Error('CANCELED');
+  if(leases.size>=64)throw new Error('OVERLOADED: Provider lease上限');
   const connection = connections.get(providerId);
   if (!connection || connection.workspaceId !== workspace.workspaceId) throw new Error('PROVIDER_FAILED: Provider Frameが利用できません');
   const deadline = Date.now() + 10_000;
-  const revisionHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(workspace.sourceRevision)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const revisionHash = await sha256(new TextEncoder().encode(workspace.sourceRevision));
   const response = await connection.call({ method: 'open', params: {
     workspaceId: workspace.workspaceId,
     requestedSnapshot: { workspaceId: workspace.workspaceId, sourceRevision: workspace.sourceRevision, providerRevision: `story-v1:${revisionHash}`, epoch: connection.epoch },
-    grants: [{ capability: 'workspace.files.read', paths: ['bible/', 'plot/', 'manuscript/'] }, {capability: 'graph.read'}], deadline,
+    grants: [{ capability:'workspace.files.metadata',paths:['bible/','plot/','manuscript/'] },{ capability: 'workspace.files.read', paths: ['bible/', 'plot/', 'manuscript/'] }, {capability: 'graph.read'}], deadline,
   } }, deadline);
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerOpenResult', response.result);
-  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.epoch !== connection.epoch) throw new Error('SNAPSHOT_STALE');
+  if(!owners.has(owner)||connections.get(providerId)!==connection||leases.size>=64){
+    await connection.call({method:'close',params:{handle:response.result.handle}},Date.now()+5000).catch(()=>{});
+    throw new Error(owners.has(owner)?'OVERLOADED':'CANCELED');
+  }
+  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.providerRevision !== `story-v1:${revisionHash}` || response.result.actualSnapshot.epoch !== connection.epoch) throw new Error('SNAPSHOT_STALE');
   const lease: ProviderLease = { leaseId: crypto.randomUUID(), providerId, snapshot: response.result.actualSnapshot, capabilities: response.result.capabilities };
   leases.set(lease.leaseId, {owner, providerId, handle: response.result.handle, connection, lease});
   return lease;
@@ -43,7 +52,7 @@ export async function callProvider(owner: string, leaseId: string, request: Plug
   const response = await entry.connection.call(routed, Date.now() + 5000);
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerResult', response.result);
-  if (JSON.stringify(response.result.snapshot) !== JSON.stringify(entry.lease.snapshot)) throw new Error('SNAPSHOT_STALE');
+  if (response.result.snapshot.workspaceId !== entry.lease.snapshot.workspaceId || response.result.snapshot.sourceRevision !== entry.lease.snapshot.sourceRevision || response.result.snapshot.providerRevision !== entry.lease.snapshot.providerRevision || response.result.snapshot.epoch !== entry.lease.snapshot.epoch) throw new Error('SNAPSHOT_STALE');
   return response.result;
 }
 
@@ -56,6 +65,7 @@ export async function releaseProvider(owner: string, leaseId: string) {
 }
 
 export function releaseOwner(owner: string) {
+  owners.delete(owner);
   const active = [...leases.entries()].filter(([, entry]) => entry.owner === owner);
   for (const [id] of active) void releaseProvider(owner, id).catch(() => {});
 }

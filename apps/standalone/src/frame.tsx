@@ -21,12 +21,14 @@ async function serveProvider(port: MessagePort, host: PluginHostClient, epoch: n
     if (request.epoch !== epoch || request.providerId !== pluginId || plugin !== 'story') return;
     if (request.payload.method === 'cancel') {
       controllers.get(request.payload.params.requestId)?.abort();
+      const reply={type:'atlas.provider.response',protocolVersion:'atlas.graph/v1',requestId:request.requestId,providerId:pluginId,epoch,method:'cancel',ok:true,result:null,...('handle' in request?{handle:request.handle}:{})};
+      assertContract('providerRpcResponse',reply); port.postMessage(reply);
       return;
     }
     const controller = new AbortController(); controllers.set(request.requestId, controller);
     const timeout = setTimeout(() => controller.abort(), Math.max(0, request.deadline - Date.now()));
     void (async () => {
-      const base = { type: 'atlas.provider.response', protocolVersion: 'atlas.graph/v1', requestId: request.requestId, providerId: pluginId, epoch };
+      const base = { type: 'atlas.provider.response', protocolVersion: 'atlas.graph/v1', requestId: request.requestId, providerId: pluginId, epoch, method:request.payload.method, ...('handle' in request ? {handle:request.handle} : {}) };
       let reply: unknown;
       try {
         if (Date.now() >= request.deadline) throw new Error('TIMEOUT');

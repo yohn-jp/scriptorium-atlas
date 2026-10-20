@@ -5,13 +5,32 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "package.json", "README.md"],
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./metadata": { "types": "./dist/metadata.d.ts", "import": "./dist/metadata.js" },
-    "./provider": { "types": "./dist/provider.d.ts", "import": "./dist/provider.js" },
-    "./ui": { "types": "./dist/ui/index.d.ts", "import": "./dist/ui/index.js" },
-    "./domain": { "types": "./dist/domain/public.d.ts", "import": "./dist/domain/public.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./metadata": {
+      "types": "./dist/metadata.d.ts",
+      "import": "./dist/metadata.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "import": "./dist/ui/index.js"
+    },
+    "./domain": {
+      "types": "./dist/domain/public.d.ts",
+      "import": "./dist/domain/public.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -24,11 +43,11 @@
     "yaml": "2.9.1"
   },
   "peerDependencies": {
-    "react": "19.3.1"
+    "react": "18.3.1"
   },
   "devDependencies": {
-    "@types/react": "19.3.0",
-    "react": "19.3.1",
+    "@types/react": "18.3.31",
+    "react": "18.3.1",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
   }

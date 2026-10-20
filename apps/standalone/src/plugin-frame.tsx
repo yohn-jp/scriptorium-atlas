@@ -2,12 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { assertContract, validateContract, type ChangeIntent, type HostRpcRequest, type HostRpcResponse, type PreparedChange, type ProviderRequest, type ProviderRpcResponse, type VersionedFile, type WorkspaceHandle } from '@scriptorium-atlas/contracts';
 import type { IndexedDbHostPort } from '@scriptorium-atlas/persistence/host';
 import { metadata } from 'virtual:atlas-profile';
-import { acquireProvider, callProvider, registerProvider, releaseOwner, releaseProvider } from './provider-broker.js';
+import { acquireProvider, callProvider, registerProvider, registerProviderOwner, releaseOwner, releaseProvider } from './provider-broker.js';
 
 let nextEpoch = 0;
 const MAX_MESSAGE = 8 * 1024 * 1024;
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
-type Props = {plugin: 'atlas'|'story'; workspace: WorkspaceHandle; host: IndexedDbHostPort; onPrepare(change: ChangeIntent): Promise<PreparedChange>; onSource(file: VersionedFile): Promise<void>; theme: string; storyGrant: boolean; storyEnabled: boolean};
+type Props = {plugin: 'atlas'|'story'; workspace: WorkspaceHandle; host: IndexedDbHostPort; onPrepare(change: ChangeIntent): Promise<PreparedChange>; onPrepareAsset(uploadId:string,change:ChangeIntent):Promise<PreparedChange>; onSource(file: VersionedFile): Promise<void>; theme: string; storyGrant: boolean; storyEnabled: boolean};
 
 export function PluginFrame(props: Props) {
   const [reload, setReload] = useState(0);
@@ -27,22 +27,27 @@ export function PluginFrame(props: Props) {
     let unregister: (() => void) | undefined;
     let active = true;
     const owner = `${pluginId}:${session.nonce}`;
-    const pending = new Map<string, {resolve(value: ProviderRpcResponse):void; reject(err:Error):void; timer: ReturnType<typeof setTimeout>}>();
-    const queue: Array<() => void> = [];
+    registerProviderOwner(owner);
+    const pending = new Map<string, {request:ProviderRequest;resolve(value: ProviderRpcResponse):void; reject(err:Error):void; timer: ReturnType<typeof setTimeout>}>();
+    const canceling=new Map<string,{request:ProviderRequest;timer:ReturnType<typeof setTimeout>}>();
+    const queue: Array<{start():void;reject(err:Error):void}> = [];
     const seenCalls = new Set<string>();
+    const assetUploads = new Set<string>();
     let inFlightHost = 0;
     const fail = (message: string) => {
       if (!active) return;
       setError(message); setReady(false); port.current?.close(); port.current = undefined;
       unregister?.(); unregister = undefined;
       for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error(message)); }
-      pending.clear(); queue.length = 0; releaseOwner(owner);
+      for (const entry of canceling.values()) clearTimeout(entry.timer);
+      for (const entry of queue) entry.reject(new Error(message));
+      pending.clear(); canceling.clear(); queue.length = 0; releaseOwner(owner);
     };
     function providerCall(request: ProviderRequest, deadline: number): Promise<ProviderRpcResponse> {
       if (!port.current || !active) return Promise.reject(new Error('PROVIDER_FAILED'));
-      if (pending.size >= 4) {
+      if (pending.size + canceling.size >= 4) {
         if (queue.length >= 64) return Promise.reject(new Error('OVERLOADED'));
-        return new Promise((resolve, reject) => queue.push(() => providerCall(request, deadline).then(resolve, reject)));
+        return new Promise((resolve, reject) => queue.push({start:()=>void providerCall(request, deadline).then(resolve,reject),reject}));
       }
       if (deadline <= Date.now()) return Promise.reject(new Error('TIMEOUT'));
       const requestId = crypto.randomUUID();
@@ -51,14 +56,16 @@ export function PluginFrame(props: Props) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(requestId); reject(new Error('TIMEOUT'));
-          port.current?.postMessage({...message, requestId: crypto.randomUUID(), payload:{method:'cancel',params:{requestId}}});
-          setTimeout(() => fail('TIMEOUT: Providerを停止しました。DraftはHostに保持されています。'), 500);
+          const cancellation={...message, requestId: crypto.randomUUID(), payload:{method:'cancel',params:{requestId}}};
+          assertContract('providerRpcRequest',cancellation); port.current?.postMessage(cancellation);
+          canceling.set(requestId,{request,timer:setTimeout(() => fail('TIMEOUT: Providerを停止しました。DraftはHostに保持されています。'), 500)});
         }, deadline - Date.now());
-        pending.set(requestId, {resolve,reject,timer}); port.current!.postMessage(message);
+        pending.set(requestId, {request,resolve,reject,timer}); port.current!.postMessage(message);
       });
     }
     const onReady = (event: MessageEvent) => {
-      if (event.origin !== origin || event.source !== frame.current?.contentWindow || !validateContract('frameReady', event.data) || event.data.nonce !== session.nonce || event.data.pluginId !== pluginId || port.current) return;
+      const child=frame.current?.contentWindow;
+      if (!child||event.origin !== origin || event.source !== child || !validateContract('frameReady', event.data) || event.data.nonce !== session.nonce || event.data.pluginId !== pluginId || port.current) return;
       const channel = new MessageChannel(); port.current = channel.port1;
       port.current.onmessageerror = () => fail('PROTOCOL_INVALID: MessageChannelを停止しました');
       port.current.onmessage = message => {
@@ -66,9 +73,15 @@ export function PluginFrame(props: Props) {
         if (size(data) >= MAX_MESSAGE) { fail('PROTOCOL_INVALID: 過大message'); return; }
         if (validateContract('providerRpcResponse', data)) {
           if (data.epoch !== session.epoch || data.providerId !== pluginId) { fail('PROTOCOL_INVALID: stale provider'); return; }
+          const canceled=canceling.get(data.requestId);
+          if (canceled) {
+            if (data.method!==canceled.request.method) {fail('PROTOCOL_INVALID: late Provider method');return;}
+            clearTimeout(canceled.timer);canceling.delete(data.requestId);queue.shift()?.start();return;
+          }
           const entry = pending.get(data.requestId);
           if (!entry) return;
-          clearTimeout(entry.timer); pending.delete(data.requestId); entry.resolve(data); queue.shift()?.();
+          if (data.method !== entry.request.method || 'handle' in entry.request.params && (!('handle' in data) || data.handle!==entry.request.params.handle)) {fail('PROTOCOL_INVALID: Provider method/handle');return;}
+          clearTimeout(entry.timer); pending.delete(data.requestId); entry.resolve(data); queue.shift()?.start();
           return;
         }
         if (!validateContract('hostRpcRequest', data) || data.epoch !== session.epoch) { fail('PROTOCOL_INVALID: Host request'); return; }
@@ -88,13 +101,13 @@ export function PluginFrame(props: Props) {
         }).finally(() => {inFlightHost--;});
       };
       port.current.start();
-      event.source.postMessage({type:'atlas.frame.init',nonce:session.nonce,epoch:session.epoch}, {targetOrigin:origin,transfer:[channel.port2]});
+      child.postMessage({type:'atlas.frame.init',nonce:session.nonce,epoch:session.epoch}, {targetOrigin:origin,transfer:[channel.port2]});
       if (props.plugin === 'story') unregister = registerProvider(pluginId, {epoch:session.epoch,workspaceId:props.workspace.workspaceId,call:providerCall});
       setReady(true);
     };
     const storyPath = (path:string) => /^(bible|plot|manuscript)\//.test(path);
     const atlasPath = (path:string) => /\.(atlas\.json|excalidraw)$/.test(path) || path.startsWith('assets/');
-    const canRead = (path:string) => props.plugin === 'story' ? storyPath(path) : atlasPath(path) || latest.current.storyGrant && storyPath(path);
+    const canRead = (path:string) => props.plugin === 'story' ? storyPath(path) : !storyPath(path) || !metadata['story'] || latest.current.storyGrant;
     async function dispatch(request: HostRpcRequest): Promise<unknown> {
       const current = latest.current;
       const workspace = current.workspace;
@@ -115,6 +128,21 @@ export function PluginFrame(props: Props) {
           const {change} = request.params;
           if (change.workspaceId !== workspace.workspaceId || change.writes.some(write => !(props.plugin === 'story' ? storyPath(write.path) : atlasPath(write.path))) || change.reads.some(read => !canRead(read.path))) throw new Error('PERMISSION_DENIED');
           return current.onPrepare(change);
+        }
+        case 'beginAsset': {
+          const {asset} = request.params;
+          if (props.plugin !== 'atlas' || asset.workspaceId !== workspace.workspaceId || !asset.path.startsWith('assets/')) throw new Error('PERMISSION_DENIED');
+          const receipt = await current.host.beginAsset(workspace, asset);
+          assetUploads.add(receipt.uploadId); return receipt;
+        }
+        case 'appendAsset': {
+          if (!assetUploads.has(request.params.uploadId)) throw new Error('PERMISSION_DENIED');
+          return current.host.appendAsset(workspace, request.params);
+        }
+        case 'prepareAsset': {
+          const {change,uploadId} = request.params;
+          if (props.plugin !== 'atlas' || !assetUploads.has(uploadId) || change.workspaceId !== workspace.workspaceId || change.writes.some(write => !atlasPath(write.path)) || change.reads.some(read => !canRead(read.path))) throw new Error('PERMISSION_DENIED');
+          return current.onPrepareAsset(uploadId,change);
         }
         case 'requestSource': {
           const {ref} = request.params;
@@ -142,7 +170,9 @@ export function PluginFrame(props: Props) {
     return () => {
       active = false; clearTimeout(timer); window.removeEventListener('message',onReady); unregister?.(); releaseOwner(owner); port.current?.close(); port.current=undefined;
       for (const entry of pending.values()) {clearTimeout(entry.timer);entry.reject(new Error('CANCELED'));}
-      pending.clear(); queue.length=0;
+      for (const entry of canceling.values()) clearTimeout(entry.timer);
+      for (const entry of queue) entry.reject(new Error('CANCELED'));
+      pending.clear();canceling.clear(); queue.length=0;
     };
   }, [props.plugin, props.workspace.workspaceId, pluginId, origin, session]);
 

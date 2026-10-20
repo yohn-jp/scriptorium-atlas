@@ -41,7 +41,7 @@ export function createHostClient(port: MessagePort, epoch: number): { host: Plug
     assertContract('hostRpcRequest', request);
     if (encodedSize(request) >= MAX_MESSAGE) return Promise.reject(new Error('INVALID_INPUT: メッセージが大きすぎます'));
     return new Promise<Result<M>>((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(callId); reject(new Error('TIMEOUT')); }, 10_000);
+      const timer = setTimeout(() => { pending.delete(callId); reject(new Error('TIMEOUT')); }, method==='snapshot'||method==='acquireProvider'?10_000:5000);
       pending.set(callId, { method, resolve: value => resolve(value as Result<M>), reject, timer });
       port.postMessage(request);
     });
@@ -51,6 +51,9 @@ export function createHostClient(port: MessagePort, epoch: number): { host: Plug
     list: (query = {}) => call('list', query),
     read: query => call('read', query),
     prepare: change => call('prepare', { change }),
+    beginAsset: asset => call('beginAsset', {asset}),
+    appendAsset: chunk => call('appendAsset', chunk),
+    prepareAsset: (uploadId, change) => call('prepareAsset', {uploadId,change}),
     requestSource: ref => call('requestSource', { ref }),
     describeProviders: () => call('describeProviders', {}),
     acquireProvider: (providerId, sourceRevision) => call('acquireProvider', { providerId, sourceRevision }),

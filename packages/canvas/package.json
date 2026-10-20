@@ -48,11 +48,11 @@
     "@excalidraw/excalidraw": "0.18.1"
   },
   "peerDependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@types/react": "19.2.8",
+    "@types/react": "18.3.31",
     "typescript": "5.9.3"
   },
   "description": "The Canvas package wraps the official Excalidraw React editor for Atlas."

@@ -18,10 +18,11 @@
     "@scriptorium-atlas/persistence": "workspace:*",
     "@scriptorium-atlas/atlas": "workspace:*",
     "@scriptorium-atlas/story-knowledge": "workspace:*",
-    "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "vite": "8.3.4"
+    "vite": "8.3.4",
+    "@scriptorium-atlas/canvas": "workspace:*"
   }
 }
