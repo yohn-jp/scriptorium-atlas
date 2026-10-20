@@ -104,3 +104,24 @@ Every row remains required. Implementation paths below identify the current impl
 | F29 | Lazy chunks, bounded queues/caches and Worker release | Q12/Q14 |
 | F30 | Isolated frame/provider and durable storage failure handling | Q05/Q10/Q11 |
 | F31 | Draft PR #1, progress/provenance and this pending final ledger | Q15 |
+
+## Focused product performance checkpoint (Q12 still FAIL)
+
+At integration candidate `29bbace26d2cae6ec73489ff8f5c3d76947042b7`, the unchanged production performance helper passed the selected Graph cases in isolation. The cancel and 100/500-object Freeform cases were explicitly NOT_CHECKED by this focused invocation. This does not replace the complete final-HEAD Q12 run. The combined artifact SHA-256 was `e0e69786988475d2a85cd6cd2ee1d5d9f0bd9cad733e85f9b61858bccd702687` (752 files, 65,120,753 bytes).
+
+| Selected assertion | Actual | Existing limit |
+| --- | --- | --- |
+| 1k cold first-visible, 5 cache-cleared samples | p95 1,988.131 ms; individual 1,980.887 / 1,932.822 / 1,949.449 / 1,978.559 / 1,988.131 ms | 3,000 ms |
+| 1k warmed search, Japanese/tag/type, 30 each | overall p95 6.2 ms | 100 ms |
+| 1k Force, successful 1,000 finite positions | 907.1 ms | 2,000 ms |
+| 10k/20k Worker index | 288.5 ms, exact counts | 10,000 ms |
+| 10k warmed search, Japanese/tag/type, 30 each | overall p95 12.2 ms | 250 ms |
+| 10k neighbors, 30 each of depth 1/2/3 | per-class p95 15.6 / 3.3 / 2.5 ms, exact complete result IDs/depths | 500 ms |
+| 10k shortest path, 30 nontrivial five-hop results | p95 2.7 ms, exact endpoints | 500 ms |
+| Disable Atlas, 5-second observation | active Workers 0, Plugin-origin requests 0 | 0 / 0 |
+
+Environment: Node 24.21.0, Linux 6.18.52 x86_64, 16 logical CPUs, 50,994,450,432 bytes RAM, Chromium 155.0.8059.79 headless at 1440×1000. Heap uses Chromium `performance.memory` and is explicitly approximate/shared renderer JavaScript heap; it is not isolated Plugin/Worker heap or process RSS. Cold results include JS/CSS transfer; per-resource timing is separately retained, never subtracted.
+
+Exact invocation: `TMPDIR=/data/atlas-v1-verification-tmp ATLAS_PERF_REPO_ROOT=/data/atlas-v1-verification ATLAS_PERF_REPORT=/data/atlas-v1-verification-tmp/q12-visible-providers-29bbace.json ATLAS_E2E_CHROMIUM=/nix/store/ini1ifgvcsvw48x4mxawrv9jvbdwn70p-chromium-155.0.8059.79/bin/chromium node /data/atlas-v1-verification-tmp/run-q12-visible-provider-only.mjs`. Exit 0 means the two selected cases passed. The temporary driver imports the existing helper and filters only via its recording callback; all other scenarios are reported NOT_CHECKED.
+
+Report SHA-256: `b45ee7a786fb7738366a7b007ad5acb187f27110dff891083cfc22a4f2905c72`; stdout: `a2c8e04d9a589ecee80752c0f72ba50a8bde1585e24bed69bece89bb0ebe944a`; temporary driver: `1d8d171ffc97e0a1b35bd117ba315a98825080f47aaf04b9ebcd9ab305652ce7`; helper: `514fd04437039e18e9f5f961bc3044f2a387e01f470c518135931a9bbcbb84c2`. The deterministic input ZIP hashes remain `25c2b803f987f6360bd98582b9b12bb65c84422de6b4daa1f30cd2052827b751` (1k/2k plus 1k-node layout) and `c54ab3a662cc60fcef7d88036849c6f8c1f85dd6cc4b8bb32e966259f1957c47` (10k/20k, no initial layout). Generated archives and raw reports remain outside Git.
