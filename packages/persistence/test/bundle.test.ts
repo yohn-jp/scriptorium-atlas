@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
+import { unzipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertBundleWorkspaceCapacity, MAX_BUNDLE_ARCHIVE_BYTES, MAX_BUNDLE_EXPANDED_BYTES, MAX_WORKSPACE_FILES, MAX_WORKSPACE_PAYLOAD_FILES, serializedManifestBytes, workspaceRevision } from '../src/bundle.js';
+import { assertBundleWorkspaceCapacity, createBundle, MAX_BUNDLE_ARCHIVE_BYTES, MAX_BUNDLE_EXPANDED_BYTES, MAX_WORKSPACE_FILES, MAX_WORKSPACE_PAYLOAD_FILES, parseBundle, serializedManifestBytes, workspaceRevision } from '../src/bundle.js';
 import { openDatabase } from '../src/database.js';
 import { openIndexedDbHost } from '../src/host.js';
 import { sha256, utf8Bytes } from '../src/bytes.js';
@@ -43,6 +44,49 @@ describe('V1 workspace bundle limits and byte fidelity', () => {
       path: 'file-extra.bin', revision: 'e'.repeat(64), byteLength: 0
     }])).toThrow();
   });
+
+  it('emits decodable ZIP64 end records at the 65,535-entry boundary', async () => {
+    for (const totalEntries of [65_534, 65_535, 65_536]) {
+      const source = await emptyBundleSource(totalEntries - 1);
+      const bundle = await createBundle(source);
+      const archive = new Uint8Array(await bundle.arrayBuffer());
+      const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+      const eocdOffset = archive.byteLength - 22;
+      expect(view.getUint32(eocdOffset, true)).toBe(0x06054b50);
+      expect(view.getUint16(eocdOffset + 10, true)).toBe(totalEntries < 65_535 ? totalEntries : 0xffff);
+
+      if (totalEntries >= 65_535) {
+        expect(view.getUint32(eocdOffset - 20, true)).toBe(0x07064b50);
+        const zip64Offset = Number(view.getBigUint64(eocdOffset - 12, true));
+        expect(view.getUint32(zip64Offset, true)).toBe(0x06064b50);
+        expect(view.getBigUint64(zip64Offset + 32, true)).toBe(BigInt(totalEntries));
+      }
+
+      const decoded = unzipSync(archive);
+      expect(Object.keys(decoded)).toHaveLength(totalEntries);
+      expect(decoded['manifest.json']).toBeDefined();
+      const manifest = JSON.parse(new TextDecoder().decode(decoded['manifest.json'])) as { files: unknown[] };
+      expect(manifest.files).toHaveLength(totalEntries - 1);
+    }
+  }, 180_000);
+
+  it('exports and parses the full 100,000-entry workspace with record count and SHA intact', async () => {
+    const source = await emptyBundleSource(MAX_WORKSPACE_PAYLOAD_FILES);
+    const bundle = await createBundle(source);
+    expect(bundle.size).toBeLessThanOrEqual(MAX_BUNDLE_ARCHIVE_BYTES);
+    const imported = await parseBundle(bundle);
+    expect(imported.files).toHaveLength(MAX_WORKSPACE_PAYLOAD_FILES);
+    expect(imported.sourceRevision).toBe(source.sourceRevision);
+    expect(imported.files[0]).toMatchObject({
+      path: 'entries/file-000000.bin',
+      revision: await sha256(new Uint8Array())
+    });
+    expect(imported.files.at(-1)).toMatchObject({
+      path: `entries/file-${String(MAX_WORKSPACE_PAYLOAD_FILES - 1).padStart(6, '0')}.bin`,
+      revision: await sha256(new Uint8Array())
+    });
+    expect(await workspaceRevision(imported.files)).toBe(source.sourceRevision);
+  }, 180_000);
 
   it('rejects 100,001 archive entries, oversized archive input, and malformed ZIP metadata before import mutation', async () => {
     const host = await openIndexedDbHost({ databaseName: `atlas-import-limits-${++databaseCounter}` });
@@ -161,6 +205,21 @@ describe('V1 workspace bundle limits and byte fidelity', () => {
     expect(file).toMatchObject({ content: exactContent, revision: expectedRevision });
   });
 });
+
+async function emptyBundleSource(payloadCount: number) {
+  const workspaceId = `zip64-${payloadCount}`;
+  const bytes = new ArrayBuffer(0);
+  const revision = await sha256(new Uint8Array(bytes));
+  const files = Array.from({ length: payloadCount }, (_, index) => ({
+    workspaceId,
+    path: `entries/file-${String(index).padStart(6, '0')}.bin`,
+    revision,
+    bytes,
+    contentType: 'application/octet-stream',
+    updatedAt: new Date(0).toISOString()
+  }));
+  return { workspaceId, name: `ZIP64 ${payloadCount}`, sourceRevision: await workspaceRevision(files), files };
+}
 
 function makeZip64EntryCountArchive(entries: number): Uint8Array {
   const archive = new Uint8Array(98);

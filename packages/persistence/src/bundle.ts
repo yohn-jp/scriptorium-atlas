@@ -56,6 +56,13 @@ interface CentralEntry {
   madeBy: number;
 }
 
+interface CentralDirectory {
+  entries: CentralEntry[];
+  offset: number;
+}
+
+const ZIP_IMPORT_CHUNK_BYTES = 16 * 1024;
+
 export async function createBundle(source: BundleSource): Promise<Blob> {
   validateWorkspaceId(source.workspaceId);
   validateWorkspaceName(source.name);
@@ -112,15 +119,70 @@ export async function createBundle(source: BundleSource): Promise<Blob> {
   for (const [path, bytes] of Object.entries(payload)) {
     zipFiles[path] = [bytes, { os: 3, attrs: 0o100644 << 16 }];
   }
-  const archive = zipSync(zipFiles, {
+  let archive = zipSync(zipFiles, {
     level: 6,
     mtime: new Date('1980-01-01T00:00:00.000Z'),
     os: 3
   });
+  archive = appendZip64EntryCount(archive, files.length + 1);
   if (archive.byteLength > MAX_BUNDLE_ARCHIVE_BYTES) {
     fail('INVALID_INPUT', 'Compressed bundle exceeds the V1 archive size limit.', { maxBytes: MAX_BUNDLE_ARCHIVE_BYTES });
   }
+  const emittedDirectory = parseCentralDirectory(archive);
+  if (emittedDirectory.entries.length !== files.length + 1) {
+    fail('STORAGE_UNAVAILABLE', 'ZIP compressor emitted an incorrect bundle entry count.');
+  }
+  validateArchiveEntries(archive, emittedDirectory.entries);
   return new Blob([archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer], { type: 'application/zip' });
+}
+
+function appendZip64EntryCount(archive: Uint8Array, entryCount: number): Uint8Array {
+  if (entryCount < 0xffff) return archive;
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+  const eocdOffset = findEndOfCentralDirectory(view);
+  if (eocdOffset + 22 !== archive.byteLength || view.getUint16(eocdOffset + 20, true) !== 0) {
+    fail('STORAGE_UNAVAILABLE', 'ZIP compressor emitted an unexpected end record.');
+  }
+  const centralSize = view.getUint32(eocdOffset + 12, true);
+  const centralOffset = view.getUint32(eocdOffset + 16, true);
+  if (centralOffset + centralSize !== eocdOffset || view.getUint16(eocdOffset + 10, true) !== (entryCount & 0xffff)) {
+    fail('STORAGE_UNAVAILABLE', 'ZIP compressor emitted inconsistent central directory metadata.');
+  }
+
+  // fflate 0.8.2 writes 16-bit EOCD entry counts but does not emit ZIP64 records.
+  // The Atlas archive caps keep all offsets and sizes below ZIP32 limits, so only
+  // the entry count needs a ZIP64 end record and locator.
+  const zip64Offset = eocdOffset;
+  const locatorOffset = zip64Offset + 56;
+  const endOffset = locatorOffset + 20;
+  const result = new Uint8Array(endOffset + 22);
+  result.set(archive.subarray(0, eocdOffset));
+  const output = new DataView(result.buffer, result.byteOffset, result.byteLength);
+  output.setUint32(zip64Offset, 0x06064b50, true);
+  output.setBigUint64(zip64Offset + 4, 44n, true);
+  output.setUint16(zip64Offset + 12, 0x032d, true);
+  output.setUint16(zip64Offset + 14, 45, true);
+  output.setUint32(zip64Offset + 16, 0, true);
+  output.setUint32(zip64Offset + 20, 0, true);
+  output.setBigUint64(zip64Offset + 24, BigInt(entryCount), true);
+  output.setBigUint64(zip64Offset + 32, BigInt(entryCount), true);
+  output.setBigUint64(zip64Offset + 40, BigInt(centralSize), true);
+  output.setBigUint64(zip64Offset + 48, BigInt(centralOffset), true);
+
+  output.setUint32(locatorOffset, 0x07064b50, true);
+  output.setUint32(locatorOffset + 4, 0, true);
+  output.setBigUint64(locatorOffset + 8, BigInt(zip64Offset), true);
+  output.setUint32(locatorOffset + 16, 1, true);
+
+  output.setUint32(endOffset, 0x06054b50, true);
+  output.setUint16(endOffset + 4, 0, true);
+  output.setUint16(endOffset + 6, 0, true);
+  output.setUint16(endOffset + 8, 0xffff, true);
+  output.setUint16(endOffset + 10, 0xffff, true);
+  output.setUint32(endOffset + 12, centralSize, true);
+  output.setUint32(endOffset + 16, centralOffset, true);
+  output.setUint16(endOffset + 20, 0, true);
+  return result;
 }
 
 export async function parseBundle(blob: Blob, destination?: { workspaceId?: string; name?: string }): Promise<ImportedBundle> {
@@ -128,12 +190,13 @@ export async function parseBundle(blob: Blob, destination?: { workspaceId?: stri
     fail('INVALID_INPUT', 'Compressed bundle exceeds the V1 archive size limit.', { maxBytes: MAX_BUNDLE_ARCHIVE_BYTES });
   }
   const archive = new Uint8Array(await blob.arrayBuffer());
-  const central = parseCentralDirectory(archive);
+  const directory = parseCentralDirectory(archive);
+  const central = directory.entries;
   if (central.length > MAX_BUNDLE_ENTRIES) {
     fail('INVALID_INPUT', 'Bundle has more than 100,000 ZIP entries.');
   }
   validateArchiveEntries(archive, central);
-  const extracted = extractBounded(archive, central);
+  const extracted = extractBounded(archive, central, directory.offset);
   const manifestBytes = extracted.get(MANIFEST_PATH);
   if (!manifestBytes) fail('INVALID_INPUT', 'Bundle is missing manifest.json.');
   if (manifestBytes.byteLength > MAX_BUNDLE_MANIFEST_BYTES) fail('INVALID_INPUT', 'Bundle manifest exceeds the V1 expanded byte limit.');
@@ -428,7 +491,7 @@ function isSymlink(entry: CentralEntry): boolean {
   return Boolean(entry.externalAttributes & 0x10);
 }
 
-function parseCentralDirectory(archive: Uint8Array): CentralEntry[] {
+function parseCentralDirectory(archive: Uint8Array): CentralDirectory {
   if (archive.byteLength < 22) fail('INVALID_INPUT', 'ZIP archive is truncated.');
   const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
   const eocdOffset = findEndOfCentralDirectory(view);
@@ -548,7 +611,7 @@ function parseCentralDirectory(archive: Uint8Array): CentralEntry[] {
     offset = recordEnd;
   }
   if (offset !== directoryEnd) fail('INVALID_INPUT', 'ZIP central directory has unaccounted bytes.');
-  return entries;
+  return { entries, offset: centralOffset };
 }
 
 function findEndOfCentralDirectory(view: DataView): number {
@@ -583,7 +646,7 @@ function readSafeUint64(view: DataView, offset: number): number {
   return Number(value);
 }
 
-function extractBounded(archive: Uint8Array, entries: CentralEntry[]): Map<string, Uint8Array> {
+function extractBounded(archive: Uint8Array, entries: CentralEntry[], localRecordsEnd: number): Map<string, Uint8Array> {
   let declaredExpandedBytes = 0;
   const centralByName = new Map(entries.map(entry => [entry.name, entry]));
   if (centralByName.size !== entries.length) fail('INVALID_PATH', 'ZIP contains duplicate entries.');
@@ -658,7 +721,14 @@ function extractBounded(archive: Uint8Array, entries: CentralEntry[]): Map<strin
   unzipper.register(UnzipPassThrough);
   unzipper.register(UnzipInflate);
   try {
-    unzipper.push(archive, true);
+    // fflate's synchronous Unzip parser recurses once per local entry while a
+    // single input chunk contains subsequent entries. Keep chunks bounded so
+    // legal high-count bundles cannot exhaust the JavaScript call stack.
+    if (localRecordsEnd === 0) unzipper.push(new Uint8Array(), true);
+    for (let offset = 0; offset < localRecordsEnd && !failure; offset += ZIP_IMPORT_CHUNK_BYTES) {
+      const end = Math.min(localRecordsEnd, offset + ZIP_IMPORT_CHUNK_BYTES);
+      unzipper.push(archive.subarray(offset, end), end === localRecordsEnd);
+    }
   } catch (error) {
     failure ??= error;
   }
