@@ -103,6 +103,9 @@ async function auditLicenseInventory(profile, directory, closure) {
     check(!actualByKey.has(key), `${profile} license inventory repeats ${key}`);
     check(Array.isArray(dependency.includedModules) && dependency.includedModules.length > 0, `${key} has no included module provenance`);
     check(Array.isArray(dependency.licenseFiles) && dependency.licenseFiles.length > 0, `${key} has no license text`);
+    const exactSupplement = await verifiedLicenseSupplement(expectedByKey.get(key)?.packageInfo ?? { name: dependency.name, version: dependency.version, manifest: { license: dependency.license } });
+    const hasSupplement = dependency.licenseFiles.some(license => license.sourceKind === 'verified-upstream-supplement');
+    check(hasSupplement === Boolean(exactSupplement), `${key} legal text does not match the exact package license supplement requirements`);
     actualByKey.set(key, dependency.includedModules);
     for (const license of dependency.licenseFiles) {
       check(typeof license.output === 'string' && !posix.isAbsolute(license.output) && posix.normalize(license.output) === license.output && !license.output.startsWith('../'), `${key} has an unsafe license output path`);
@@ -113,7 +116,7 @@ async function auditLicenseInventory(profile, directory, closure) {
       if (license.sourceKind === 'verified-upstream-supplement') {
         const expectedPackage = expectedByKey.get(key)?.packageInfo;
         check(expectedPackage, `${key} supplement is not tied to an included package`);
-        const supplement = await verifiedLicenseSupplement(expectedPackage);
+        const supplement = exactSupplement;
         check(supplement, `${key} uses a supplement without an exact allowlist entry`);
         check(dependency.license === supplement.entry.license, `${key} supplement license differs from the package declaration`);
         for (const field of ['sourceUrl', 'sourceFile', 'sourceRevision', 'sourceIntegrity', 'sourceNote', 'packageArtifactUrl', 'packageArtifactIntegrity', 'packageGitHead']) {

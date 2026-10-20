@@ -113,6 +113,7 @@ async function loadSupplementManifest() {
 
 /** Return validated exact-version supplement provenance, or null when no exact entry exists. */
 export async function verifiedLicenseSupplement(packageInfo) {
+  if (packageInfo.directory && (await listLicenseFiles(packageInfo.directory)).length > 0) return null;
   const manifest = await loadSupplementManifest();
   const entry = manifest.entries.find(item => item.packageName === packageInfo.name && item.version === packageInfo.version);
   if (!entry) return null;
