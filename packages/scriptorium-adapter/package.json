@@ -1,0 +1,27 @@
+{
+  "name": "@scriptorium-atlas/scriptorium-adapter",
+  "version": "0.1.0",
+  "description": "Fail-closed boundary for a future public Scriptorium Plugin SDK",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "files": ["dist", "package.json", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter @scriptorium-atlas/contracts build && tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @scriptorium-atlas/contracts build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@scriptorium-atlas/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

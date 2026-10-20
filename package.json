@@ -1,0 +1,30 @@
+{
+  "name": "scriptorium-atlas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "generate": "pnpm --filter @scriptorium-atlas/contracts generate",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "build:atlas": "pnpm --filter @scriptorium-atlas/standalone build:atlas",
+    "build:story": "pnpm --filter @scriptorium-atlas/standalone build:story",
+    "build:combined": "pnpm --filter @scriptorium-atlas/standalone build:combined",
+    "dev:atlas": "pnpm --filter @scriptorium-atlas/standalone dev:atlas",
+    "dev:story": "pnpm --filter @scriptorium-atlas/standalone dev:story",
+    "dev:combined": "pnpm --filter @scriptorium-atlas/standalone dev:combined"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.10.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

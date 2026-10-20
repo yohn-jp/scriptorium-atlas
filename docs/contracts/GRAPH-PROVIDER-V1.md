@@ -42,6 +42,8 @@ TypeScriptは説明用。実装上のJSON Schemaは `v1.schema.json` を正本�
 - `neighbors({handle,from,direction,depth,limit,cursor,signal}): ProviderPage<{node,edges}>` — depth 1–3、方向 `in|out|both`。
 - `diff({handle,previousSnapshot,cursor,limit}): ProviderPage<GraphDelta>` — changed/removed node/edge、from/to revisions。差分不能は `RESYNC_REQUIRED` で全件再列挙。
 - `close({handle}): void` — 冪等にlease解放、以後の古いResponseは破棄。
+
+Plugin frameはHostの`providerCall(leaseId, request)`にlease-bound queryを渡し、Plugin用request paramsに`handle`を含めない。Hostは接続元Pluginと`leaseId`を検証し、query毎にHostが認可したhandleをProvider向け`params.handle`と外側envelopeへ注入する。Provider向けopen requestだけ外側handleを持たず、open responseで発行されたhandleを以後のleaseへ結び付ける。Pluginが別handleを指定して認可範囲を変更することはできない。Pending openを中断するcancelはhandleなしでよいが、Hostは同じPlugin session/provider/epochのpending request IDへの取消しだけを許可する。
 - Event `updated({snapshot,revision,epoch,changedPaths})` はヒント。欠落Eventだけで誤ったキャッシュ整合と見なさずdiff/resync。
 
 Cursorは `handle + snapshot + filter + result order` へ束縛された不透明値、別filterへ再利用は禁止。Page limitは1–500、既定100。結果はNodeRef/EdgeRefのcanonical順で安定し、初期Pageは前snapshotと勝手に混ぜない。全件数が不明なら`total`を捏造しない。unknown/partialは`complete=false`を使う。Providerごとのstateがbrokenでも他Providerは継続する。
@@ -49,7 +51,7 @@ Cursorは `handle + snapshot + filter + result order` へ束縛された不透�
 ## Broker境界と異常
 
 - HostはProvider接続元のID、許可されたWorkspace、Principal、Snapshotを確定し、その組合せに対するLeaseを生成。Request JSONの自己申告をTrustしない。
-- Channelは `protocolVersion/requestId/providerId/handle/epoch/deadline/payload`。JSON serializable、structured clone可能な純粋データ、8MiB未満の有界message、request/responseのschema validation。Invalid・超過・別epoch応答は拒否して対象ProviderのみFAILED。
+- Channelは `protocolVersion/requestId/providerId/handle/epoch/deadline/payload`。JSON serializable、structured clone可能な純粋データ、8MiB未満の有界message、request/responseのschema validation。Open resultは発行handleをresult内に含め、openとpending-open cancel以外のresponseはouter handleを必須とする。Result shapeはoperation methodに束縛する。Invalid・超過・別epoch応答は拒否して対象ProviderのみFAILED。
 - 1Provider最大4同時RPC、64件Queue、deadline: interactive 5s/first page 10s、Index build 30s。TimeoutはCancelを送り、応答不能Workerは終了。最大2回の指数Backoff後Quarantine、resetはユーザー明示。これらは初期Standalone Host Budgetであり、Scriptorium productionのOS resource budgetを代替しない。
 - `NOT_INSTALLED, DISABLED, HOST_UNAVAILABLE, PROVIDER_FAILED, PROTOCOL_INVALID, PERMISSION_DENIED, SNAPSHOT_STALE, RESYNC_REQUIRED, TIMEOUT, CANCELLED, OVERLOADED, SOURCE_MISSING` は公開Error code。UIにError/Retry/Export/Provider選択の手段を残す。
 - Provider一覧取得だけで重いWorkerをspawnしない。Last leaseが0ならIndex/Worker/Timerを止める。Story UIが隠れていてもAtlas consumerのLeaseがあればProviderは利用可能。

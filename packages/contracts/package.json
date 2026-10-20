@@ -1,0 +1,34 @@
+{
+  "name": "@scriptorium-atlas/contracts",
+  "version": "1.0.0",
+  "description": "Versioned public contracts for Scriptorium Atlas plugins and host",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "files": ["dist", "package.json", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./provider": { "types": "./dist/provider.d.ts", "import": "./dist/provider.js" },
+    "./host": { "types": "./dist/host.d.ts", "import": "./dist/host.js" },
+    "./errors": { "types": "./dist/errors.d.ts", "import": "./dist/errors.js" },
+    "./documents": { "types": "./dist/documents.d.ts", "import": "./dist/documents.js" },
+    "./schema": "./dist/generated/v1.schema.json",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "generate": "tsx scripts/generate.ts",
+    "prebuild": "pnpm generate",
+    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
+    "pretypecheck": "pnpm build",
+    "typecheck": "pnpm generate && tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm generate",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "@types/node": "24.10.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
