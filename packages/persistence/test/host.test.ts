@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openIndexedDbHost, validateRelativePath } from '../src/host.js';
 import { sha256, bytesToBase64, copyArrayBuffer, utf8Bytes } from '../src/bytes.js';
 import { workspaceRevision } from '../src/bundle.js';
@@ -60,6 +60,37 @@ describe('IndexedDB Host persistence', () => {
     const current = await host.getWorkspaceHandle(workspace.workspace.workspaceId);
     await expect(host.read(current, { path: 'notes/first.txt' })).resolves.toMatchObject({ content: 'hello\n' });
     await expect(host.recover(workspace.workspace.workspaceId)).resolves.toMatchObject({ pendingOperationIds: [], unknownCommitIds: [] });
+  });
+
+  it('reads individual files without a full inventory scan while preserving revision fencing', async () => {
+    const host = await open();
+    const workspace = await host.createWorkspace({ name: 'Point reads' });
+    const prepared = await host.prepare(workspace.workspace, change(
+      workspace.workspace.workspaceId, workspace.workspace.sourceRevision,
+      'op-point-read', 'notes/example.txt', '日本語の内容', null
+    ));
+    await host.commit(workspace.workspace, prepared.preparedId, true);
+    const current = await host.getWorkspaceHandle(workspace.workspace.workspaceId);
+    const expected = await sha256(utf8Bytes('日本語の内容'));
+
+    // Cursor instrumentation starts only after setup, so the legitimate
+    // inventory scans in prepare/commit are not counted as read operations.
+    const cursor = vi.spyOn(IDBIndex.prototype, 'openCursor');
+    try {
+      await expect(host.read(current, { path: 'notes/example.txt', expectedRevision: expected }))
+        .resolves.toMatchObject({ content: '日本語の内容', encoding: 'utf8', revision: expected });
+      await expect(host.read(current, { path: 'notes/example.txt', expectedRevision: expected, offset: 0, limit: 3 }))
+        .resolves.toMatchObject({ complete: false, offset: 0, nextOffset: 3, encoding: 'base64' });
+      await expect(host.read(current, { path: 'notes/missing.txt' }))
+        .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+      await expect(host.read(current, { path: 'notes/example.txt', expectedRevision: '0'.repeat(64) }))
+        .rejects.toMatchObject({ code: 'REVISION_CONFLICT' });
+      await expect(host.read(workspace.workspace, { path: 'notes/example.txt' }))
+        .rejects.toMatchObject({ code: 'REVISION_CONFLICT' });
+      expect(cursor).not.toHaveBeenCalled();
+    } finally {
+      cursor.mockRestore();
+    }
   });
 
   it('recovers durable proposals after reopening and rejects stale read sets atomically', async () => {
