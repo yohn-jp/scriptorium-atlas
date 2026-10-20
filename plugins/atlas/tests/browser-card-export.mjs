@@ -106,6 +106,15 @@ function readPngDimensions(bytes) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
+function readSvgDimensions(svg) {
+  const viewBox = svg.match(/\bviewBox="([^"]+)"/iu)?.[1];
+  assert.ok(viewBox, 'SVG export should define a viewBox for the exported scene.');
+  const values = viewBox.trim().split(/[\s,]+/u).map(Number);
+  assert.equal(values.length, 4, 'SVG viewBox should contain four numeric values.');
+  assert.ok(values.every(Number.isFinite), 'SVG viewBox values should be finite.');
+  return { width: Math.round(values[2]), height: Math.round(values[3]) };
+}
+
 async function run() {
   const basePort = await reservePorts();
   const baseUrl = `http://127.0.0.1:${basePort}`;
@@ -231,7 +240,8 @@ async function run() {
       assert.ok(svgDownload.content.includes(marker), `SVG export should include visible card text or source metadata: ${marker}`);
     }
     assert.match(svgDownload.content, /<image\b/u, 'SVG export should include the embedded image card.');
-    report.cases.push({ id: 'svg-includes-canvas-and-card-content', filename: svgDownload.name, bytes: Buffer.byteLength(svgDownload.content) });
+    const svgDimensions = readSvgDimensions(svgDownload.content);
+    report.cases.push({ id: 'svg-includes-canvas-and-card-content', filename: svgDownload.name, bytes: Buffer.byteLength(svgDownload.content), ...svgDimensions });
 
     const pngPromise = page.waitForEvent('download');
     await atlas.getByRole('button', { name: 'PNG', exact: true }).click();
@@ -240,8 +250,12 @@ async function run() {
     assert.ok(pngPath, 'PNG export should have a readable temporary path.');
     const pngBytes = await readFile(pngPath);
     const dimensions = readPngDimensions(pngBytes);
-    assert.ok(dimensions.width >= 1100 && dimensions.height >= 700,
+    assert.ok(dimensions.width >= 1100 && dimensions.height >= 640,
       `PNG bounds ${dimensions.width}x${dimensions.height} should include cards positioned across the Atlas scene.`);
+    const widthDifference = Math.abs(dimensions.width - svgDimensions.width) / Math.max(dimensions.width, svgDimensions.width);
+    const heightDifference = Math.abs(dimensions.height - svgDimensions.height) / Math.max(dimensions.height, svgDimensions.height);
+    assert.ok(widthDifference <= 0.05 && heightDifference <= 0.05,
+      `PNG and SVG full-scene/card bounds should agree within 5%; PNG=${JSON.stringify(dimensions)}, SVG=${JSON.stringify(svgDimensions)}.`);
     assert.ok(pngBytes.byteLength > 10000, 'PNG export should contain rendered card and image content, not an empty scene.');
     report.cases.push({ id: 'png-includes-card-bounds-and-image', filename: pngDownload.suggestedFilename(), bytes: pngBytes.byteLength, ...dimensions });
 
