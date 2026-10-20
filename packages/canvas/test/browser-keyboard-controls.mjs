@@ -411,9 +411,15 @@ try {
     exportDialogCount: document.querySelectorAll(".ImageExportModal").length,
     alerts: [...document.querySelectorAll('[role="alert"]')].map((element) => element.textContent?.slice(0, 300)),
     activeTabs: [...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map((element) => element.textContent),
+    buttons: [...document.querySelectorAll(".Modal button")].map((element) => ({
+      text: element.textContent?.trim(),
+      label: element.getAttribute("aria-label"),
+      testId: element.getAttribute("data-testid"),
+    })),
   }));
-  await page.keyboard.press("Escape");
-  await exportDialog.waitFor({ state: "hidden" });
+  const excalidrawDialog = atlas.locator('.Modal[role="dialog"]').filter({ has: exportDialog });
+  await excalidrawDialog.locator(".Modal__content").press("Escape");
+  await excalidrawDialog.waitFor({ state: "detached" });
   const postExportUi = await atlasFrame.evaluate(() => ({
     href: location.href,
     panelCount: document.querySelectorAll(".atlas-canvas-accessibility").length,
