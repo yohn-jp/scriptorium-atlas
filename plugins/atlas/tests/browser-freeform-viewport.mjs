@@ -162,18 +162,34 @@ async function selectView(atlas, name) {
   await atlas.locator('.excalidraw__canvas').first().waitFor({ state: 'visible' });
 }
 
-async function zoom(atlas, direction, count) {
-  const name = direction === 'in' ? /zoom in/i : /zoom out/i;
-  const control = atlas.getByRole('button', { name });
-  await control.first().waitFor({ state: 'visible' });
-  for (let index = 0; index < count; index += 1) await control.first().press('Enter');
+async function closeCanvasKeyboardControls(atlas) {
+  const summary = atlas.getByText('キーボード操作と要素一覧', { exact: true });
+  const open = await summary.evaluate((element) => element.parentElement instanceof HTMLDetailsElement && element.parentElement.open);
+  if (open) await summary.press('Enter');
 }
 
-async function overflowZoomUntilRejected(atlas) {
-  const zoomIn = atlas.getByRole('button', { name: /zoom in/i }).first();
+async function zoom(page, atlas, direction, count) {
+  await closeCanvasKeyboardControls(atlas);
+  const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
+  const box = await canvas.boundingBox();
+  assert.ok(box && box.width > 100 && box.height > 100, 'The official Canvas surface should be visible for native zoom shortcuts.');
+  await page.mouse.click(box.x + box.width - 90, box.y + box.height - 90);
+  const shortcut = direction === 'in' ? 'Control+Equal' : 'Control+Minus';
+  for (let index = 0; index < count; index += 1) await page.keyboard.press(shortcut);
+  await page.waitForTimeout(220);
+}
+
+async function overflowZoomUntilRejected(page, atlas) {
+  await closeCanvasKeyboardControls(atlas);
+  const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
+  const box = await canvas.boundingBox();
+  assert.ok(box && box.width > 100 && box.height > 100, 'The official Canvas surface should be visible for native zoom shortcuts.');
+  const focusPoint = { x: box.x + box.width - 90, y: box.y + box.height - 90 };
+  await page.mouse.click(focusPoint.x, focusPoint.y);
   const rejection = atlas.getByRole('status').filter({ hasText: '保存範囲外' });
-  for (let index = 0; index < 64; index += 1) {
-    await zoomIn.press('Enter');
+  for (let index = 0; index < 120; index += 1) {
+    await page.keyboard.press('Control+Equal');
+    await page.waitForTimeout(220);
     if (await rejection.count()) return;
   }
   await rejection.waitFor({ state: 'visible', timeout: 10000 });
@@ -189,6 +205,7 @@ async function setCanvasPosition(atlas, x, y) {
 }
 
 async function pan(page, atlas, dx, dy) {
+  await closeCanvasKeyboardControls(atlas);
   const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 100 && box.height > 100, 'The visible official Canvas surface should have usable geometry.');
@@ -269,6 +286,7 @@ async function run() {
     assert.ok(viewAId && viewBId && viewAId !== viewBId, 'The fixture must contain two independently identified Canvas views.');
     const initialViewports = new Map(initial.views.filter((view) => view.id === viewAId || view.id === viewBId).map((view) => [view.id, view.viewport]));
     const originalScene = await downloadScene(page, atlas);
+    progress('Board and scene baselines captured');
 
     await selectView(atlas, 'Viewport A');
     const initialOffsetA = await cardOffset(atlas);
@@ -284,9 +302,22 @@ async function run() {
     report.cases.push('out-of-contract-pan-rejected-with-board-and-scene-preserved');
     progress('out-of-contract camera rejection verified');
 
+    await setCanvasPosition(atlas, 10000001, 80);
+    // The status remains visible from the first rejection; wait past Canvas's
+    // 180ms settled-camera callback so this proves the repeated action ran.
+    await page.waitForTimeout(250);
+    assert.deepEqual(await cardOffset(atlas), initialOffsetA,
+      'Repeating an identical invalid pan after Canvas remount must restore the last valid camera again.');
+    assert.deepEqual((await downloadBoard(page, atlas)).views.find((view) => view.id === viewAId)?.viewport,
+      initialViewports.get(viewAId), 'A repeated identical invalid pan must not change the persisted Board viewport.');
+    assert.deepEqual(await downloadScene(page, atlas), originalScene,
+      'A repeated identical invalid pan must preserve the separate Excalidraw scene bytes.');
+    report.cases.push('repeated-identical-invalid-pan-restores-camera-and-preserves-data');
+
     await setCanvasPosition(atlas, -120, 80);
     await atlas.getByRole('status').filter({ hasText: '保存範囲外' }).waitFor({ state: 'detached' });
-    await zoom(atlas, 'in', 2);
+    progress('valid camera input clears the rejection status');
+    await zoom(page, atlas, 'in', 2);
     await pan(page, atlas, 74, 46);
     await page.waitForTimeout(600);
     const changedA = await downloadBoard(page, atlas);
@@ -317,14 +348,14 @@ async function run() {
     const beforeB = await downloadBoard(page, atlas);
     assert.deepEqual(beforeB.views.find((view) => view.id === viewBId)?.viewport, initialViewports.get(viewBId),
       'A pan in one Canvas view must not alter another view’s saved viewport.');
-    await overflowZoomUntilRejected(atlas);
+    await overflowZoomUntilRejected(page, atlas);
     const afterInvalidZoom = await downloadBoard(page, atlas);
     const lastValidViewportB = afterInvalidZoom.views.find((view) => view.id === viewBId)?.viewport;
     assert.ok(lastValidViewportB && lastValidViewportB.zoom <= 8, 'An out-of-contract Canvas zoom must not be persisted.');
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Rejecting an out-of-contract zoom must preserve the separate Excalidraw scene bytes.');
     await setCanvasPosition(atlas, 180, -90);
-    await zoom(atlas, 'out', 1);
+    await zoom(page, atlas, 'out', 1);
     await pan(page, atlas, -53, 38);
     await page.waitForTimeout(600);
     const changedB = await downloadBoard(page, atlas);

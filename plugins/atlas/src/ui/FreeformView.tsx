@@ -27,7 +27,6 @@ export function FreeformView(props: FreeformViewProps) {
   const dispatch = (command: Parameters<typeof applyAtlasCommand>[1]) => props.onBoardChange(applyAtlasCommand(props.board, command));
   const latestBoard = useRef(props.board);
   const latestOnBoardChange = useRef(props.onBoardChange);
-  const rejectedViewport = useRef<string | null>(null);
   const [viewportResetEpoch, setViewportResetEpoch] = useState(0);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
   latestBoard.current = props.board;
@@ -46,15 +45,10 @@ export function FreeformView(props: FreeformViewProps) {
     if (!view || view.kind !== 'freeform') return;
     const viewport = { x: next.scrollX * next.zoom, y: next.scrollY * next.zoom, zoom: next.zoom };
     if (!validateContract('viewport', viewport)) {
-      const signature = [next.scrollX, next.scrollY, next.zoom].map(String).join('|');
-      if (rejectedViewport.current !== signature) {
-        rejectedViewport.current = signature;
-        setViewportNotice('Canvasの表示位置がAtlasの保存範囲外です。直前の有効な表示位置へ戻しました。');
-        setViewportResetEpoch((epoch) => epoch + 1);
-      }
+      setViewportNotice('Canvasの表示位置がAtlasの保存範囲外です。直前の有効な表示位置へ戻しました。');
+      setViewportResetEpoch((epoch) => epoch + 1);
       return;
     }
-    rejectedViewport.current = null;
     setViewportNotice(null);
     if (view.viewport.x === viewport.x && view.viewport.y === viewport.y && view.viewport.zoom === viewport.zoom) return;
     latestOnBoardChange.current(applyAtlasCommand(board, { type: 'view.viewport', viewId, viewport }));
