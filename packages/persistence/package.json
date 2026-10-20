@@ -25,7 +25,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:browser": "npm run build && playwright test --config test/playwright.config.ts",
-    "test:browser:q05": "node test/q05-host-browser.mjs"
+    "test:browser:q05": "node test/q05-host-browser.mjs",
+    "test:browser:q05:crash": "node test/q05-browser-crash.mjs"
   },
   "dependencies": {
     "@scriptorium-atlas/contracts": "workspace:*",
