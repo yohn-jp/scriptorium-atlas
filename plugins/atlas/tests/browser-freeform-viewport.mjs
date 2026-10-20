@@ -156,7 +156,14 @@ async function renameActiveBoard(atlas, name) {
 }
 
 async function selectView(atlas, name) {
-  await atlas.getByRole('tab', { name: new RegExp(name, 'u') }).click();
+  const tab = atlas.getByRole('tab', { name: new RegExp(name, 'u') });
+  await tab.click();
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && await tab.getAttribute('aria-selected') !== 'true') {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  assert.equal(await tab.getAttribute('aria-selected'), 'true', `The ${name} view tab should become selected after activation.`);
+  progress(`selected view tab: ${name}`);
   await atlas.locator('.atlas-freeform-view').waitFor({ state: 'visible' });
   await atlas.locator('.atlas-canvas-card').first().waitFor({ state: 'visible' });
   await atlas.locator('.excalidraw__canvas').first().waitFor({ state: 'visible' });
@@ -295,6 +302,8 @@ async function run() {
     const viewAId = initial.views.find((view) => view.name === 'Viewport A')?.id;
     const viewBId = initial.views.find((view) => view.name === 'Viewport B')?.id;
     assert.ok(viewAId && viewBId && viewAId !== viewBId, 'The fixture must contain two independently identified Canvas views.');
+    assert.equal(initial.views.find((view) => view.id === viewAId)?.kind, 'freeform');
+    assert.equal(initial.views.find((view) => view.id === viewBId)?.kind, 'freeform');
     const initialViewports = new Map(initial.views.filter((view) => view.id === viewAId || view.id === viewBId).map((view) => [view.id, view.viewport]));
     const originalScene = await downloadScene(page, atlas);
     progress('Board and scene baselines captured');
