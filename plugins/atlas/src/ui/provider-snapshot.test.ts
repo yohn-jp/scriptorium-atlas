@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createGraphIndex } from '@scriptorium-atlas/graph';
 import type { GraphNode, SnapshotRef } from '@scriptorium-atlas/contracts';
-import { assembleProviderSnapshot, type ConnectedProvider } from './provider-snapshot.js';
+import { assembleProviderSnapshot, hasMoreProviderPages, providerPagesAreComplete, type ConnectedProvider } from './provider-snapshot.js';
 
 const workspaceId = 'provider-refresh-test';
 const sourceRevision = 'source-v1';
@@ -9,8 +9,28 @@ const sourceRevision = 'source-v1';
 function entry(providerId: string, epoch: number, label: string): ConnectedProvider {
   const snapshot: SnapshotRef = { workspaceId, sourceRevision, providerRevision: `${providerId}-revision`, epoch };
   const node: GraphNode = { ref: { providerId, localId: 'alice' }, kind: 'story.character', label };
-  return { providerId, leaseId: `${providerId}-lease`, snapshot, nodes: [node], edges: [] };
+  return { providerId, leaseId: `${providerId}-lease`, complete: true, snapshot, nodes: [node], edges: [] };
 }
+
+describe('Provider pagination and source completeness', () => {
+  it('consumes a terminal page even when the source inventory is incomplete', () => {
+    expect(hasMoreProviderPages({ nextCursor: null })).toBe(false);
+    expect(providerPagesAreComplete([{ complete: false, nextCursor: null }])).toBe(false);
+    expect(providerPagesAreComplete([{ complete: true, nextCursor: 'next' }, { complete: true, nextCursor: null }])).toBe(true);
+    expect(providerPagesAreComplete([{ complete: false, nextCursor: 'next' }, { complete: true, nextCursor: null }])).toBe(false);
+    expect(hasMoreProviderPages({ nextCursor: 'next' })).toBe(true);
+    expect(providerPagesAreComplete([{ complete: true, nextCursor: 'next' }])).toBe(false);
+    expect(providerPagesAreComplete([])).toBe(false);
+  });
+
+  it('retains healthy nodes and identifies incomplete providers in a mixed graph', async () => {
+    const healthy = entry('scriptorium.healthy', 1, 'Healthy');
+    const partial = { ...entry('scriptorium.partial', 2, 'Usable'), complete: false };
+    const graph = await assembleProviderSnapshot(new Map([[healthy.providerId, healthy], [partial.providerId, partial]]));
+    expect(graph.nodes.map((node) => node.label)).toEqual(['Healthy', 'Usable']);
+    expect(graph.incompleteProviderIds).toEqual(['scriptorium.partial']);
+  });
+});
 
 describe('assembleProviderSnapshot', () => {
   it('accepts independent provider epochs and keeps identical local IDs distinct', async () => {

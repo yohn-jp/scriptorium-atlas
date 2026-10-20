@@ -4,6 +4,8 @@ import { sha256Hex } from './host-utils.js';
 export type ProviderSnapshot = {
   providerId: string;
   providerIds: string[];
+  /** Providers whose available graph is only a partial view of the source inventory. */
+  incompleteProviderIds: string[];
   snapshot: SnapshotRef;
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -12,10 +14,24 @@ export type ProviderSnapshot = {
 export type ConnectedProvider = {
   providerId: string;
   leaseId: string;
+  /** Source-data completeness, independent of whether the last page was reached. */
+  complete: boolean;
   snapshot: SnapshotRef;
   nodes: GraphNode[];
   edges: GraphEdge[];
 };
+
+/** A null cursor ends pagination even when the provider's source inventory is incomplete. */
+export function hasMoreProviderPages(page: { readonly nextCursor: string | null }): boolean {
+  return page.nextCursor !== null;
+}
+
+/** Page exhaustion and source completeness are distinct; both are required for a complete graph. */
+export function providerPagesAreComplete(pages: readonly { readonly nextCursor: string | null; readonly complete: boolean }[]): boolean {
+  return pages.length > 0
+    && !hasMoreProviderPages(pages[pages.length - 1]!)
+    && pages.every((page) => page.complete);
+}
 
 export async function assembleProviderSnapshot(entries: ReadonlyMap<string, ConnectedProvider>): Promise<ProviderSnapshot> {
   const ordered = [...entries.values()].sort((left, right) => left.providerId < right.providerId ? -1 : left.providerId > right.providerId ? 1 : 0);
@@ -38,6 +54,7 @@ export async function assembleProviderSnapshot(entries: ReadonlyMap<string, Conn
   return {
     providerId: ordered.map((item) => item.providerId).join(' + '),
     providerIds: ordered.map((item) => item.providerId),
+    incompleteProviderIds: ordered.filter((item) => !item.complete).map((item) => item.providerId),
     snapshot,
     nodes: ordered.flatMap((item) => item.nodes),
     edges: ordered.flatMap((item) => item.edges),

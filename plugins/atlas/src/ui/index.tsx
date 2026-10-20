@@ -30,7 +30,7 @@ import { createLayoutWorkerClient } from '@scriptorium-atlas/layout/worker';
 import type { LayoutWorkerClient } from '@scriptorium-atlas/layout/worker';
 import type { LayoutInput } from '@scriptorium-atlas/layout';
 import { serializeBoard } from '@scriptorium-atlas/persistence/board';
-import { assembleProviderSnapshot } from './provider-snapshot.js';
+import { assembleProviderSnapshot, hasMoreProviderPages, providerPagesAreComplete } from './provider-snapshot.js';
 import type { ConnectedProvider, ProviderSnapshot } from './provider-snapshot.js';
 import { AtlasCommandHistory, applyAtlasCommand, createAtlasId, createEmptyAtlasBoard } from '../commands/model.js';
 import { IMAGE_MIME_TYPES, assetExtension, sanitizeImageBytes, verifyAssetBytes } from './asset-media.js';
@@ -607,7 +607,12 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       }
       const nodePages = await collectProviderPages<ProviderPage>(host, lease.leaseId, 'listNodes', lease.snapshot);
       const edgePages = await collectProviderPages<GraphEdgePage>(host, lease.leaseId, 'listEdges', lease.snapshot);
-      const entry: ConnectedProvider = { providerId, leaseId: lease.leaseId, snapshot: lease.snapshot, nodes: nodePages.flatMap((page) => page.items), edges: edgePages.flatMap((page) => page.items) };
+      const entry: ConnectedProvider = {
+        providerId, leaseId: lease.leaseId, snapshot: lease.snapshot,
+        complete: providerPagesAreComplete(nodePages) && providerPagesAreComplete(edgePages),
+        nodes: nodePages.flatMap((page) => page.items),
+        edges: edgePages.flatMap((page) => page.items),
+      };
       const candidateEntries = new Map(previousEntries);
       candidateEntries.set(providerId, entry);
       const combined = await assembleProviderSnapshot(candidateEntries);
@@ -630,7 +635,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       providerEntriesRef.current = candidateEntries;
       acquiredLeaseId = null;
       publishGraph(combined);
-      setProviderStatus(`${combined.providerIds.join(' + ')}: ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件を共通ソースリビジョンから読み込みました。`);
+      setProviderStatus(`${combined.providerIds.join(' + ')}: ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件を共通ソースリビジョンから読み込みました。${combined.incompleteProviderIds.length ? ' ソースに未解析・不完全な項目があります。' : ''}`);
     } catch (error) {
       candidateWorker?.close();
       if (acquiredLeaseId) await host.releaseProvider(acquiredLeaseId).catch(() => undefined);
@@ -668,9 +673,14 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         const descriptor = providers.find((item) => item.id === previous.providerId);
         let nextNodes: GraphNode[];
         let nextEdges: GraphEdge[];
-        if (descriptor?.features.includes('diff')) {
+        let nextComplete = true;
+        // An incomplete index cannot prove removals; recover from a full snapshot instead.
+        if (descriptor?.features.includes('diff') && previous.complete) {
           try {
             const pages = await collectProviderDeltaPages(host, lease.leaseId, previous.snapshot, lease.snapshot);
+            if (!providerPagesAreComplete(pages)) {
+              throw Object.assign(new Error('Provider source inventory is incomplete; full resync required.'), { code: 'RESYNC_REQUIRED' });
+            }
             const previousIndex = createGraphIndex({ snapshot: previous.snapshot, nodes: previous.nodes, edges: previous.edges });
             const nextIndex = applyGraphDeltaPages(previousIndex, pages);
             if (!sameSnapshot(nextIndex.snapshot, lease.snapshot)) throw new Error(`Provider ${previous.providerId}の差分先が新しいリースと一致しません。`);
@@ -684,18 +694,21 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
             const full = await fetchProviderSnapshot(host, lease.leaseId, lease.snapshot);
             nextNodes = full.nodes;
             nextEdges = full.edges;
+            nextComplete = full.complete;
           }
         } else {
           fullResyncUsed = true;
           const full = await fetchProviderSnapshot(host, lease.leaseId, lease.snapshot);
           nextNodes = full.nodes;
           nextEdges = full.edges;
+          nextComplete = full.complete;
         }
 
         stagedEntries.set(previous.providerId, {
           providerId: previous.providerId,
           leaseId: lease.leaseId,
           snapshot: lease.snapshot,
+          complete: nextComplete,
           nodes: nextNodes,
           edges: nextEdges,
         });
@@ -761,7 +774,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
       const released = await Promise.allSettled(ordered.map((entry) => host.releaseProvider(entry.leaseId)));
       const releaseFailures = released.filter((result) => result.status === 'rejected').length;
-      setProviderStatus(`${combined.providerIds.join(' + ')}を更新しました。ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件${fullResyncUsed ? '（全件再同期）' : '（差分適用）'}。${releaseFailures ? `古いリース ${releaseFailures} 件を解放できませんでした。` : ''}`);
+      setProviderStatus(`${combined.providerIds.join(' + ')}を更新しました。ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件${fullResyncUsed ? '（全件再同期）' : '（差分適用）'}。${combined.incompleteProviderIds.length ? ' ソースに未解析・不完全な項目があります。' : ''}${releaseFailures ? `古いリース ${releaseFailures} 件を解放できませんでした。` : ''}`);
     } catch (error) {
       candidateWorker?.close();
       await Promise.allSettled(acquiredLeases.map((leaseId) => host.releaseProvider(leaseId)));
@@ -1270,6 +1283,9 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
               </button> : null}
               {graph?.providerIds.map((connectedId) => <button type="button" key={connectedId} onClick={() => void disconnectProvider(connectedId)} disabled={refreshingProviders}>{connectedId}を切断</button>)}
               {providerStatus && <small className="atlas-status-inline">{providerStatus}</small>}
+              {graph?.incompleteProviderIds.length ? <div role="status" className="atlas-alert atlas-alert-warning">
+                一部のStory/Graphソースを解析できませんでした（{graph.incompleteProviderIds.join('、')}）。利用可能なノードは表示していますが、検索・経路・連結成分の結果は全体を保証しません。元のデータを修復してからProviderを更新してください。手動のボード・ピン・カードは保持されます。
+              </div> : null}
               {providerError && <small className="atlas-error-inline" role="alert">{providerError}</small>}
             </>}
           </section>
@@ -1372,7 +1388,7 @@ async function collectProviderPages<T extends { snapshot: SnapshotRef; items: un
     if (!sameSnapshot(result.snapshot, snapshot)) throw new Error(`Providerの${method}ページ取得中にスナップショットが変わりました。`);
     const page = result as T;
     pages.push(page);
-    if (page.complete && page.nextCursor === null) return pages;
+    if (!hasMoreProviderPages(page)) return pages;
     if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error(`Providerの${method}から未完了または重複したカーソルが返されました。`);
     cursors.add(page.nextCursor);
     cursor = page.nextCursor;
@@ -1399,9 +1415,9 @@ async function collectProviderDeltaPages(
     }
     const page = result as GraphDeltaPage;
     if (!sameSnapshot(page.snapshot, targetSnapshot)) throw new Error('Providerのdiffページが新しいリースのスナップショットと一致しません。');
-    if (page.complete !== (page.nextCursor === null)) throw new Error('Providerのdiffページ完了状態とカーソルが一致しません。');
+    // 'complete' describes source integrity; nextCursor independently controls pagination.
     pages.push(page);
-    if (page.complete) return pages;
+    if (!hasMoreProviderPages(page)) return pages;
     const nextCursor = page.nextCursor;
     if (!nextCursor || cursors.has(nextCursor)) throw new Error('Providerのdiffページでカーソルが欠落または重複しています。');
     cursors.add(nextCursor);
@@ -1414,12 +1430,13 @@ async function fetchProviderSnapshot(
   host: PluginHostClient,
   leaseId: string,
   snapshot: SnapshotRef,
-): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; complete: boolean }> {
   const nodePages = await collectProviderPages<ProviderPage>(host, leaseId, 'listNodes', snapshot);
   const edgePages = await collectProviderPages<GraphEdgePage>(host, leaseId, 'listEdges', snapshot);
   return {
     nodes: nodePages.flatMap((page) => page.items),
     edges: edgePages.flatMap((page) => page.items),
+    complete: providerPagesAreComplete(nodePages) && providerPagesAreComplete(edgePages),
   };
 }
 
