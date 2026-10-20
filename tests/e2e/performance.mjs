@@ -125,17 +125,19 @@ function instrumentWorkers() {
       return super.postMessage(message, ...transfer);
     }
     terminate() {
-      if (!this.__atlasTerminated) {
-        this.__atlasTerminated = true;
-        const isForceCancel = cancelClick?.workerId === this.__atlasId;
-        send({ kind: 'terminated', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin,
-          cancelDispatchToTerminationMs: isForceCancel ? performance.now() - cancelClick.at : null });
-        if (isForceCancel) {
-          cancelClick = null;
-          activeForceWorkerId = null;
-        }
+      if (this.__atlasTerminated) return this.__atlasTerminateResult;
+      const result = super.terminate();
+      const terminatedAt = performance.now();
+      this.__atlasTerminated = true;
+      this.__atlasTerminateResult = result;
+      const isForceCancel = cancelClick?.workerId === this.__atlasId;
+      send({ kind: 'terminated', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin,
+        cancelDispatchToTerminationMs: isForceCancel ? terminatedAt - cancelClick.at : null });
+      if (isForceCancel) {
+        cancelClick = null;
+        activeForceWorkerId = null;
       }
-      return super.terminate();
+      return result;
     }
   };
   window.addEventListener('pagehide', () => {
