@@ -206,5 +206,6 @@ try {
   assert.equal(disabledRequests, 0, 'disabled Plugins must not fetch heavy code or poll the network');
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
     queueDurationMs, createdWorkers, workersAfterLastLease: 0, disabledObservationMs: 5000, disabledRequests, fontPolicy,
+    scopedInventory: {restrictedRows:0,opaqueCursor:true,foreignMethodRejected:true,forgedCursorRejected:true,changedGrantRejected:true},
     cases: ['grant denial without Worker', 'static discovery', 'real Provider page/cursor/getNodes partial/neighbors with exact snapshot', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }
