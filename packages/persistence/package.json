@@ -1,0 +1,36 @@
+{
+  "name": "@scriptorium-atlas/persistence",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    },
+    "./board": {
+      "types": "./dist/board.d.ts",
+      "import": "./dist/board.js"
+    },
+    "./bytes": {
+      "types": "./dist/bytes.d.ts",
+      "import": "./dist/bytes.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@scriptorium-atlas/contracts": "workspace:*",
+    "fflate": "0.8.2"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.4",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
