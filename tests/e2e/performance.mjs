@@ -398,10 +398,62 @@ async function positionCanvasWithinHostViewport(page, frame, editor) {
   ]);
 }
 
+function readExcalidrawAppStateFromPage() {
+  const canvas = document.querySelector('canvas.excalidraw__canvas.interactive');
+  if (!canvas) return null;
+  const fiberKey = Object.keys(canvas).find((key) => key.startsWith('__reactFiber$'));
+  if (!fiberKey) return null;
+  let api = null;
+  for (let fiber = canvas[fiberKey]; fiber && !api; fiber = fiber.return) {
+    for (let hook = fiber.memoizedState; hook; hook = hook.next) {
+      const candidate = hook.memoizedState?.current;
+      if (candidate && typeof candidate.getAppState === 'function') {
+        api = candidate;
+        break;
+      }
+    }
+  }
+  if (!api) return null;
+  const appState = api.getAppState();
+  const container = document.querySelector('.excalidraw-container');
+  if (!container) return null;
+  const rect = container.getBoundingClientRect();
+  return {
+    scrollX: appState.scrollX,
+    scrollY: appState.scrollY,
+    zoom: { value: appState.zoom.value },
+    offsetLeft: appState.offsetLeft,
+    offsetTop: appState.offsetTop,
+    width: appState.width,
+    height: appState.height,
+    containerBounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+  };
+}
+
+async function readLiveCanvasAppState(frame) {
+  const deadline = Date.now() + 5_000;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    lastState = await frame.evaluate(readExcalidrawAppStateFromPage);
+    if (lastState
+      && Number.isFinite(lastState.scrollX) && Number.isFinite(lastState.scrollY)
+      && Number.isFinite(lastState.zoom?.value) && lastState.zoom.value > 0
+      && Number.isFinite(lastState.offsetLeft) && Number.isFinite(lastState.offsetTop)
+      && lastState.containerBounds
+      && Math.abs(lastState.offsetLeft - lastState.containerBounds.x) <= 0.5
+      && Math.abs(lastState.offsetTop - lastState.containerBounds.y) <= 0.5) {
+      return lastState;
+    }
+    await frame.waitForTimeout(50);
+  }
+  assert.fail(`The official Excalidraw live appState/API offset did not become available and aligned after viewport settling: ${JSON.stringify(lastState)}.`);
+}
+
 async function canvasViewportEvidence(page, frame, editor) {
   const atlasFrame = page.locator('iframe[title="Atlas"]');
   const interactiveCanvas = frame.locator('canvas.excalidraw__canvas.interactive');
   await interactiveCanvas.waitFor({ state: 'visible' });
+  const liveAppState = await readLiveCanvasAppState(frame);
   const [editorBounds, canvasBounds, canvasFrameRect, iframeBounds, iframeClip, hostScroll] = await Promise.all([
     editor.boundingBox(),
     interactiveCanvas.boundingBox(),
@@ -427,7 +479,7 @@ async function canvasViewportEvidence(page, frame, editor) {
   assert.ok(iframeBounds && iframeClip && iframeClip.width >= 300 && iframeClip.height >= 300,
     `Atlas iframe must expose a usable clipped viewport: ${JSON.stringify({ iframeBounds, iframeClip })}.`);
   return { hostViewport, hostScroll, editorRoot: editorBounds, interactiveCanvas: canvasBounds,
-    interactiveCanvasFrameRect: canvasFrameRect, atlasIframe: iframeBounds, atlasIframeContentClip: iframeClip };
+    interactiveCanvasFrameRect: canvasFrameRect, atlasIframe: iframeBounds, atlasIframeContentClip: iframeClip, liveAppState };
 }
 
 async function runSampledGesture(page, frame, editor, start, end, { pan = false } = {}) {
@@ -913,13 +965,14 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const editor = atlas.locator.locator('.excalidraw');
       await editor.waitFor({ state: 'visible', timeout: 60_000 });
       await positionCanvasWithinHostViewport(page, atlas.frame, editor);
-      const viewportBeforeScene = await canvasViewportEvidence(page, atlas.frame, editor);
       const initialScene = await downloadScene(page, atlas);
+      await positionCanvasWithinHostViewport(page, atlas.frame, editor);
+      const viewportBeforeScene = await canvasViewportEvidence(page, atlas.frame, editor);
       const visibleElements = initialScene.data.elements.filter((element) => !element.isDeleted);
       assert.equal(visibleElements.length, expectedObjects, 'The benchmark must use the real Excalidraw scene, not Atlas cards.');
       const first = visibleElements[0];
       assert.equal(first.type, 'rectangle');
-      const initialAppState = initialScene.data.appState;
+      const initialAppState = viewportBeforeScene.liveAppState;
       const dragStart = scenePointToCanvasViewportPoint({ x: first.x + 1, y: first.y + first.height / 2 }, initialAppState);
       const dragEnd = scenePointToCanvasViewportPoint({ x: first.x + 29, y: first.y + first.height / 2 + 18 }, initialAppState);
       const drag = await runSampledGesture(page, atlas.frame, editor,
@@ -932,12 +985,14 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const pan = await runSampledGesture(page, atlas.frame, editor,
         { x: canvasBounds.width - 45, y: canvasBounds.height - 55 },
         { x: canvasBounds.width - 165, y: canvasBounds.height - 105 }, { pan: true });
-      const afterPan = await downloadScene(page, atlas);
+      const panAppStateAfter = await readLiveCanvasAppState(atlas.frame);
+      const panAppStateBefore = pan.viewportEvidence.liveAppState;
       assert.notDeepEqual(
-        [afterPan.data.appState?.scrollX, afterPan.data.appState?.scrollY],
-        [afterDrag.data.appState?.scrollX, afterDrag.data.appState?.scrollY],
-        'Space+drag must pan the official Excalidraw viewport.',
+        [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
+        [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
+        'A real Space+drag must change the official live Excalidraw viewport scroll state.',
       );
+      const afterPan = await downloadScene(page, atlas);
       assert.equal(afterPan.data.elements.filter((element) => !element.isDeleted).length, expectedObjects,
         'Pan and drag must preserve every benchmark scene object.');
 
@@ -1000,8 +1055,10 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y },
           scenePointerFrom: dragStart, scenePointerTo: dragEnd, sceneZoom: initialAppState.zoom.value,
           sceneScroll: [initialAppState.scrollX, initialAppState.scrollY], hitTarget: 'rectangle stroke near its left border' },
-        normalPan: { ...pan, scrollBefore: [afterDrag.data.appState?.scrollX, afterDrag.data.appState?.scrollY],
-          scrollAfter: [afterPan.data.appState?.scrollX, afterPan.data.appState?.scrollY] },
+        normalPan: { ...pan, stateSource: 'read-only ExcalidrawImperativeAPI.getAppState()',
+          scrollBefore: [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
+          scrollAfter: [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
+          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; persisted scene assertions use exported bytes.' },
         ...(commitEvidence ? { commitReloadManifestRevisionEquality: commitEvidence } : {}),
         notCheckedReasons,
         thresholds: { fpsP50AtLeast: 30, longTaskMs: 50, maximumConsecutive: 1 },
