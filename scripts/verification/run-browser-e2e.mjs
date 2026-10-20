@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
-import { stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { currentHead, hashTree } from './artifact-evidence.mjs';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const repoRoot = resolve(process.env.ATLAS_E2E_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
 const profileNames = ['atlas', 'story', 'combined'];
 const caseIds = [
   'Q02-empty-workspace-create-edit-reload',
@@ -15,7 +16,8 @@ const caseIds = [
   'Q05-pending-draft-recovers-after-forced-page-reload',
   'Q01-profile-plugin-presence-and-host-origin-storage-isolation',
   'Q05-indexeddb-denial-fails-closed',
-  'Q05-quota-aborted-commit-preserves-source-and-recoverable-draft'
+  'Q05-quota-aborted-commit-preserves-source-and-recoverable-draft',
+  'Q13-atlas-ime-enter-waits-for-composition-end'
 ];
 
 async function reserveBasePort() {
@@ -101,8 +103,10 @@ async function stopServer(server) {
   return await server.exited;
 }
 
-function notCheckedCases(reason) {
-  return caseIds.map(id => ({ id, status: 'NOT_CHECKED', reason }));
+function notCheckedCases(reason, profile) {
+  return caseIds
+    .filter(id => profile !== 'story' || !id.startsWith('Q13-'))
+    .map(id => ({ id, status: 'NOT_CHECKED', reason }));
 }
 
 async function inspectArtifact(profile) {
@@ -118,7 +122,7 @@ async function inspectArtifact(profile) {
 
 const report = {
   schemaVersion: 'atlas.browser-e2e-evidence/v1',
-  purpose: 'Host storage and profile-origin E2E subset. These checks do not establish Q01-Q15 as a whole.',
+  purpose: 'Host storage, profile-origin isolation, and Atlas IME E2E subset. These checks do not establish Q01-Q15 as a whole.',
   headSha: currentHead(repoRoot),
   exactCli: process.env.ATLAS_E2E_EXACT_CLI ?? `${process.argv[0]} ${process.argv.slice(1).join(' ')}`,
   argv: process.argv,
@@ -139,7 +143,12 @@ const report = {
 let browser;
 let browserError;
 try {
-  const { chromium } = await import('@playwright/test');
+  const requireFromRepository = createRequire(resolve(repoRoot, 'package.json'));
+  const playwrightPackageJson = requireFromRepository.resolve('@playwright/test/package.json');
+  const playwrightManifest = JSON.parse(await readFile(playwrightPackageJson, 'utf8'));
+  const playwrightImport = playwrightManifest.exports?.['.']?.import;
+  if (typeof playwrightImport !== 'string') throw new Error('@playwright/test does not provide its ESM entry for browser verification.');
+  const { chromium } = await import(pathToFileURL(resolve(dirname(playwrightPackageJson), playwrightImport)).href);
   const executablePath = process.env.ATLAS_E2E_CHROMIUM;
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   report.environment.browser = {
@@ -165,7 +174,7 @@ if (browserError) {
       profile,
       exactCli: report.exactCli,
       artifact: artifact && { sha256: artifact.sha256, files: artifact.files, bytes: artifact.bytes },
-      cases: notCheckedCases(`Chromium could not launch: ${browserError}`),
+      cases: notCheckedCases(`Chromium could not launch: ${browserError}`, profile),
       server: null
     });
   }
@@ -177,7 +186,7 @@ if (browserError) {
     report.profiles.push(profileReport);
     const artifact = await inspectArtifact(profile);
     if (!artifact) {
-      profileReport.cases = notCheckedCases(`Build artifact dist/${profile} is missing; build this profile before browser verification.`);
+      profileReport.cases = notCheckedCases(`Build artifact dist/${profile} is missing; build this profile before browser verification.`, profile);
       continue;
     }
     profileReport.artifact = { sha256: artifact.sha256, files: artifact.files, bytes: artifact.bytes };
@@ -189,7 +198,7 @@ if (browserError) {
       server = spawnServer(profile, basePort);
       const ready = await waitForServer(server, baseUrl);
       if (!ready) {
-        profileReport.cases = notCheckedCases(`Static server did not become ready. ${server.output}`);
+        profileReport.cases = notCheckedCases('Static server did not become ready.', profile);
         profileReport.server = {
           argv: server.argv,
           ready: false,
@@ -219,6 +228,28 @@ if (browserError) {
           }
         }
       });
+      if (profile !== 'story') {
+        const { runImeEntryCases } = await import('../../tests/e2e/ime-entry.mjs');
+        await runImeEntryCases({
+          browser,
+          baseUrl,
+          profile,
+          record: async (id, run) => {
+            try {
+              profileReport.cases.push({ id, status: 'PASS', evidence: await run() });
+              process.stderr.write(`[Browser E2E] ${profile} ${id}: PASS\n`);
+            } catch (error) {
+              const detail = error instanceof Error ? `${error.name}: ${error.message.split('\n')[0]}` : String(error);
+              profileReport.cases.push({
+                id,
+                status: 'FAIL',
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+              });
+              process.stderr.write(`[Browser E2E] ${profile} ${id}: FAIL — ${detail.slice(0, 240)}\n`);
+            }
+          }
+        });
+      }
       profileReport.server.shutdown = await stopServer(server);
       server = undefined;
     } catch (error) {
