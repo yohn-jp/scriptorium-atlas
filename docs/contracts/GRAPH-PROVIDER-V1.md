@@ -46,7 +46,7 @@ TypeScriptは説明用。実装上のJSON Schemaは `v1.schema.json` を正本�
 Plugin frameはHostの`providerCall(leaseId, request)`にlease-bound queryを渡し、Plugin用request paramsに`handle`を含めない。Hostは接続元Pluginと`leaseId`を検証し、query毎にHostが認可したhandleをProvider向け`params.handle`と外側envelopeへ注入する。Provider向けopen requestだけ外側handleを持たず、open responseで発行されたhandleを以後のleaseへ結び付ける。Pluginが別handleを指定して認可範囲を変更することはできない。Pending openを中断するcancelはhandleなしでよいが、Hostは同じPlugin session/provider/epochのpending request IDへの取消しだけを許可する。
 - Event `updated({snapshot,revision,epoch,changedPaths})` はヒント。欠落Eventだけで誤ったキャッシュ整合と見なさずdiff/resync。
 
-Cursorは `handle + snapshot + filter + result order` へ束縛された不透明値、別filterへ再利用は禁止。Page limitは1–500、既定100。結果はNodeRef/EdgeRefのcanonical順で安定し、初期Pageは前snapshotと勝手に混ぜない。全件数が不明なら`total`を捏造しない。unknown/partialは`complete=false`を使う。Providerごとのstateがbrokenでも他Providerは継続する。
+Cursorは `handle + snapshot + filter + result order` へ束縛された不透明値、別filterへ再利用は禁止。Page limitは1–500、既定100。結果はNodeRef/EdgeRefのcanonical順で安定し、初期Pageは前snapshotと勝手に混ぜない。全件数が不明なら`total`を捏造しない。**`nextCursor=null` がページ列挙の終端、`complete` は元ソース・参照の完全性**を意味する。`{nextCursor:null,complete:false}` は「健全な結果をすべて列挙したが、不正/欠落したSourceのためGraphは部分的」という有効な最終ページである。Consumerはそのデータを警告付きで表示し、全体完全性を要する差分・削除判定を信用せず全件再同期または操作制限を選ぶ。Providerごとのstateがbrokenでも他Providerは継続する。
 
 ## Broker境界と異常
 
