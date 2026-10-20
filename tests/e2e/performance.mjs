@@ -503,6 +503,56 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
       && point.y >= bounds.y && point.y <= bounds.y + bounds.height,
     `Freeform ${pan ? 'pan' : 'object drag'} ${label} must target the visible interactive canvas: ${JSON.stringify({ point, bounds })}.`);
   }
+  const framePoints = [start, end].map((point) => ({ x: viewport.interactiveCanvasFrameRect.x + point.x,
+    y: viewport.interactiveCanvasFrameRect.y + point.y }));
+  const hitTestEvidence = await frame.evaluate((points) => {
+    const canvas = document.querySelector('canvas.excalidraw__canvas.interactive');
+    const describe = (element) => element instanceof Element ? {
+      tagName: element.tagName,
+      id: element.id || null,
+      className: typeof element.className === 'string' ? element.className : String(element.className ?? ''),
+      ariaLabel: element.getAttribute('aria-label'),
+      role: element.getAttribute('role'),
+      text: element.textContent?.trim().slice(0, 100) ?? '',
+    } : null;
+    return {
+      activeElementBeforeGesture: describe(document.activeElement),
+      documentHasFocus: document.hasFocus(),
+      points: points.map((point) => {
+        const element = document.elementFromPoint(point.x, point.y);
+        return { point, target: describe(element), hitsInteractiveCanvas: element === canvas };
+      }),
+    };
+  }, framePoints);
+  activeScenarioTrace?.gestures?.push({ type: pan ? 'pan' : 'object-drag', stage: 'hit-test', hitTestEvidence });
+  assert.ok(hitTestEvidence.points.every((item) => item.hitsInteractiveCanvas),
+    `Freeform ${pan ? 'pan' : 'object drag'} points must hit the actual interactive canvas after layout/scroll: ${JSON.stringify(hitTestEvidence)}.`);
+  if (pan) {
+    await frame.evaluate(() => {
+      const events = [];
+      const describe = (element) => element instanceof Element ? {
+        tagName: element.tagName,
+        id: element.id || null,
+        className: typeof element.className === 'string' ? element.className : String(element.className ?? ''),
+        ariaLabel: element.getAttribute('aria-label'),
+        role: element.getAttribute('role'),
+        text: element.textContent?.trim().slice(0, 100) ?? '',
+      } : null;
+      const pointer = (event) => events.push({ type: event.type, isTrusted: event.isTrusted,
+        pointerType: event.pointerType, isPrimary: event.isPrimary, button: event.button, buttons: event.buttons,
+        clientX: event.clientX, clientY: event.clientY, target: describe(event.target),
+        hitTarget: describe(document.elementFromPoint(event.clientX, event.clientY)),
+        activeElement: describe(document.activeElement), time: performance.now() });
+      const keyboard = (event) => {
+        if (event.code === 'Space') events.push({ type: event.type, key: event.key, code: event.code,
+          isTrusted: event.isTrusted, repeat: event.repeat, target: describe(event.target),
+          activeElement: describe(document.activeElement), time: performance.now() });
+      };
+      for (const type of ['pointerdown', 'pointermove', 'pointerup']) document.addEventListener(type, pointer, true);
+      for (const type of ['keydown', 'keyup']) document.addEventListener(type, keyboard, true);
+      window.__atlasQ12PanInputEvidence = { events, listeners: { pointer, keyboard }, activeElementAfterGesture: null };
+    });
+  }
   await frame.evaluate(() => {
     const intervals = [];
     const longTasks = [];
@@ -536,6 +586,25 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
   await frame.evaluate(() => window.__atlasCanvasSample.stopFrames());
   await page.waitForTimeout(100);
   const frameSample = await frame.evaluate(() => window.__atlasCanvasSample.finish());
+  const inputEvidence = pan ? await frame.evaluate(() => {
+    const evidence = window.__atlasQ12PanInputEvidence;
+    if (!evidence) return null;
+    const describe = (element) => element instanceof Element ? {
+      tagName: element.tagName,
+      id: element.id || null,
+      className: typeof element.className === 'string' ? element.className : String(element.className ?? ''),
+      ariaLabel: element.getAttribute('aria-label'),
+      role: element.getAttribute('role'),
+      text: element.textContent?.trim().slice(0, 100) ?? '',
+    } : null;
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) document.removeEventListener(type, evidence.listeners.pointer, true);
+    for (const type of ['keydown', 'keyup']) document.removeEventListener(type, evidence.listeners.keyboard, true);
+    evidence.activeElementAfterGesture = describe(document.activeElement);
+    evidence.documentHasFocusAfterGesture = document.hasFocus();
+    delete evidence.listeners;
+    delete window.__atlasQ12PanInputEvidence;
+    return evidence;
+  }) : null;
   const intervalP50Ms = percentile(frameSample.intervals, 0.5);
   const fpsP50 = intervalP50Ms ? 1_000 / intervalP50Ms : null;
   const supported = await frame.evaluate(() => 'PerformanceObserver' in window && PerformanceObserver.supportedEntryTypes.includes('longtask'));
@@ -546,11 +615,11 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
     streak = longTasks[index].startTime - longTasks[index - 1].startTime <= 150 ? streak + 1 : 1;
     maxStreak = Math.max(maxStreak, streak);
   }
-  assert.ok(fpsP50 >= 30, `${pan ? 'Freeform pan' : 'Freeform object drag'} p50 ${fpsP50}fps is below 30fps.`);
-  if (supported) assert.ok(maxStreak <= 1, `Freeform ${pan ? 'pan' : 'drag'} produced ${maxStreak} consecutive Long Tasks over 50ms.`);
-  return {
+  const gestureEvidence = {
     gestureMs,
     viewportEvidence: viewport,
+    hitTestEvidence,
+    ...(inputEvidence ? { inputEvidence } : {}),
     pointerPageFrom: startPoint,
     pointerPageTo: endPoint,
     animationFrameSamples: frameSample.intervals.length,
@@ -561,6 +630,10 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
         : { reason: 'This browser frame does not support PerformanceObserver longtask entries.' }) },
     notCheckedReasons: supported ? [] : ['This browser frame does not support PerformanceObserver longtask entries.'],
   };
+  activeScenarioTrace?.gestures?.push({ type: pan ? 'pan' : 'object-drag', stage: 'measured', evidence: gestureEvidence });
+  assert.ok(fpsP50 >= 30, `${pan ? 'Freeform pan' : 'Freeform object drag'} p50 ${fpsP50}fps is below 30fps.`);
+  if (supported) assert.ok(maxStreak <= 1, `Freeform ${pan ? 'pan' : 'drag'} produced ${maxStreak} consecutive Long Tasks over 50ms.`);
+  return gestureEvidence;
 }
 
 function scenePointToCanvasViewportPoint(scenePoint, appState) {
@@ -577,6 +650,81 @@ function scenePointToCanvasViewportPoint(scenePoint, appState) {
 
 async function exportInventoryFromCurrentHost(page, unzipSync) {
   return exportBundle(page, unzipSync);
+}
+
+async function waitForQ12Proposal(page, timeoutMs = 30_000) {
+  const proposals = page.locator('section[aria-label="変更の承認"] article');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await proposals.count()) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Host did not publish a review proposal within ${timeoutMs} ms.`);
+}
+
+async function approveQ12Proposal(page) {
+  const proposal = page.locator('section[aria-label="変更の承認"] article').last();
+  await proposal.waitFor({ state: 'visible', timeout: 30_000 });
+  const priorReceipts = await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).allTextContents();
+  const proposedFiles = await proposal.locator('details').evaluateAll((details) => details.map((detail) => {
+    const blocks = [...detail.querySelectorAll('pre')];
+    return {
+      path: detail.querySelector('summary')?.textContent?.trim() ?? '',
+      beforeText: blocks[0]?.textContent ?? null,
+      afterText: blocks[1]?.textContent ?? null,
+    };
+  }));
+  await proposal.getByRole('button', { name: 'この変更を承認してCommit' }).click();
+  await proposal.waitFor({ state: 'detached', timeout: 30_000 });
+  const receipt = page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).last();
+  const deadline = Date.now() + 30_000;
+  let receiptText = '';
+  while (Date.now() < deadline) {
+    receiptText = await receipt.textContent().catch(() => '') ?? '';
+    if (receiptText && !priorReceipts.includes(receiptText)) break;
+    await page.waitForTimeout(100);
+  }
+  assert.ok(receiptText && !priorReceipts.includes(receiptText), 'Each Q12 Canvas proposal must produce a new local Host Commit receipt.');
+  return { receiptText, proposedFiles };
+}
+
+async function commitQ12SceneUntilCurrent(page, expectedSceneBytes, maxAttempts = 8) {
+  const expectedSceneText = expectedSceneBytes.toString('utf8');
+  const committed = [];
+  let finalScenePath = '';
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await waitForQ12Proposal(page);
+    const result = await approveQ12Proposal(page);
+    committed.push(result);
+    activeScenarioTrace?.approvedProposals?.push({
+      attempt: attempt + 1,
+      receiptText: result.receiptText,
+      files: result.proposedFiles.map((file) => ({
+        path: file.path,
+        beforeBytes: file.beforeText === null ? null : Buffer.byteLength(file.beforeText, 'utf8'),
+        beforeSha256: file.beforeText === null ? null : sha256(Buffer.from(file.beforeText, 'utf8')),
+        afterBytes: file.afterText === null ? null : Buffer.byteLength(file.afterText, 'utf8'),
+        afterSha256: file.afterText === null ? null : sha256(Buffer.from(file.afterText, 'utf8')),
+      })),
+    });
+    const scene = result.proposedFiles.find(({ path }) => path.endsWith('.excalidraw'));
+    if (scene?.afterText === expectedSceneText) {
+      finalScenePath = scene.path;
+      const followUpDeadline = Date.now() + 1_200;
+      const proposals = page.locator('section[aria-label="変更の承認"] article');
+      let hasFollowUpProposal = false;
+      while (Date.now() < followUpDeadline) {
+        if (await proposals.count()) { hasFollowUpProposal = true; break; }
+        await page.waitForTimeout(100);
+      }
+      if (!hasFollowUpProposal) return { committed, scenePath: finalScenePath, sceneProposal: scene };
+    }
+  }
+  const last = committed.at(-1);
+  const lastScene = last?.proposedFiles.find(({ path }) => path.endsWith('.excalidraw'));
+  throw new Error(`Host did not commit the latest measured Canvas scene after ${committed.length} explicitly approved proposal(s). `
+    + `Expected ${expectedSceneBytes.byteLength} bytes / sha256 ${sha256(expectedSceneBytes)}; `
+    + `last proposal scene ${lastScene?.path ?? 'missing'} had ${lastScene?.afterText === null || lastScene?.afterText === undefined ? 'no text' : Buffer.byteLength(lastScene.afterText, 'utf8') + ' bytes / sha256 ' + sha256(Buffer.from(lastScene.afterText, 'utf8'))}.`);
 }
 
 async function reopenWorkspace(page, workspaceId) {
@@ -736,7 +884,7 @@ async function measureTraversal(page, atlas, origin) {
 
 export async function runPerformanceCases({ browser, baseUrl, unzipSync, archives, datasets, record }) {
   const recordWithTrace = (id, run) => record(id, async () => {
-    const trace = { startedAt: new Date().toISOString(), snapshots: [], captureErrors: [] };
+    const trace = { startedAt: new Date().toISOString(), snapshots: [], captureErrors: [], gestures: [], approvedProposals: [] };
     activeScenarioTrace = trace;
     try {
       return await run();
@@ -983,15 +1131,24 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
 
       const canvasBounds = (await canvasViewportEvidence(page, atlas.frame, editor)).interactiveCanvas;
       const pan = await runSampledGesture(page, atlas.frame, editor,
-        { x: canvasBounds.width - 45, y: canvasBounds.height - 55 },
-        { x: canvasBounds.width - 165, y: canvasBounds.height - 105 }, { pan: true });
+        { x: canvasBounds.width - 50, y: canvasBounds.height - 60 },
+        { x: canvasBounds.width - 170, y: canvasBounds.height - 110 }, { pan: true });
       const panAppStateAfter = await readLiveCanvasAppState(atlas.frame);
       const panAppStateBefore = pan.viewportEvidence.liveAppState;
-      assert.notDeepEqual(
-        [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
-        [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
-        'A real Space+drag must change the official live Excalidraw viewport scroll state.',
-      );
+      const panChanged = panAppStateAfter.scrollX !== panAppStateBefore.scrollX
+        || panAppStateAfter.scrollY !== panAppStateBefore.scrollY;
+      activeScenarioTrace.freeformPartial = {
+        activeSceneObjects: visibleElements.length,
+        viewportBeforeScene,
+        objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y } },
+        normalPan: { ...pan, stateSource: 'read-only ExcalidrawImperativeAPI.getAppState()',
+          scrollBefore: [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
+          scrollAfter: [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
+          changed: panChanged,
+          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; persisted scene assertions use exported bytes.' },
+      };
+      assert.ok(panChanged,
+        `A real Space+drag must change the official live Excalidraw viewport scroll state; before=${JSON.stringify({ scrollX: panAppStateBefore.scrollX, scrollY: panAppStateBefore.scrollY })}, after=${JSON.stringify({ scrollX: panAppStateAfter.scrollX, scrollY: panAppStateAfter.scrollY })}, hitTests=${JSON.stringify(pan.hitTestEvidence)}, input=${JSON.stringify(pan.inputEvidence)}.`);
       const afterPan = await downloadScene(page, atlas);
       assert.equal(afterPan.data.elements.filter((element) => !element.isDeleted).length, expectedObjects,
         'Pan and drag must preserve every benchmark scene object.');
@@ -999,24 +1156,16 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       let commitEvidence = null;
       let notCheckedReasons = [...drag.notCheckedReasons, ...pan.notCheckedReasons];
       if (verifyCommitReload) {
-        const prepare = atlas.locator.getByRole('button', { name: 'Hostレビュー用に準備', exact: true });
-        await prepare.waitFor({ state: 'visible' });
-        await atlas.frame.waitForFunction(() => [...document.querySelectorAll('button')]
-          .some((button) => button.textContent?.trim() === 'Hostレビュー用に準備' && !button.disabled), null,
-        { timeout: 30_000 });
-        assert.equal(await prepare.isEnabled(), true, 'Canvas pointer edits must be available for explicit Host review.');
-        await prepare.click();
-        const proposal = page.locator('section[aria-label="変更の承認"] article').last();
-        await proposal.waitFor({ state: 'visible', timeout: 30_000 });
-        const proposedFiles = await proposal.locator('details').evaluateAll((details) => details.map((detail) => {
-          const blocks = [...detail.querySelectorAll('pre')];
-          return { path: detail.querySelector('summary')?.textContent?.trim() ?? '', afterText: blocks[1]?.textContent ?? null };
-        }));
-        const sceneProposal = proposedFiles.find((file) => file.path.endsWith('.excalidraw'));
-        assert.equal(sceneProposal?.afterText, afterPan.text, 'Host proposal must contain the exact measured Excalidraw scene bytes.');
+        const prepared = atlas.frame.getByRole('status').filter({ hasText: '準備済み・Hostコミット待ち' });
+        await prepared.waitFor({ state: 'visible', timeout: 30_000 });
+        const durableDraft = page.getByRole('status').filter({ hasText: 'Draftを耐久記録しました。確定には内容の確認と承認が必要です。' });
+        await durableDraft.waitFor({ state: 'visible', timeout: 30_000 });
+        assert.equal(await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).count(), 0,
+          'The prepared Canvas draft must wait for explicit Host review and approval; preparing must not commit automatically.');
+        const commitChain = await commitQ12SceneUntilCurrent(page, afterPan.bytes);
+        const sceneProposal = commitChain.sceneProposal;
+        assert.equal(sceneProposal.afterText, afterPan.text, 'The final explicitly approved Host proposal must contain the exact measured Excalidraw scene bytes.');
         const proposalSha256 = sha256(Buffer.from(sceneProposal.afterText, 'utf8'));
-        await proposal.getByRole('button', { name: 'この変更を承認してCommit' }).click();
-        await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).last().waitFor({ timeout: 30_000 });
 
         const exportedBeforeReload = await exportInventoryFromCurrentHost(page, unzipSync);
         await reopenWorkspace(page, workspaceId);
@@ -1032,6 +1181,7 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
           'Every exported path, byte count and SHA-256 revision must be identical before and after reload.');
         commitEvidence = {
           workspaceId,
+          draftPreparation: 'Atlas durable draft observed before explicit Host review and approval; no automatic Commit',
           proposedSceneSha256: proposalSha256,
           sceneBytes: Buffer.byteLength(sceneProposal.afterText, 'utf8'),
           beforeReload: { archiveBytes: exportedBeforeReload.archiveBytes, archiveSha256: exportedBeforeReload.archiveSha256,
@@ -1047,6 +1197,18 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
             entriesIncludingManifest: exportedAfterReload.zipEntryCount,
             expandedBytesIncludingManifest: exportedAfterReload.expandedBytesIncludingManifest },
           manifestAndInventoryIdenticalAfterReload: true,
+          explicitlyApprovedProposalCount: commitChain.committed.length,
+          explicitHostCommitReceipts: commitChain.committed.map(({ receiptText, proposedFiles }) => ({
+            receiptText,
+            files: proposedFiles.map((file) => ({
+              path: file.path,
+              beforeBytes: file.beforeText === null ? null : Buffer.byteLength(file.beforeText, 'utf8'),
+              beforeSha256: file.beforeText === null ? null : sha256(Buffer.from(file.beforeText, 'utf8')),
+              afterBytes: file.afterText === null ? null : Buffer.byteLength(file.afterText, 'utf8'),
+              afterSha256: file.afterText === null ? null : sha256(Buffer.from(file.afterText, 'utf8')),
+            })),
+          })),
+          finalScenePath: commitChain.scenePath,
         };
       }
       return {
