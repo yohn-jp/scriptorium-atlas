@@ -1,7 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openIndexedDbHost } from '../src/host.js';
-import { sha256, bytesToBase64, utf8Bytes } from '../src/bytes.js';
+import { sha256, bytesToBase64, copyArrayBuffer, utf8Bytes } from '../src/bytes.js';
+import { workspaceRevision } from '../src/bundle.js';
 
 const hosts: Array<Awaited<ReturnType<typeof openIndexedDbHost>>> = [];
 let databaseCounter = 0;
@@ -105,6 +106,48 @@ describe('IndexedDB Host persistence', () => {
     const current = await host.getWorkspaceHandle(workspace.workspace.workspaceId);
     const alias = change(workspace.workspace.workspaceId, current.sourceRevision, 'op-lower', 'notes.txt', 'two', null);
     await expect(host.prepare(current, alias)).rejects.toMatchObject({ code: 'INVALID_PATH' });
+  });
+
+  it('keeps a legacy reserved manifest visible and permits only explicit deletion', async () => {
+    const host = await open();
+    const workspace = await host.createWorkspace({ name: 'Legacy path' });
+    const workspaceId = workspace.workspace.workspaceId;
+    const databaseName = `atlas-persistence-test-${databaseCounter}`;
+    const bytes = utf8Bytes('{"legacy":true}');
+    const revision = await sha256(bytes);
+    const sourceRevision = await workspaceRevision([{ path: 'manifest.json', revision }]);
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(databaseName, 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction(['workspaces', 'files'], 'readwrite', { durability: 'strict' });
+    const done = new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+      transaction.onerror = () => reject(transaction.error);
+    });
+    const workspaceRequest = transaction.objectStore('workspaces').get(workspaceId) as IDBRequest<Record<string, unknown> | undefined>;
+    workspaceRequest.onsuccess = () => {
+      transaction.objectStore('workspaces').put({ ...workspaceRequest.result, sourceRevision, generation: 1 });
+      transaction.objectStore('files').put({
+        workspaceId,
+        path: 'manifest.json',
+        revision,
+        bytes: copyArrayBuffer(bytes),
+        contentType: 'application/json',
+        updatedAt: new Date(0).toISOString()
+      });
+    };
+    await done;
+    database.close();
+
+    const current = await host.getWorkspaceHandle(workspaceId);
+    await expect(host.read(current, { path: 'manifest.json' })).resolves.toMatchObject({ content: '{"legacy":true}' });
+    await expect(host.export(workspaceId)).rejects.toMatchObject({ code: 'INVALID_PATH' });
+    const prepared = await host.prepare(current, change(workspaceId, current.sourceRevision, 'op-delete-reserved', 'manifest.json', null, revision));
+    await host.commit(current, prepared.preparedId, true);
+    await expect(host.export(workspaceId)).resolves.toBeInstanceOf(Blob);
   });
 
   it('stages large image bytes in durable idempotent chunks and promotes them through review', async () => {

@@ -782,7 +782,8 @@ async function prepareProposal(
   const writePaths = new Set<string>();
   let regularWriteBytes = 0;
   for (const write of change.writes) {
-    validateWorkspacePayloadPath(write.path);
+    if (write.content === null) validateRelativePath(write.path);
+    else validateWorkspacePayloadPath(write.path);
     const folded = write.path.normalize('NFC').toLocaleLowerCase('und');
     const collision = foldedPaths.get(folded);
     if (collision && collision !== write.path) fail('INVALID_PATH', 'ChangeIntent contains case-colliding paths.', { path: write.path });
