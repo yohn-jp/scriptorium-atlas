@@ -2,12 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
   assertBoardIntegrity,
+  assertContract,
   decodeVersionedFile,
   decodeVersionedFileText,
   validateBundleManifest,
   validateAssetChunk,
   validateBoard,
   validateBoardIntegrity,
+  validateContract,
   validateHostRpcRequest,
   validateNodeRef,
   validateProviderRpcRequest,
@@ -20,6 +22,19 @@ import type { BundleManifest } from '../src/index.js';
 const boardFixtureUrl = new URL('../../../docs/contracts/examples/board.json', import.meta.url);
 
 describe('schema-backed contracts', () => {
+  it('accepts empty provider pages whose item schemas overlap', () => {
+    const emptyPage = {
+      snapshot: { workspaceId: 'workspace-1', sourceRevision: 'source-1', providerRevision: 'provider-1', epoch: 0 },
+      items: [],
+      nextCursor: null,
+      complete: true,
+    };
+    for (const pageContract of ['providerPage', 'graphEdgePage', 'neighborPage', 'graphDeltaPage'] as const) {
+      expect(validateContract(pageContract, emptyPage)).toBe(true);
+    }
+    expect(() => assertContract('providerResult', emptyPage)).not.toThrow();
+  });
+
   it('validates the exact atlas.bundle/v1 manifest shape', () => {
     const manifest: BundleManifest = {
       schema: 'atlas.bundle/v1',

@@ -1942,7 +1942,7 @@
       ]
     },
     "providerResult": {
-      "oneOf": [
+      "anyOf": [
         {
           "$ref": "#/$defs/providerPage"
         },
