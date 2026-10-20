@@ -18,6 +18,7 @@ import type {
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { restoreExcalidrawScene, serializeExcalidrawScene } from "../io/scene-core.js";
 import type { CanvasEditorProps, CanvasPoint, CanvasViewport } from "./types.js";
+import { KeyboardControls } from "./KeyboardControls.js";
 import "@excalidraw/excalidraw/index.css";
 
 type InternalProps = Pick<CanvasEditorProps, "sceneText" | "onChange" | "readOnly" | "renderOverlay">;
@@ -40,6 +41,7 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
   const rootRef = useRef<HTMLDivElement>(null);
   const rawTextRef = useRef(sceneText);
   const [viewportRevision, setViewportRevision] = useState(0);
+  const [controlsExpanded, setControlsExpanded] = useState(false);
 
   const updateViewport = useCallback(() => setViewportRevision((revision) => revision + 1), []);
 
@@ -148,6 +150,17 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
           handleKeyboardGlobally={false}
         />
       </div>
+      {!readOnly && (
+        <details
+          className="atlas-canvas-accessibility"
+          onToggle={(event) => setControlsExpanded(event.currentTarget.open)}
+        >
+          <summary>キーボード操作と要素一覧</summary>
+          {controlsExpanded && apiRef.current && rootRef.current && (
+            <KeyboardControls api={apiRef.current} canvasRoot={rootRef.current} />
+          )}
+        </details>
+      )}
       <div className="atlas-canvas-overlay" aria-label="Canvas overlay">
         {overlay}
       </div>

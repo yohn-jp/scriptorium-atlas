@@ -42,8 +42,9 @@
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "copy-fonts": "node ./scripts/copy-fonts.mjs",
-    "test": "npm run build && node --test",
-    "test:browser": "node ./test/browser-operations.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:browser": "node ./test/browser-operations.mjs",
+    "test:browser:accessibility": "node ./test/browser-keyboard-controls.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1"
