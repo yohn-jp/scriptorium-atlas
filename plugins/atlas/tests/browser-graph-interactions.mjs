@@ -315,6 +315,38 @@ async function run() {
     }
     report.cases.push('multi-selected-drag-persists-both-positions-and-pins');
 
+    const flowMetrics = await flow.boundingBox();
+    assert.ok(flowMetrics);
+    await flow.click({ position: { x: flowMetrics.width - 24, y: 70 } });
+    await graphNodeOne.hover();
+    const sourceHandle = graphNodeOne.locator('.react-flow__handle.source').first();
+    const targetHandle = graphNodeTwo.locator('.react-flow__handle.target').first();
+    await sourceHandle.waitFor({ state: 'visible' });
+    await targetHandle.waitFor({ state: 'visible' });
+    await sourceHandle.dragTo(targetHandle, { timeout: 15000 });
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    let visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
+    assert.equal(visualEdges.length, 1, 'Dragging between node handles should create one editable visual edge.');
+    const visualEdgeId = visualEdges[0]?.id;
+    assert.ok(visualEdgeId);
+    const visualEdgePath = atlas.locator(`.react-flow__edge[data-id="${visualEdgeId}"] .react-flow__edge-path`);
+    await visualEdgePath.click();
+    const edgeLabel = atlas.getByLabel('エッジのラベル');
+    await edgeLabel.waitFor({ state: 'visible' });
+    await edgeLabel.fill('Atlas browser edge');
+    await edgeLabel.press('Tab');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    assert.equal(board.edges.find((edge) => edge.id === visualEdgeId)?.label, 'Atlas browser edge', 'Visual edge label should be editable and saved.');
+    await visualEdgePath.click();
+    await atlas.getByRole('button', { name: '選択項目を削除' }).click();
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
+    assert.equal(visualEdges.length, 0, 'Delete should remove the selected visual edge while keeping semantic provider edges.');
+    report.cases.push('visual-edge-create-edit-and-delete');
+
     const zoomIn = atlas.locator('.react-flow__controls button').first();
     const viewportBeforeZoom = board.views.find((view) => view.kind === 'graph')?.viewport;
     await zoomIn.click();
