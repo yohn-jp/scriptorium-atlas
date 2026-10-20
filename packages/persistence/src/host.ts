@@ -260,9 +260,11 @@ export async function openIndexedDbHost(options: OpenIndexedDbHostOptions = {}):
       validateContract('workspaceHandle', workspace);
       validateRelativePath(query.path);
       const active = db();
-      const snapshot = await readFilesByPaths(active, workspace.workspaceId, [query.path]);
+      // A point read must not enumerate every file: inventory scans belong to
+      // proposals/commits that need capacity and repository-wide CAS checks.
+      const snapshot = await readFileByPath(active, workspace.workspaceId, query.path);
       assertHandleCurrent(snapshot.workspace, workspace);
-      const file = snapshot.files.get(query.path);
+      const file = snapshot.file;
       if (!file) fail('UNAVAILABLE', 'File does not exist.', { path: query.path });
       if (query.expectedRevision !== undefined && query.expectedRevision !== file.revision) {
         fail('REVISION_CONFLICT', 'File revision does not match the requested revision.', { path: file.path });
@@ -976,6 +978,20 @@ async function readFullSnapshot(database: IDBDatabase, workspaceId: string): Pro
   if (!workspace) fail('UNAVAILABLE', 'Workspace does not exist.', { workspaceId });
   // Keep reading legacy over-limit workspaces; createBundle reports export limits without changing stored files.
   return { workspace, files: files.sort((left, right) => compareStrings(left.path, right.path)) };
+}
+
+/** Read a single file and the Workspace generation in one readonly transaction. */
+async function readFileByPath(database: IDBDatabase, workspaceId: string, path: string): Promise<{
+  workspace: WorkspaceRecord;
+  file?: FileRecord;
+}> {
+  const transaction = readonlyTransaction(database, ['workspaces', 'files']);
+  const done = transactionResult(transaction);
+  const workspaceRequest = requestValue(transaction.objectStore('workspaces').get(workspaceId) as IDBRequest<WorkspaceRecord | undefined>);
+  const fileRequest = requestValue(transaction.objectStore('files').get([workspaceId, path]) as IDBRequest<FileRecord | undefined>);
+  const [workspace, file] = await Promise.all([workspaceRequest, fileRequest, done]);
+  if (!workspace) fail('UNAVAILABLE', 'Workspace does not exist.', { workspaceId });
+  return { workspace, ...(file ? { file } : {}) };
 }
 
 async function readFilesByPaths(database: IDBDatabase, workspaceId: string, paths: string[]): Promise<{
