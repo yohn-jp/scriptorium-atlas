@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { resolve, relative } from 'node:path';
-import { stat, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import {writeBundleLicenses} from '../../scripts/verification/write-bundle-licenses.mjs';
 
 const profileValue = process.env['ATLAS_PROFILE'] ?? 'combined';
@@ -10,7 +10,7 @@ const profile=profileValue;
 const enabled = profile === 'combined' ? ['atlas', 'story'] : [profile];
 const packages = { atlas: '@scriptorium-atlas/atlas', story: '@scriptorium-atlas/story-knowledge' };
 const repoRoot=resolve(fileURLToPath(new URL('.',import.meta.url)),'../..');
-type ClosureChunk={file:string;imports:string[];dynamicImports:string[];modules:string[];bytes:number};
+type ClosureChunk={file:string;imports:string[];dynamicImports:string[];workerImports:string[];workerEntry:boolean;modules:string[];bytes:number};
 const workerChunks:ClosureChunk[]=[];
 const modulePath=(path:string)=>path.startsWith('\0')?`<virtual>${path.slice(1)}`:relative(repoRoot,path);
 
@@ -25,12 +25,14 @@ function composition(): Plugin {
       return `${enabled.map(key => `import * as ${key}Metadata from '${packages[key as keyof typeof packages]}/metadata';`).join('\n')}
         export const profile=${JSON.stringify(profile)};
         export const metadata={${enabled.map(key => `${key}:${key}Metadata`).join(',')}};
-        export const loaders={${enabled.map(key => `${key}:()=>import('${packages[key as keyof typeof packages]}/ui')`).join(',')}};
+        export const loaders={${enabled.map(key => key==='atlas'
+          ? "atlas:async()=>{const canvas=await import('@scriptorium-atlas/canvas');canvas.configureExcalidrawAssets('/');return import('@scriptorium-atlas/atlas/ui')}"
+          : `${key}:()=>import('${packages[key as keyof typeof packages]}/ui')`).join(',')}};
         export const providerLoaders={${enabled.includes('story') ? "story:()=>import('@scriptorium-atlas/story-knowledge/provider')" : ''}};`;
     },
     generateBundle(_options, bundle) {
       const chunks = [...workerChunks,...Object.values(bundle).filter(x => x.type === 'chunk').map(x => ({
-        file: x.fileName, imports: x.imports, dynamicImports: x.dynamicImports,
+        file: x.fileName, imports: x.imports, dynamicImports: x.dynamicImports, workerImports:[],workerEntry:false,
         modules: Object.keys(x.modules).map(modulePath),
         bytes: new TextEncoder().encode(x.code).length,
       }))];
@@ -43,7 +45,16 @@ function composition(): Plugin {
     async closeBundle() {
       if (!closure) throw new Error('Bundle closure not generated');
       const outputDirectory=resolve(repoRoot,'dist',profile);
-      for (const chunk of closure.chunks) chunk.bytes=(await stat(resolve(outputDirectory,chunk.file))).size;
+      const workerEntries=closure.chunks.filter(chunk=>chunk.workerEntry);
+      for (const chunk of closure.chunks) {
+        const emitted=await readFile(resolve(outputDirectory,chunk.file));
+        chunk.bytes=emitted.byteLength;
+        const code=emitted.toString('utf8');
+        chunk.workerImports=workerEntries.filter(worker=>{
+          const path=worker.file.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+          return new RegExp(String.raw`new\s+Worker\s*\(\s*new\s+URL\s*\(\s*['"\x60]/?${path}['"\x60]`).test(code);
+        }).map(worker=>worker.file);
+      }
       await writeFile(resolve(outputDirectory,'closure.json'),JSON.stringify({profile,...closure},null,2)+'\n');
       if (profile!=='story') {
         const {copyCanvasAssets} = await import('@scriptorium-atlas/canvas/assets');
@@ -64,7 +75,7 @@ export default defineConfig({
   worker: { format: 'es',plugins:()=>[{
     name:'atlas-worker-inventory',
     generateBundle(_options,bundle){
-      for(const chunk of Object.values(bundle)) if(chunk.type==='chunk') workerChunks.push({file:chunk.fileName,imports:chunk.imports,dynamicImports:chunk.dynamicImports,modules:Object.keys(chunk.modules).map(modulePath),bytes:new TextEncoder().encode(chunk.code).length});
+      for(const chunk of Object.values(bundle)) if(chunk.type==='chunk') workerChunks.push({file:chunk.fileName,imports:chunk.imports,dynamicImports:chunk.dynamicImports,workerImports:[],workerEntry:chunk.isEntry,modules:Object.keys(chunk.modules).map(modulePath),bytes:new TextEncoder().encode(chunk.code).length});
     },
   }] },
 });
