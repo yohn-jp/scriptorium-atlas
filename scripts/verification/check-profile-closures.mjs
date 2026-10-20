@@ -5,7 +5,7 @@ import os from 'node:os';
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentHead, hashTree } from './artifact-evidence.mjs';
-import { bundleDependencyClosure } from './write-bundle-licenses.mjs';
+import { bundleDependencyClosure, verifiedLicenseSupplement } from './write-bundle-licenses.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const knownProfiles = ['atlas', 'story', 'combined'];
@@ -94,8 +94,9 @@ async function auditLicenseInventory(profile, directory, closure) {
   check(noticeInfo.bytes > 0, `${profile} third-party notice is empty`);
 
   const expected = await bundleDependencyClosure({ repoRoot, closure });
-  const expectedByKey = new Map(expected.map(({ packageInfo, modules }) => [`${packageInfo.name}@${packageInfo.version}`, modules]));
+  const expectedByKey = new Map(expected.map(({ packageInfo, modules }) => [`${packageInfo.name}@${packageInfo.version}`, { packageInfo, modules }]));
   const actualByKey = new Map();
+  const noticeText = await readFile(noticePath, 'utf8');
   for (const dependency of manifest.packages) {
     check(dependency && typeof dependency.name === 'string' && typeof dependency.version === 'string', `${profile} license inventory has an invalid package row`);
     const key = `${dependency.name}@${dependency.version}`;
@@ -109,13 +110,28 @@ async function auditLicenseInventory(profile, directory, closure) {
       check(path.startsWith(`${licensesDirectory}/`), `${key} license text escapes the inventory directory`);
       const actual = await digestFile(path);
       check(actual.bytes === license.bytes && actual.sha256 === license.sha256, `${key} legal text digest does not match the included file ${license.output}`);
+      if (license.sourceKind === 'verified-upstream-supplement') {
+        const expectedPackage = expectedByKey.get(key)?.packageInfo;
+        check(expectedPackage, `${key} supplement is not tied to an included package`);
+        const supplement = await verifiedLicenseSupplement(expectedPackage);
+        check(supplement, `${key} uses a supplement without an exact allowlist entry`);
+        check(dependency.license === supplement.entry.license, `${key} supplement license differs from the package declaration`);
+        for (const field of ['sourceUrl', 'sourceFile', 'sourceRevision', 'sourceIntegrity', 'sourceNote', 'packageArtifactUrl', 'packageArtifactIntegrity', 'packageGitHead']) {
+          check(license[field] === supplement.provenance[field], `${key} supplement ${field} differs from the pinned provenance`);
+        }
+        check(JSON.stringify(license.sourceVerificationUrls) === JSON.stringify(supplement.provenance.sourceVerificationUrls), `${key} supplement verification sources differ from the pinned provenance`);
+        check(actual.sha256 === createHash('sha256').update(supplement.content).digest('hex'), `${key} supplement bytes differ from the pinned text`);
+        check(noticeText.includes(supplement.provenance.sourceUrl) && noticeText.includes(supplement.entry.packageArtifactIntegrity), `${key} third-party notice omits supplement provenance`);
+      } else {
+        check(license.sourceKind === undefined, `${key} has an unsupported legal text provenance kind`);
+      }
     }
   }
   check(expectedByKey.size === actualByKey.size, `${profile} license package inventory differs from included module closure: expected ${expectedByKey.size}, recorded ${actualByKey.size}`);
-  for (const [key, modules] of expectedByKey) {
+  for (const [key, expectedPackage] of expectedByKey) {
     const recordedModules = actualByKey.get(key);
     check(recordedModules, `${profile} license inventory omits bundled package ${key}`);
-    check(JSON.stringify([...recordedModules].sort()) === JSON.stringify([...modules].sort()), `${key} module provenance differs from closure.json`);
+    check(JSON.stringify([...recordedModules].sort()) === JSON.stringify([...expectedPackage.modules].sort()), `${key} module provenance differs from closure.json`);
   }
 
   const assetSources = new Set();

@@ -30,6 +30,13 @@ export declare function bundleDependencyClosure(args: {
   closure: BundleClosure;
 }): Promise<BundleDependency[]>;
 
+export declare function verifiedLicenseSupplement(packageInfo: BundleDependency['packageInfo']): Promise<{
+  entry: Record<string, unknown>;
+  source: Record<string, unknown>;
+  content: Uint8Array;
+  provenance: Record<string, unknown>;
+} | null>;
+
 export declare function writeBundleLicenses(args: {
   repoRoot: string;
   profile: AtlasProfile;

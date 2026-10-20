@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const THIRD_PARTY_NOTICE_NAMES = /^(?:LICEN[CS]E|COPYING|NOTICE)(?:[._-].*)?$/i;
 const INTERNAL_PACKAGE_SCOPE = '@scriptorium-atlas/';
@@ -9,6 +10,9 @@ const FONT_LICENSE_TEXTS = new Map([
   ['MIT', 'MIT.txt'],
   ['OFL-1.1', 'OFL-1.1.txt']
 ]);
+const SUPPLEMENT_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), 'license-supplements');
+const SUPPLEMENT_MANIFEST_PATH = join(SUPPLEMENT_DIRECTORY, 'manifest.json');
+let cachedSupplementManifest;
 
 function sha256(content) {
   return createHash('sha256').update(content).digest('hex');
@@ -88,12 +92,82 @@ async function listLicenseFiles(packageDirectory) {
   return paths.sort();
 }
 
+async function loadSupplementManifest() {
+  if (!cachedSupplementManifest) {
+    cachedSupplementManifest = (async () => {
+      const manifest = JSON.parse(await readFile(SUPPLEMENT_MANIFEST_PATH, 'utf8'));
+      assert.equal(manifest.schemaVersion, 'atlas.bundle-license-supplements/v1', 'license supplement manifest has an unsupported schema');
+      assert.ok(manifest.sources && typeof manifest.sources === 'object' && Array.isArray(manifest.entries), 'license supplement manifest is malformed');
+      const keys = new Set();
+      for (const entry of manifest.entries) {
+        const key = `${entry.packageName}@${entry.version}`;
+        assert.ok(!keys.has(key), `license supplement manifest repeats ${key}`);
+        keys.add(key);
+        assert.ok(manifest.sources[entry.sourceId], `${key} references missing supplement source ${entry.sourceId}`);
+      }
+      return manifest;
+    })();
+  }
+  return cachedSupplementManifest;
+}
+
+/** Return validated exact-version supplement provenance, or null when no exact entry exists. */
+export async function verifiedLicenseSupplement(packageInfo) {
+  const manifest = await loadSupplementManifest();
+  const entry = manifest.entries.find(item => item.packageName === packageInfo.name && item.version === packageInfo.version);
+  if (!entry) return null;
+  assert.equal(packageInfo.manifest.license, entry.license, `${entry.packageName}@${entry.version} declared license differs from its supplement`);
+  const source = manifest.sources[entry.sourceId];
+  assert.ok(typeof source.textFile === 'string' && source.textFile && source.textFile === source.textFile.split(/[\\/]/).at(-1), `${entry.packageName}@${entry.version} has an unsafe supplement text path`);
+  assert.ok(typeof source.url === 'string' && source.url.startsWith('https://'), `${entry.packageName}@${entry.version} supplement source must use HTTPS`);
+  assert.ok(typeof source.revision === 'string' && source.revision.length > 0, `${entry.packageName}@${entry.version} supplement must pin its upstream revision`);
+  assert.ok(typeof entry.packageArtifactUrl === 'string' && entry.packageArtifactUrl.startsWith('https://registry.npmjs.org/'), `${entry.packageName}@${entry.version} must pin its NPM artifact URL`);
+  assert.ok(typeof entry.packageArtifactIntegrity === 'string' && /^sha512-[A-Za-z0-9+/]+=*$/.test(entry.packageArtifactIntegrity), `${entry.packageName}@${entry.version} must include its NPM artifact integrity`);
+  const content = await readFile(join(SUPPLEMENT_DIRECTORY, source.textFile));
+  const digest = sha256(content);
+  assert.equal(digest, source.sha256, `${entry.packageName}@${entry.version} supplement text hash mismatch`);
+  return {
+    entry,
+    source,
+    content,
+    provenance: {
+      sourceKind: 'verified-upstream-supplement',
+      sourceUrl: source.url,
+      sourceFile: source.file,
+      sourceRevision: source.revision,
+      sourceIntegrity: source.sourceIntegrity ?? null,
+      sourceVerificationUrls: source.verifiedAt ?? [],
+      sourceNote: source.note,
+      packageArtifactUrl: entry.packageArtifactUrl,
+      packageArtifactIntegrity: entry.packageArtifactIntegrity,
+      packageGitHead: entry.packageGitHead ?? null
+    }
+  };
+}
+
 async function writeDependencyLicense({ packageInfo, modulePaths: includedModules, licensesRoot, repoRoot }) {
   const legalFiles = await listLicenseFiles(packageInfo.directory);
-  assert.ok(legalFiles.length > 0, `${packageInfo.name}@${packageInfo.version} has included code but no bundled LICENSE/COPYING/NOTICE text`);
+  let supplement;
+  if (legalFiles.length === 0) {
+    supplement = await verifiedLicenseSupplement(packageInfo);
+    assert.ok(supplement, `${packageInfo.name}@${packageInfo.version} has included code but no bundled LICENSE/COPYING/NOTICE text`);
+  }
   const destinationRoot = join(licensesRoot, 'text', `${safeSegment(packageInfo.name)}@${safeSegment(packageInfo.version)}`);
   await mkdir(destinationRoot, { recursive: true });
   const licenseFiles = [];
+  if (supplement) {
+    const destinationRelative = posixPath(join('text', `${safeSegment(packageInfo.name)}@${safeSegment(packageInfo.version)}`, 'LICENSE.txt'));
+    const outputPath = join(licensesRoot, destinationRelative);
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, supplement.content);
+    licenseFiles.push({
+      source: `supplement:${supplement.entry.sourceId}`,
+      output: destinationRelative,
+      bytes: supplement.content.byteLength,
+      sha256: sha256(supplement.content),
+      ...supplement.provenance
+    });
+  }
   for (const sourcePath of legalFiles) {
     const content = await readFile(sourcePath);
     assert.ok(content.byteLength > 0, `${packageInfo.name} has an empty legal notice: ${sourcePath}`);
@@ -255,7 +329,14 @@ export async function writeBundleLicenses({ repoRoot, profile, closure, outputDi
   ];
   for (const dependency of packages) {
     noticeLines.push(`## ${dependency.name}@${dependency.version}`, '', `Declared license: ${String(dependency.license ?? 'unspecified')}`, '');
-    for (const legalFile of dependency.licenseFiles) noticeLines.push(`- ${legalFile.output} — ${legalFile.bytes} bytes, SHA-256 ${legalFile.sha256}`);
+    for (const legalFile of dependency.licenseFiles) {
+      noticeLines.push(`- ${legalFile.output} — ${legalFile.bytes} bytes, SHA-256 ${legalFile.sha256}`);
+      if (legalFile.sourceKind === 'verified-upstream-supplement') {
+        noticeLines.push(`  - Source: ${legalFile.sourceUrl} (${legalFile.sourceRevision}; ${legalFile.sourceFile})`);
+        noticeLines.push(`  - NPM artifact: ${legalFile.packageArtifactUrl} (${legalFile.packageArtifactIntegrity})`);
+        if (legalFile.sourceNote) noticeLines.push(`  - Provenance: ${legalFile.sourceNote}`);
+      }
+    }
     noticeLines.push('');
   }
   if (assets.length) {
