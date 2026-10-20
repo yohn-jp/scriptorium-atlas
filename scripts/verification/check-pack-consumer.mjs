@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createServer } from 'node:net';
 import { currentHead } from './artifact-evidence.mjs';
 
 const repoRoot = resolve(process.env.ATLAS_PACK_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
@@ -19,7 +21,7 @@ const report = {
   argv: process.argv,
   environment: { node: process.version, platform: os.platform(), release: os.release(), architecture: os.arch() },
   packages: [],
-  consumer: { status: 'NOT_CHECKED' },
+  consumer: { status: 'NOT_CHECKED', node: { status: 'NOT_CHECKED' }, browser: { status: 'NOT_CHECKED' } },
   status: 'NOT_CHECKED',
   exitStatus: null
 };
@@ -138,6 +140,10 @@ function allDependencies(manifest) {
   };
 }
 
+function isBrowserModule(module) {
+  return module.specifier.endsWith('/ui') || module.specifier.endsWith('/ui.css') || module.target.endsWith('.css');
+}
+
 async function packPackage(name, record, destination) {
   const { directory, manifest } = record;
   const result = {
@@ -244,6 +250,19 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
       if (archive) overrides[dependency] = `file:${archive}`;
     }
   }
+  const checks = [];
+  for (const [name, record] of records) {
+    for (const module of moduleSpecifiers(name, record.manifest)) checks.push({ package: name, ...module });
+  }
+  const browserChecks = checks.filter(isBrowserModule);
+  const nodeChecks = checks.filter(module => !isBrowserModule(module));
+  if (browserChecks.length) {
+    const standaloneManifestPath = join(repoRoot, 'apps', 'standalone', 'package.json');
+    const standaloneManifest = JSON.parse(await readFile(standaloneManifestPath, 'utf8'));
+    const viteVersion = standaloneManifest.devDependencies?.vite;
+    assert.ok(typeof viteVersion === 'string' && viteVersion.length > 0, 'the standalone app must pin Vite for external browser-consumer verification');
+    packageJson.devDependencies = { vite: viteVersion };
+  }
   Object.assign(packageJson.dependencies, peerDependencies(records));
   await mkdir(consumerDirectory, { recursive: true });
   await writeFile(join(consumerDirectory, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
@@ -265,6 +284,8 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
     workspaceOverrideCount: Object.keys(overrides).length,
     installExitStatus: install.exitStatus,
     exportedModules: [],
+    node: { status: 'NOT_CHECKED', checkedCount: nodeChecks.length },
+    browser: { status: 'NOT_CHECKED', checkedCount: browserChecks.length },
     error: null
   };
   if (install.exitStatus !== 0) {
@@ -273,11 +294,7 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
     return evidence;
   }
 
-  const checks = [];
-  for (const [name, record] of records) {
-    for (const module of moduleSpecifiers(name, record.manifest)) checks.push({ package: name, ...module });
-  }
-  const consumerSource = `import { readFile } from 'node:fs/promises';\nimport { fileURLToPath } from 'node:url';\nconst checks=${JSON.stringify(checks)};\nconst results=[];\nfor(const check of checks){const resolved=import.meta.resolve(check.specifier);if(resolved.endsWith('.json')){JSON.parse(await readFile(fileURLToPath(resolved),'utf8'));}else if(!/\\.(?:[cm]?js)$/.test(new URL(resolved).pathname)){const bytes=await readFile(fileURLToPath(resolved));if(!bytes.byteLength)throw new Error('Empty exported asset: '+check.specifier);}else{await import(check.specifier);}results.push({package:check.package,specifier:check.specifier,resolved});}\nprocess.stdout.write(JSON.stringify(results));\n`;
+  const consumerSource = `import { readFile } from 'node:fs/promises';\nimport { fileURLToPath } from 'node:url';\nconst checks=${JSON.stringify(nodeChecks)};\nconst results=[];\nfor(const check of checks){const resolved=import.meta.resolve(check.specifier);if(resolved.endsWith('.json')){JSON.parse(await readFile(fileURLToPath(resolved),'utf8'));}else if(!/\\.(?:[cm]?js)$/.test(new URL(resolved).pathname)){const bytes=await readFile(fileURLToPath(resolved));if(!bytes.byteLength)throw new Error('Empty exported asset: '+check.specifier);}else{await import(check.specifier);}results.push({package:check.package,specifier:check.specifier,resolved});}\nprocess.stdout.write(JSON.stringify(results));\n`;
   const entryPath = join(consumerDirectory, 'consumer.mjs');
   await writeFile(entryPath, consumerSource, 'utf8');
   const execution = await run(process.execPath, [entryPath], consumerDirectory);
@@ -288,11 +305,181 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
   }
   try {
     evidence.exportedModules = JSON.parse(execution.stdout);
-    evidence.status = evidence.exportedModules.length === checks.length ? 'PASS' : 'FAIL';
-    if (evidence.status === 'FAIL') evidence.error = `resolved ${evidence.exportedModules.length} of ${checks.length} exported modules`;
+    evidence.node.status = evidence.exportedModules.length === nodeChecks.length ? 'PASS' : 'FAIL';
+    if (evidence.node.status === 'FAIL') evidence.node.error = `resolved ${evidence.exportedModules.length} of ${nodeChecks.length} Node-compatible exported modules`;
+  } catch (error) {
+    evidence.node.status = 'FAIL';
+    evidence.node.error = `consumer returned invalid evidence JSON: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (evidence.node.status === 'FAIL') {
+    evidence.status = 'FAIL';
+    evidence.error = evidence.node.error ?? 'The external Node consumer failed.';
+    return evidence;
+  }
+
+  if (browserChecks.length) evidence.browser = await runBrowserConsumer(consumerDirectory, browserChecks);
+  else evidence.browser = { status: 'NOT_CHECKED', checkedCount: 0, reason: 'No public UI or CSS exports were present in this consumer fixture.' };
+  evidence.status = evidence.browser.status === 'FAIL' ? 'FAIL' : 'PASS';
+  if (evidence.browser.status === 'FAIL') evidence.error = evidence.browser.error ?? 'The external browser consumer failed.';
+  return evidence;
+}
+
+const uiComponents = new Map([
+  ['@scriptorium-atlas/canvas/ui', 'CanvasEditor'],
+  ['@scriptorium-atlas/atlas/ui', 'AtlasPlugin'],
+  ['@scriptorium-atlas/story-knowledge/ui', 'StoryKnowledge']
+]);
+
+async function reservePort() {
+  const server = createServer();
+  await new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Could not reserve a local browser-consumer port.');
+  await new Promise(resolveClose => server.close(resolveClose));
+  return address.port;
+}
+
+async function waitForHttp(url, server) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (server.child.exitCode !== null) return false;
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(500) });
+      await response.body?.cancel();
+      if (response.ok) return true;
+    } catch { /* wait for Vite preview to bind */ }
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 100));
+  }
+  return false;
+}
+
+async function stopChild(server) {
+  if (server.child.exitCode !== null || server.child.signalCode !== null) return;
+  server.child.kill('SIGTERM');
+  await Promise.race([
+    new Promise(resolveExit => server.child.once('exit', resolveExit)),
+    new Promise(resolveDelay => setTimeout(resolveDelay, 5_000))
+  ]);
+  if (server.child.exitCode === null && server.child.signalCode === null) server.child.kill('SIGKILL');
+}
+
+async function runBrowserConsumer(consumerDirectory, browserChecks) {
+  const evidence = { status: 'NOT_CHECKED', checkedCount: browserChecks.length, importedEntries: browserChecks.map(({ package: name, specifier }) => ({ package: name, specifier })), error: null };
+  const knownUi = browserChecks.filter(module => module.specifier.endsWith('/ui'));
+  const knownCss = browserChecks.filter(module => module.specifier.endsWith('/ui.css') || module.target.endsWith('.css'));
+  const unsupported = knownUi.filter(module => !uiComponents.has(module.specifier));
+  if (unsupported.length) {
+    evidence.status = 'FAIL';
+    evidence.error = `No browser mount is defined for public UI export(s): ${unsupported.map(module => module.specifier).join(', ')}`;
+    return evidence;
+  }
+
+  const uiImports = knownUi.map((module, index) => `import { ${uiComponents.get(module.specifier)} as Ui${index} } from ${JSON.stringify(module.specifier)};`).join('\n');
+  const cssImports = knownCss.map(module => `import ${JSON.stringify(module.specifier)};`).join('\n');
+  const mounts = knownUi.map((module, index) => {
+    if (module.specifier === '@scriptorium-atlas/canvas/ui') {
+      return `React.createElement('section',{id:'canvas-consumer'},React.createElement(Ui${index},{sceneText:'{}',onChange:()=>{}}))`;
+    }
+    const id = module.specifier === '@scriptorium-atlas/atlas/ui' ? 'atlas-consumer' : 'story-consumer';
+    return `React.createElement('section',{id:${JSON.stringify(id)}},React.createElement(Ui${index},{host}))`;
+  }).join(',\n');
+  const source = `import React from 'react';
+import { createRoot } from 'react-dom/client';
+${uiImports}
+${cssImports}
+const workspace={workspaceId:'pack-consumer-workspace',sourceRevision:'${'a'.repeat(64)}',epoch:1};
+const host={snapshot:async()=>({workspace,files:[],nextCursor:null,complete:true}),list:async()=>({workspaceId:workspace.workspaceId,files:[],nextCursor:null,complete:true}),read:async()=>{throw new Error('Unexpected source read in empty consumer fixture.');},prepare:async()=>{throw new Error('Unexpected prepare in read-only consumer fixture.');},beginAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},appendAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},prepareAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},requestSource:async()=>{throw new Error('Unexpected source request in empty consumer fixture.');},describeProviders:async()=>[],acquireProvider:async()=>{throw new Error('Unexpected provider acquisition in empty consumer fixture.');},providerCall:async()=>{throw new Error('Unexpected provider call in empty consumer fixture.');},releaseProvider:async()=>{},subscribeWorkspace:()=>()=>{}};
+createRoot(document.getElementById('root')).render(React.createElement(React.Fragment,null,${mounts}));
+`;
+  await writeFile(join(consumerDirectory, 'index.html'), '<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Atlas packed UI consumer</title></head><body><div id="root"></div><script type="module" src="/browser-consumer.mjs"></script></body></html>\n', 'utf8');
+  await writeFile(join(consumerDirectory, 'browser-consumer.mjs'), source, 'utf8');
+  await writeFile(join(consumerDirectory, 'vite.config.mjs'), `export default { base: './', build: { outDir: 'browser-dist', emptyOutDir: true, manifest: true } };\n`, 'utf8');
+
+  const build = await run('pnpm', ['exec', 'vite', 'build', '--config', 'vite.config.mjs'], consumerDirectory);
+  evidence.buildExitStatus = build.exitStatus;
+  if (build.exitStatus !== 0) {
+    evidence.status = 'FAIL';
+    evidence.error = `external Vite browser build exited ${build.exitStatus}: ${(build.stderr || build.stdout).slice(-2500)}`;
+    return evidence;
+  }
+
+  let manifest;
+  try { manifest = JSON.parse(await readFile(join(consumerDirectory, 'browser-dist', '.vite', 'manifest.json'), 'utf8')); }
+  catch (error) {
+    evidence.status = 'FAIL';
+    evidence.error = `external Vite build omitted a readable manifest: ${error instanceof Error ? error.message : String(error)}`;
+    return evidence;
+  }
+  const lazyUiChunks = Object.values(manifest)
+    .filter(entry => entry.isDynamicEntry && /excalidraw/i.test(entry.file))
+    .map(entry => entry.file);
+  if (!lazyUiChunks.length) {
+    evidence.status = 'FAIL';
+    evidence.error = 'the Canvas UI consumer build did not retain the lazy Excalidraw editor chunk';
+    return evidence;
+  }
+  evidence.lazyUiChunks = lazyUiChunks;
+
+  const port = await reservePort();
+  const preview = { child: spawn('pnpm', ['exec', 'vite', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort', '--config', 'vite.config.mjs'], { cwd: consumerDirectory, stdio: ['ignore', 'pipe', 'pipe'] }) };
+  let previewOutput = '';
+  for (const stream of [preview.child.stdout, preview.child.stderr]) stream.setEncoding('utf8').on('data', chunk => { previewOutput = (previewOutput + chunk).slice(-4000); });
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    if (!await waitForHttp(baseUrl, preview)) throw new Error(`external Vite preview did not become ready: ${previewOutput.slice(-1800)}`);
+    const requireFromRepository = createRequire(join(repoRoot, 'package.json'));
+    const playwrightPackageJson = requireFromRepository.resolve('@playwright/test/package.json');
+    const playwrightManifest = JSON.parse(await readFile(playwrightPackageJson, 'utf8'));
+    const playwrightImport = playwrightManifest.exports?.['.']?.import;
+    assert.equal(typeof playwrightImport, 'string', '@playwright/test must provide its ESM entry for browser verification');
+    const { chromium } = await import(pathToFileURL(join(dirname(playwrightPackageJson), playwrightImport)).href);
+    const executablePath = process.env.ATLAS_E2E_CHROMIUM;
+    const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      const requested = [];
+      const pageErrors = [];
+      page.on('request', request => requested.push(new URL(request.url()).pathname));
+      page.on('pageerror', error => pageErrors.push(error.message));
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      const rendered = [];
+      if (knownUi.some(module => module.specifier === '@scriptorium-atlas/canvas/ui')) {
+        const canvas = page.locator('#canvas-consumer .atlas-canvas-readonly');
+        await canvas.waitFor({ state: 'visible', timeout: 30_000 });
+        const position = await canvas.evaluate(element => getComputedStyle(element).position);
+        assert.equal(position, 'relative', 'packed Canvas CSS must be applied in Chromium');
+        rendered.push({ package: '@scriptorium-atlas/canvas', rendered: 'read-only Canvas', cssPosition: position });
+      }
+      if (knownUi.some(module => module.specifier === '@scriptorium-atlas/atlas/ui')) {
+        const atlas = page.locator('#atlas-consumer .atlas-plugin');
+        await atlas.waitFor({ state: 'visible', timeout: 30_000 });
+        const display = await atlas.evaluate(element => getComputedStyle(element).display);
+        assert.equal(display, 'flex', 'packed Atlas CSS must be applied in Chromium');
+        rendered.push({ package: '@scriptorium-atlas/atlas', rendered: 'Atlas Plugin', cssDisplay: display });
+      }
+      if (knownUi.some(module => module.specifier === '@scriptorium-atlas/story-knowledge/ui')) {
+        const story = page.locator('#story-consumer h1');
+        await story.getByText('Story Knowledge', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+        rendered.push({ package: '@scriptorium-atlas/story-knowledge', rendered: 'Story Knowledge' });
+      }
+      assert.deepEqual(pageErrors, [], `packed browser UI raised page errors: ${pageErrors.join(' | ')}`);
+      const requestedLazyUiChunks = requested.filter(path => lazyUiChunks.some(file => path.endsWith(`/${file}`)));
+      assert.deepEqual(requestedLazyUiChunks, [], 'the invalid read-only scene must keep the lazy Excalidraw editor unloaded');
+      evidence.rendered = rendered;
+      evidence.requestedLazyUiChunks = requestedLazyUiChunks;
+      evidence.browser = { name: 'Chromium', version: browser.version(), executablePath: executablePath ?? 'Playwright bundled Chromium' };
+      evidence.status = 'PASS';
+    } finally {
+      await browser.close();
+    }
   } catch (error) {
     evidence.status = 'FAIL';
-    evidence.error = `consumer returned invalid evidence JSON: ${error instanceof Error ? error.message : String(error)}`;
+    evidence.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  } finally {
+    await stopChild(preview);
   }
   return evidence;
 }
