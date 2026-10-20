@@ -70,7 +70,13 @@ async function stopServer(server) {
 
 async function commitPending(page, atlas) {
   const proposal = page.locator('section[aria-label="変更の承認"] article').last();
-  await proposal.waitFor({ state: 'visible', timeout: 20000 });
+  try {
+    await proposal.waitFor({ state: 'visible', timeout: 20000 });
+  } catch (error) {
+    const hostText = await page.locator('body').innerText();
+    const atlasText = await atlas.locator('body').innerText();
+    throw new Error(`Host did not receive the auto-prepared change. Host status: ${hostText.slice(-1200)}. Atlas status: ${atlasText.slice(-1400)}. ${error instanceof Error ? error.message : String(error)}`);
+  }
   const priorStatuses = await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).allTextContents();
   await proposal.getByRole('button', { name: 'この変更を承認してCommit' }).click();
   await proposal.waitFor({ state: 'detached', timeout: 20000 });
