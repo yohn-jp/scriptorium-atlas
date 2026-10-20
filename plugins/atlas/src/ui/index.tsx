@@ -352,7 +352,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
   useEffect(() => {
     if (!workspace || !graph || graph.snapshot.sourceRevision === workspace.sourceRevision) return;
-    setProviderStatus('ワークスペースのソースリビジョンが変わりました。このProviderスナップショットは古いため、再接続して更新してください。');
+    setProviderStatus('ワークスペースのソースリビジョンが変わりました。接続中Providerを更新してください。');
   }, [workspace?.sourceRevision, graph?.snapshot.sourceRevision]);
 
   useEffect(() => {
