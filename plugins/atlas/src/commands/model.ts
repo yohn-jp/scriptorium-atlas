@@ -625,7 +625,7 @@ export function createEmptyAtlasBoard(name = 'New Atlas board'): BoardDocument {
         kind: 'timeline',
         name: 'Timeline',
         viewport: defaultViewport(),
-        axis: 'generic.time',
+        axis: 'unknown',
         timeline: { range: { start: 0, end: 1 }, entries: [] },
       },
       { id: createAtlasId('view'), kind: 'storyboard', name: 'Storyboard', viewport: defaultViewport(), cardOrder: [] },

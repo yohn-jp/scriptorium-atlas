@@ -4,6 +4,8 @@ import { inspectExcalidrawScene } from '@scriptorium-atlas/canvas/io';
 import { serializeBoard } from '@scriptorium-atlas/persistence/board';
 import { readFileText, readWorkspaceSnapshot, type WorkspaceFile } from './host-utils.js';
 
+const MAX_SCENE_BYTES = 2 * 1024 * 1024;
+
 export type BoardBaseline = {
   board: BoardDocument;
   boardText: string;
@@ -80,9 +82,18 @@ async function loadSession(
   const board = parseBoardDocument(boardText);
   const scenePath = scenePathForBoard(boardPath);
   const sceneFile = files.get(scenePath);
-  const sceneText = sceneFile ? await readFileText(host, sceneFile) : null;
-  if (sceneText !== null && new TextEncoder().encode(sceneText).byteLength > 10 * 1024 * 1024) throw new Error('Excalidraw scene exceeds the 10 MiB file limit.');
+  let sceneText: string | null = null;
+  let sceneLoadError: string | undefined;
+  if (sceneFile) {
+    try { sceneText = await readFileText(host, sceneFile); }
+    catch (error) { sceneLoadError = `The scene could not be read from the Host: ${error instanceof Error ? error.message : String(error)}`; }
+  }
+  const sceneBytes = sceneText === null ? 0 : new TextEncoder().encode(sceneText).byteLength;
+  const sceneSizeError = sceneBytes > MAX_SCENE_BYTES
+    ? `This Excalidraw scene is ${sceneBytes} bytes; Host documents are limited to 2 MiB. Raw scene export is available.`
+    : undefined;
   const sceneInspection = sceneText === null ? null : inspectExcalidrawScene(sceneText);
+  const sceneError = sceneLoadError ?? sceneSizeError ?? (sceneInspection?.status === 'read-only' ? sceneInspection.message : undefined);
   const originalBoard = clone(board);
   return {
     boardText,
@@ -97,7 +108,7 @@ async function loadSession(
       scenePath,
       boardFileRevision: boardFile.revision,
       sceneFileRevision: sceneFile?.revision ?? null,
-      ...(sceneInspection?.status === 'read-only' ? { sceneError: sceneInspection.message } : {}),
+      ...(sceneError ? { sceneError } : {}),
     },
   };
 }

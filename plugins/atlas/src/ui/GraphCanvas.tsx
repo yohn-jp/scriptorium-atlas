@@ -19,7 +19,7 @@ import type { GraphWorkerClient } from '@scriptorium-atlas/graph/worker';
 import type { BoardView } from '@scriptorium-atlas/contracts';
 import { applyAtlasCommand, createAtlasId } from '../commands/model.js';
 
-type FlowNode = Node<{ label: string; kind: string; origin: 'manual' | 'provider'; groupId?: string }>;
+type FlowNode = Node<{ label: string; kind: string; origin: 'manual' | 'provider' | 'preview'; groupId?: string }>;
 type ProviderSnapshot = { snapshot: SnapshotRef; nodes: GraphNode[]; edges: import('@scriptorium-atlas/contracts').GraphEdge[]; providerId: string };
 type SearchResult = Awaited<ReturnType<GraphWorkerClient['search']>>;
 
@@ -41,7 +41,7 @@ export type GraphCanvasProps = {
 };
 
 function GraphCanvasBody(props: GraphCanvasProps) {
-  const { fitView } = useReactFlow<FlowNode, Edge>();
+  const { fitView, getNodes } = useReactFlow<FlowNode, Edge>();
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -56,6 +56,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
 
   const graphNodeByKey = useMemo(() => new Map(props.graph?.nodes.map((node) => [nodeKey(node.ref), node]) ?? []), [props.graph?.nodes]);
   const boardNodes = useMemo(() => props.board.nodes.filter((node) => {
+    if (node.id === props.focusNodeId) return true;
     const query = filterDraft.normalize('NFC').toLocaleLowerCase();
     const filters = props.view.filter;
     if (filters?.kinds?.length && !filters.kinds.includes(node.kind)) return false;
@@ -69,22 +70,46 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       if (!values.some((value) => value!.normalize('NFC').toLocaleLowerCase().includes(query))) return false;
     }
     return true;
-  }), [props.board.nodes, props.view.filter, props.view.visibleNodeIds, focusRefs, filterDraft, graphNodeByKey]);
+  }), [props.board.nodes, props.view.filter, props.view.visibleNodeIds, focusRefs, filterDraft, graphNodeByKey, props.focusNodeId]);
 
-  const nodes = useMemo<FlowNode[]>(() => boardNodes.map((item) => ({
-    id: item.id,
-    position: positions[item.id] ?? item.position,
-    selected: selectedNodeIds.includes(item.id),
-    draggable: true,
-    connectable: true,
-    data: { label: item.label, kind: item.kind, origin: item.origin, ...(item.groupId ? { groupId: item.groupId } : {}) },
-    className: [item.origin === 'provider' ? 'atlas-flow-provider' : 'atlas-flow-manual', item.groupId ? 'atlas-flow-grouped' : ''].filter(Boolean).join(' '),
-    style: { borderColor: selectedNodeIds.includes(item.id) ? 'var(--atlas-accent)' : undefined },
-  })), [boardNodes, positions, selectedNodeIds]);
+  const previewNodes = useMemo(() => {
+    if (!focusRefs || !props.graph) return [];
+    const boardRefs = new Set(props.board.nodes.flatMap((node) => node.ref ? [nodeKey(node.ref)] : []));
+    return props.graph.nodes.filter((node) => focusRefs.has(nodeKey(node.ref)) && !boardRefs.has(nodeKey(node.ref)));
+  }, [focusRefs, props.graph, props.board.nodes]);
+
+  const flowNodes = useMemo<FlowNode[]>(() => {
+    const boardFlowNodes = boardNodes.map((item) => ({
+      id: item.id,
+      position: positions[item.id] ?? item.position,
+      selected: selectedNodeIds.includes(item.id),
+      draggable: true,
+      connectable: true,
+      data: { label: item.label, kind: item.kind, origin: item.origin, ...(item.groupId ? { groupId: item.groupId } : {}) },
+      className: [item.origin === 'provider' ? 'atlas-flow-provider' : 'atlas-flow-manual', item.groupId ? 'atlas-flow-grouped' : ''].filter(Boolean).join(' '),
+      ...(selectedNodeIds.includes(item.id) ? { style: { borderColor: 'var(--atlas-accent)' } } : {}),
+    }));
+    const anchor = props.board.nodes.find((node) => node.ref && focusRefs?.has(nodeKey(node.ref)))?.position ?? { x: 0, y: 0 };
+    const providerFlowNodes = previewNodes.map((item, index) => {
+      const id = previewNodeId(item.ref);
+      return {
+        id,
+        position: positions[id] ?? { x: anchor.x + 250 + (index % 3) * 190, y: anchor.y + Math.floor(index / 3) * 130 },
+        selected: selectedNodeIds.includes(id),
+        draggable: false,
+        connectable: false,
+        data: { label: item.label, kind: item.kind, origin: 'preview' as const },
+        className: 'atlas-flow-preview',
+        ...(selectedNodeIds.includes(id) ? { style: { borderColor: 'var(--atlas-accent)' } } : {}),
+      };
+    });
+    return [...boardFlowNodes, ...providerFlowNodes];
+  }, [boardNodes, previewNodes, props.board.nodes, focusRefs, positions, selectedNodeIds]);
 
   const edges = useMemo<Edge[]>(() => {
     const nodeIdByRef = new Map(props.board.nodes.filter((node) => node.ref).map((node) => [nodeKey(node.ref!), node.id]));
-    const visible = new Set(boardNodes.map((node) => node.id));
+    for (const node of previewNodes) nodeIdByRef.set(nodeKey(node.ref), previewNodeId(node.ref));
+    const visible = new Set(flowNodes.map((node) => node.id));
     const savedEdges = props.board.edges
       .filter((edge) => visible.has(edge.from) && visible.has(edge.to))
       .map((edge) => ({
@@ -105,7 +130,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       if (!from || !to || !visible.has(from) || !visible.has(to) || savedSemanticRefs.has(nodeKey(edge.ref))) return [];
       const label = edge.kind;
       return [{
-        id: `provider:${nodeKey(edge.ref)}`,
+        id: `provider-edge:${nodeKey(edge.ref)}`,
         source: from,
         target: to,
         label,
@@ -117,7 +142,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       } satisfies Edge];
     }) ?? [];
     return [...savedEdges, ...providerEdges];
-  }, [props.board.edges, props.board.nodes, props.graph?.edges, boardNodes]);
+  }, [props.board.edges, props.board.nodes, props.graph?.edges, previewNodes, flowNodes]);
 
   useEffect(() => {
     setPositions({});
@@ -161,9 +186,18 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   }, []);
 
   const onNodeDragStop = useCallback((_event: unknown, node: FlowNode) => {
-    dispatch({ type: 'view.move-node', viewId: props.view.id, nodeId: node.id, position: node.position, pin: true });
-    setPositions((current) => { const next = { ...current }; delete next[node.id]; return next; });
-  }, [dispatch, props.view.id]);
+    const movingIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
+    const livePositions = new Map(getNodes().map((item) => [item.id, item.position]));
+    const positionsToSave = props.board.nodes
+      .filter((item) => movingIds.includes(item.id))
+      .map((item) => ({ nodeId: item.id, position: livePositions.get(item.id) ?? (item.id === node.id ? node.position : positions[item.id] ?? item.position) }));
+    if (positionsToSave.length) dispatch({ type: 'view.move-nodes', viewId: props.view.id, positions: positionsToSave, pin: true });
+    setPositions((current) => {
+      const next = { ...current };
+      for (const id of movingIds) delete next[id];
+      return next;
+    });
+  }, [dispatch, props.view.id, props.board.nodes, selectedNodeIds, getNodes, positions]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -178,8 +212,13 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   }, []);
 
   const selectedNode = props.board.nodes.find((node) => node.id === selectedNodeIds.at(-1));
+  const selectedPreview = previewNodes.find((node) => previewNodeId(node.ref) === selectedNodeIds.at(-1));
   const selectedEdge = props.board.edges.find((edge) => edge.id === selectedEdgeIds.at(-1));
-  const selectedGraphNode = selectedNode?.ref && props.graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(selectedNode.ref));
+  const selectedGraphNode = selectedNode?.ref
+    ? props.graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(selectedNode.ref))
+    : selectedPreview;
+  const selectedRef = selectedNode?.ref ?? selectedPreview?.ref;
+  const selectedNodeIdsInBoard = selectedNodeIds.filter((id) => props.board.nodes.some((node) => node.id === id));
 
   useEffect(() => {
     setLabelDraft(selectedNode?.label ?? '');
@@ -204,13 +243,14 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   };
 
   const groupSelection = () => {
-    if (selectedNodeIds.length < 2) return;
-    dispatch({ type: 'node.group', ids: selectedNodeIds, groupId: createAtlasId('group') });
+    if (selectedNodeIdsInBoard.length < 2) return;
+    dispatch({ type: 'node.group', ids: selectedNodeIdsInBoard, groupId: createAtlasId('group') });
   };
 
   const removeSelection = () => {
+    const nodeIds = selectedNodeIds.filter((id) => props.board.nodes.some((node) => node.id === id));
     const edgeIds = selectedEdgeIds.filter((id) => props.board.edges.find((edge) => edge.id === id)?.meaning === 'visual');
-    if (selectedNodeIds.length || edgeIds.length) dispatch({ type: 'graph.delete-selection', nodeIds: selectedNodeIds, edgeIds });
+    if (nodeIds.length || edgeIds.length) dispatch({ type: 'graph.delete-selection', nodeIds, edgeIds });
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
   };
@@ -232,9 +272,9 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       : event.key === 'ArrowRight' ? { x: 10, y: 0 }
         : event.key === 'ArrowUp' ? { x: 0, y: -10 }
           : event.key === 'ArrowDown' ? { x: 0, y: 10 } : null;
-    if (delta && selectedNodeIds.length) {
+    if (delta && selectedNodeIdsInBoard.length) {
       event.preventDefault();
-      const selected = props.board.nodes.filter((node) => selectedNodeIds.includes(node.id));
+      const selected = props.board.nodes.filter((node) => selectedNodeIdsInBoard.includes(node.id));
       dispatch({
         type: 'view.move-nodes', viewId: props.view.id, pin: true,
         positions: selected.map((node) => ({ nodeId: node.id, position: { x: node.position.x + delta.x, y: node.position.y + delta.y } })),
@@ -243,9 +283,9 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   };
 
   const focusNeighbors = async (direction: 'in' | 'out' | 'both', depth: 1 | 2 | 3) => {
-    if (!selectedNode?.ref || !props.graph) return;
+    if (!selectedRef || !props.graph) return;
     try {
-      const result = await props.graphWorker.neighbors({ from: selectedNode.ref, direction, depth, limit: 5000 });
+      const result = await props.graphWorker.neighbors({ from: selectedRef, direction, depth, limit: 5000 });
       setFocusRefs(new Set([nodeKey(result.from), ...result.nodes.map((entry) => nodeKey(entry.ref))]));
       setAnalysis(`${result.nodes.length} 件の近傍を表示しました${result.unresolved.length ? `。未解決参照 ${result.unresolved.length} 件` : ''}${result.complete ? '' : '（上限により一部）'}`);
     } catch (error) { setAnalysis(errorMessage(error)); }
@@ -303,9 +343,9 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       <section className="atlas-graph-main" aria-label="Graph workspace">
         <div className="atlas-toolbar atlas-graph-toolbar">
           <button type="button" onClick={addManualNode}>＋ Manual node</button>
-          <button type="button" onClick={groupSelection} disabled={selectedNodeIds.length < 2}>Group selection</button>
+          <button type="button" onClick={groupSelection} disabled={selectedNodeIdsInBoard.length < 2}>Group selection</button>
           <button type="button" onClick={duplicateSelectedNode} disabled={selectedNode?.origin !== 'manual'}>Duplicate node</button>
-          <button type="button" onClick={removeSelection} disabled={!selectedNodeIds.length && !selectedEdgeIds.length}>Delete selection</button>
+          <button type="button" onClick={removeSelection} disabled={!selectedNodeIdsInBoard.length && !selectedEdgeIds.some((id) => props.board.edges.some((edge) => edge.id === id && edge.meaning === 'visual'))}>Delete selection</button>
           <span className="atlas-toolbar-separator" />
           <button type="button" onClick={fit}>Fit</button>
           <button type="button" onClick={() => void props.onLayout('force')}>Force</button>
@@ -317,7 +357,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
         </div>
         <div className="atlas-graph-flow">
           <ReactFlow
-            nodes={nodes}
+            nodes={flowNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onNodeDragStop={onNodeDragStop}
@@ -336,10 +376,10 @@ function GraphCanvasBody(props: GraphCanvasProps) {
             proOptions={{ hideAttribution: true }}
           >
             <Background color="#ddd8d0" gap={22} />
-            <MiniMap pannable zoomable nodeColor={(node) => node.data?.origin === 'provider' ? '#83a8a2' : '#d5a65b'} />
+            <MiniMap pannable zoomable nodeColor={(node) => node.data?.origin === 'provider' ? '#83a8a2' : node.data?.origin === 'preview' ? '#b0a5bf' : '#d5a65b'} />
             <Controls showInteractive={false} />
           </ReactFlow>
-          {boardNodes.length === 0 && <div className="atlas-empty-graph">Search a read-only source or add a manual node to start mapping.</div>}
+          {flowNodes.length === 0 && <div className="atlas-empty-graph">Search a read-only source or add a manual node to start mapping.</div>}
         </div>
       </section>
 
@@ -409,14 +449,20 @@ function GraphCanvasBody(props: GraphCanvasProps) {
               <select value={pathTo} onChange={(event) => setPathTo(event.currentTarget.value)}><option value="">Select node</option>{props.board.nodes.filter((node) => node.ref).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
             </label>
             <button type="button" onClick={() => void findPath()} disabled={!props.graph}>Find shortest path</button>
+          </> : selectedPreview ? <>
+            <p className="atlas-muted">Read-only provider neighbor preview</p>
+            <strong>{selectedPreview.label}</strong>
+            <p className="atlas-muted">{selectedPreview.kind} · {selectedPreview.ref.providerId}/{selectedPreview.ref.localId}</p>
+            <button type="button" onClick={() => props.onAddProviderNode(selectedPreview)}>Add reference to Board</button>
+            {selectedPreview.source && <button type="button" onClick={() => props.onSource(selectedPreview.source!)}>Open pinned source</button>}
           </> : <p className="atlas-muted">Select a node to inspect or open its pinned source revision.</p>}
           {selectedEdge && <label className="atlas-field">Visual edge label
             <input value={edgeLabelDraft} disabled={selectedEdge.meaning !== 'visual'} onChange={(event) => setEdgeLabelDraft(event.currentTarget.value)} onBlur={saveEdgeLabel} />
           </label>}
           <div className="atlas-neighbor-actions">
-            <button type="button" onClick={() => void focusNeighbors('in', 1)} disabled={!selectedNode?.ref || !props.graph}>In 1</button>
-            <button type="button" onClick={() => void focusNeighbors('out', 2)} disabled={!selectedNode?.ref || !props.graph}>Out 2</button>
-            <button type="button" onClick={() => void focusNeighbors('both', 3)} disabled={!selectedNode?.ref || !props.graph}>Both 3</button>
+            <button type="button" onClick={() => void focusNeighbors('in', 1)} disabled={!selectedRef || !props.graph}>In 1</button>
+            <button type="button" onClick={() => void focusNeighbors('out', 2)} disabled={!selectedRef || !props.graph}>Out 2</button>
+            <button type="button" onClick={() => void focusNeighbors('both', 3)} disabled={!selectedRef || !props.graph}>Both 3</button>
             <button type="button" onClick={() => void groupComponents()} disabled={!props.graph}>Group components</button>
           </div>
           {selectedGraphNode && <details><summary>Provider metadata</summary><pre>{JSON.stringify({ aliases: selectedGraphNode.aliases ?? [], tags: selectedGraphNode.tags ?? [], source: selectedGraphNode.source ?? null, status: selectedGraphNode.status ?? 'available', meta: selectedGraphNode.meta ?? {} }, null, 2)}</pre></details>}
@@ -434,4 +480,8 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function previewNodeId(ref: GraphNode['ref']): string {
+  return `preview:${nodeKey(ref)}`;
 }

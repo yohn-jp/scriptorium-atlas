@@ -104,6 +104,7 @@ type PendingConflict = { boardId: string; path: string; deleted?: boolean };
 
 const ASSET_CHUNK_BYTES = 768 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_SCENE_BYTES = 2 * 1024 * 1024;
 const MAX_BOARD_BYTES = 2 * 1024 * 1024;
 
 export function AtlasPlugin({ host }: AtlasPluginProps) {
@@ -122,6 +123,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const [fatalError, setFatalError] = useState('');
   const [prepared, setPrepared] = useState<PreparedOperation | null>(null);
   const preparedRef = useRef<PreparedOperation | null>(prepared);
+  const preparingRef = useRef(false);
+  const [autoPrepareRetry, setAutoPrepareRetry] = useState(0);
   const [stagedAsset, setStagedAsset] = useState<StagedAsset | null>(null);
   const stagedAssetRef = useRef<StagedAsset | null>(stagedAsset);
   const [sourcePanel, setSourcePanel] = useState<SourcePanel | null>(null);
@@ -397,7 +400,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     const session = sessionsRef.current.get(boardId);
     const view = session?.board.views.find((candidate) => candidate.id === viewId);
     if (!session || !view) return;
-    if (view.kind === 'freeform' && session.sceneText === null) {
+    if (view.kind === 'freeform' && session.sceneText === null && !session.sceneError) {
       setNotice('Loading Canvas tools…');
       try {
         const sceneText = await createEmptyExcalidrawScene();
@@ -415,10 +418,10 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   }, [replaceSession]);
 
   useEffect(() => {
-    if (activeSession && activeView?.kind === 'freeform' && activeSession.sceneText === null) {
+    if (activeSession && activeView?.kind === 'freeform' && activeSession.sceneText === null && !activeSession.sceneError) {
       void activateView(activeSession.board.boardId, activeView.id);
     }
-  }, [activeSession?.board.boardId, activeSession?.sceneText, activeView?.id, activeView?.kind, activateView]);
+  }, [activeSession?.board.boardId, activeSession?.sceneText, activeSession?.sceneError, activeView?.id, activeView?.kind, activateView]);
 
   const createBoard = useCallback(async () => {
     try {
@@ -510,6 +513,10 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     setSourcePanel({ source, state: 'loading' });
     try {
       const file = await host.requestSource(source);
+      if (file.workspaceId !== source.workspaceId || file.path !== source.path) {
+        setSourcePanel({ source, state: 'error', message: 'The Host returned a source from a different workspace or path.' });
+        return;
+      }
       if (file.revision !== source.revision) {
         setSourcePanel({ source, state: 'stale', message: `The Host returned revision ${file.revision}; the pinned revision is ${source.revision}.` });
         return;
@@ -680,10 +687,13 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   };
 
   const prepareChanges = async () => {
-      if (!activeSession || activeSession.conflict) return;
+    if (!activeSession || activeSession.conflict) return;
+    if (preparingRef.current) return;
     if (preparedRef.current) { setNotice('A Host review operation is already pending. Wait for its commit or resolution before preparing another.'); return; }
     const staged = stagedAssetRef.current;
     if (staged && staged.boardId !== activeSession.board.boardId) { setNotice('Finish the staged image upload for its Board before preparing another Board.'); return; }
+    preparingRef.current = true;
+    let retryAfterConcurrentEdit = false;
     setNotice('Checking current Host revisions…');
     try {
       const latest = await loadAtlasInventory(host);
@@ -711,6 +721,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       }
       const currentSession = sessionsRef.current.get(activeSession.board.boardId) ?? activeSession;
       if (currentSession.board.revision !== activeSession.board.revision || currentSession.sceneText !== activeSession.sceneText) {
+        retryAfterConcurrentEdit = true;
         setNotice('The local draft changed while the Host inventory was loading. Press Prepare again.');
         return;
       }
@@ -725,7 +736,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       let sceneText: string | undefined;
       if (activeSession.sceneText !== null && (activeSession.baseSceneText === null || activeSession.sceneText !== activeSession.baseSceneText)) {
         if (activeSession.sceneError) throw new Error(`The Excalidraw scene is read-only: ${activeSession.sceneError}`);
-        if (new TextEncoder().encode(activeSession.sceneText).byteLength > MAX_IMAGE_BYTES) throw new Error('Excalidraw scene exceeds the 10 MiB file limit.');
+        if (new TextEncoder().encode(activeSession.sceneText).byteLength > MAX_SCENE_BYTES) throw new Error('Excalidraw scene exceeds the Host 2 MiB document limit. Export the raw scene, reduce embedded image data, or import a smaller scene.');
         sceneText = activeSession.sceneText;
         writes.push({ path: activeSession.scenePath, content: sceneText, encoding: 'utf8' });
         reads.push({ path: activeSession.scenePath, revision: currentSceneFile?.revision ?? null });
@@ -778,6 +789,12 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         }
         preparedChange = await host.prepareAsset(start.uploadId, change);
       } else preparedChange = await host.prepare(change);
+      if (preparedChange.durableAck.operationId !== operationId
+        || preparedChange.durableAck.workspaceId !== latest.workspace.workspaceId
+        || !Number.isSafeInteger(preparedChange.durableAck.journalSequence)
+        || preparedChange.durableAck.journalSequence < 1) {
+        throw new Error('Host returned a durable journal acknowledgement for a different operation or workspace.');
+      }
       const pending: PreparedOperation = {
         boardId: activeSession.board.boardId,
         operationId,
@@ -794,8 +811,26 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     } catch (error) {
       const code = hostErrorCode(error);
       setNotice(`${code === 'REVISION_CONFLICT' ? 'Revision conflict' : code === 'QUOTA_EXCEEDED' ? 'Storage quota exceeded' : 'Prepare failed'}: ${errorMessage(error)}`);
+    } finally {
+      preparingRef.current = false;
+      if (retryAfterConcurrentEdit) setAutoPrepareRetry((value) => value + 1);
     }
   };
+
+  const prepareChangesRef = useRef(prepareChanges);
+  prepareChangesRef.current = prepareChanges;
+  useEffect(() => {
+    if (!activeSession || !dirty || activeSession.conflict || prepared || (stagedAsset && stagedAsset.boardId !== activeSession.board.boardId)) return;
+    const boardId = activeSession.board.boardId;
+    const boardRevision = activeSession.board.revision;
+    const sceneText = activeSession.sceneText;
+    const timer = window.setTimeout(() => {
+      const current = sessionsRef.current.get(boardId);
+      if (activeBoardIdRef.current !== boardId || !current || current.board.revision !== boardRevision || current.sceneText !== sceneText) return;
+      void prepareChangesRef.current();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [activeSession?.board.boardId, activeSession?.board.revision, activeSession?.sceneText, activeSession?.conflict, dirty, prepared?.operationId, stagedAsset?.boardId, autoPrepareRetry]);
 
   const acceptConflict = (keepDraft: boolean) => {
     if (!activeSession?.conflict) return;
@@ -855,7 +890,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     event.currentTarget.value = '';
     if (!file || !activeSession) return;
     try {
-      if (file.size > MAX_IMAGE_BYTES) throw new Error('Excalidraw import exceeds the 10 MiB file limit.');
+      if (file.size > MAX_SCENE_BYTES) throw new Error('Excalidraw scene exceeds the Host 2 MiB document limit. Reduce embedded image data before importing.');
       const sceneText = await file.text();
       const inspection = inspectExcalidrawScene(sceneText);
       if (inspection.status === 'read-only') throw new Error(inspection.message);
@@ -906,6 +941,10 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const exportScene = async () => {
     if (!activeSession) return;
     try {
+      if (activeSession.sceneText === null && activeSession.sceneError) {
+        setNotice('The Host scene could not be read, so there is no raw scene available to export. Import a supported scene to replace it.');
+        return;
+      }
       const sceneText = activeSession.sceneText ?? await createEmptyExcalidrawScene();
       downloadText(`${activeSession.board.boardId}.excalidraw`, sceneText, 'application/json;charset=utf-8');
     } catch (error) { setNotice(`Excalidraw export failed: ${errorMessage(error)}`); }
@@ -915,6 +954,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     if (!activeSession) return;
     if (activeSession.sceneError) { setNotice(`Canvas export is unavailable: ${activeSession.sceneError}`); return; }
     try {
+      if (activeSession.sceneText === null && activeSession.sceneError) throw new Error('The Host scene could not be read. Import a supported scene before exporting PNG or SVG.');
       const sceneText = activeSession.sceneText ?? await createEmptyExcalidrawScene();
       const blob = await exportExcalidrawScene(sceneText, format);
       downloadBlob(`${activeSession.board.boardId}.${format}`, blob);
@@ -1006,7 +1046,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
               {activeSession.board.views.map((view) => <button type="button" key={view.id} role="tab" aria-selected={view.id === activeView?.id} className={view.id === activeView?.id ? 'is-active' : ''} onClick={() => setView(view.id)}>{view.name}<small>{view.kind}</small></button>)}
             </div>
             <div className="atlas-view-actions">
-              {activeView && <label>View name<input key={`${activeView.id}:${activeView.name}`} defaultValue={activeView.name} aria-label="View name" onBlur={(event) => renameView(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} />}</label>}
+              {activeView && <label>View name<input key={`${activeView.id}:${activeView.name}`} defaultValue={activeView.name} aria-label="View name" onBlur={(event) => renameView(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></label>}
               <label>Add view<select value="" onChange={(event) => { if (event.currentTarget.value) createView(event.currentTarget.value as View['kind']); event.currentTarget.value = ''; }}>
                 <option value="">Choose…</option><option value="graph">Graph</option><option value="freeform">Canvas</option><option value="board">Kanban</option><option value="timeline">Timeline</option><option value="storyboard">Storyboard</option>
               </select></label>
@@ -1020,7 +1060,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
             <button type="button" onClick={() => acceptConflict(true)}>Keep my draft on latest revision</button>
           </section>}
           {activeSession.externalDeleted && <section className="atlas-conflict" role="alert"><strong>This Board was removed from the Host Workspace; its local draft remains in memory.</strong><button type="button" onClick={() => void prepareChanges()}>Create it again through Host review</button></section>}
-          {activeSession.sceneError && <div className="atlas-alert atlas-alert-warning" role="status">Canvas is read-only: {activeSession.sceneError} Raw scene export remains available.</div>}
+          {activeSession.sceneError && <div className="atlas-alert atlas-alert-warning" role="status">Canvas is read-only: {activeSession.sceneError}{activeSession.sceneText !== null ? ' Raw scene export remains available.' : ''}</div>}
 
           <section className="atlas-command-toolbar" aria-label="Atlas commands">
             {activeView?.kind === 'freeform' && <>
@@ -1065,7 +1105,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
               onFocusDone={() => setFocusNodeId(null)}
             />}
             {activeView?.kind === 'freeform' && <div className="atlas-canvas-shell">
-              {activeSession.sceneText === null ? <div className="atlas-loading" role="status">Loading Canvas tools…</div> : activeSession.sceneError ? <div className="atlas-scene-readonly"><p>{activeSession.sceneError}</p><pre>{activeSession.sceneText.slice(0, 6000)}</pre></div> : <FreeformView
+              {activeSession.sceneError ? <div className="atlas-scene-readonly"><p>{activeSession.sceneError}</p>{activeSession.sceneText === null ? <p>Raw scene content is unavailable. Import a supported scene to replace it.</p> : <pre>{activeSession.sceneText.slice(0, 6000)}</pre>}</div> : activeSession.sceneText === null ? <div className="atlas-loading" role="status">Loading Canvas tools…</div> : <FreeformView
                 board={activeSession.board}
                 view={activeView}
                 sceneText={activeSession.sceneText}

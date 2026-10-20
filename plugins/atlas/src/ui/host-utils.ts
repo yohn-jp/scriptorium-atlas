@@ -12,11 +12,16 @@ export async function readWorkspaceSnapshot(host: PluginHostClient): Promise<{
   let workspace: WorkspaceSnapshotPage['workspace'] | undefined;
   for (let pageNumber = 0; pageNumber < 100_000; pageNumber += 1) {
     const page = await host.snapshot({ ...(cursor ? { cursor } : {}), limit: 500 });
-    if (workspace && (page.workspace.workspaceId !== workspace.workspaceId || page.workspace.epoch !== workspace.epoch)) {
-      throw new Error('Workspace changed while the Atlas inventory was loading. Refresh and try again.');
+    if (workspace && (page.workspace.workspaceId !== workspace.workspaceId
+      || page.workspace.epoch !== workspace.epoch
+      || page.workspace.sourceRevision !== workspace.sourceRevision)) {
+      throw new Error('Workspace identity, epoch, or source revision changed while the Atlas inventory was loading. Refresh and try again.');
     }
     workspace = page.workspace;
-    for (const file of page.files) files.set(file.path, file);
+    for (const file of page.files) {
+      if (files.has(file.path)) throw new Error(`Host repeated ${file.path} across workspace pages.`);
+      files.set(file.path, file);
+    }
     if (page.complete && page.nextCursor === null) return { workspace, files };
     if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error('Host returned an incomplete or repeated workspace cursor.');
     cursors.add(page.nextCursor);
@@ -49,12 +54,21 @@ export async function readFileBytes(host: PluginHostClient, file: WorkspaceFile)
   let offset = 0;
   while (offset < file.byteLength || (file.byteLength === 0 && offset === 0)) {
     const response = await host.read({ path: file.path, expectedRevision: file.revision, offset, limit: Math.min(4 * 1024 * 1024, file.byteLength - offset || 1) });
-    if (!('complete' in response)) return fileBytes(response);
+    if (response.workspaceId !== file.workspaceId || response.path !== file.path || response.revision !== file.revision) {
+      throw new Error(`Host returned a different workspace file or revision for ${file.path}.`);
+    }
+    if (!('complete' in response)) {
+      const result = fileBytes(response);
+      if (result.length !== file.byteLength) throw new Error(`Host returned ${result.length} bytes for ${file.path}; expected ${file.byteLength}.`);
+      return result;
+    }
     if (response.offset !== offset || response.nextOffset < offset || response.nextOffset > file.byteLength || (response.nextOffset === offset && !response.complete)) {
       throw new Error(`Host returned a discontinuous read chunk for ${file.path}.`);
     }
     const binary = atob(response.content);
-    chunks.push(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+    const chunk = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    if (chunk.length !== response.nextOffset - response.offset) throw new Error(`Host returned a malformed chunk length for ${file.path}.`);
+    chunks.push(chunk);
     offset = response.nextOffset;
     if (response.complete) {
       const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));

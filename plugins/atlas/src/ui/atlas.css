@@ -117,6 +117,7 @@
 .atlas-graph-flow .react-flow { background-color: var(--atlas-canvas); }
 .atlas-graph-flow .react-flow__node { min-width: 100px; max-width: 260px; padding: 10px 13px; border: 1px solid #a8a3ab; border-radius: 9px; color: var(--atlas-ink); background: var(--atlas-panel); box-shadow: 0 3px 10px #00000010; font-size: 13px; }
 .atlas-graph-flow .atlas-flow-provider { background: #e7f2ee; border-color: #87a99c; }
+.atlas-graph-flow .atlas-flow-preview { background: #f0ecf5; border: 1px dashed #9687a6; color: #494052; }
 .atlas-graph-flow .atlas-flow-grouped { box-shadow: 0 0 0 3px #d9c79a, 0 3px 10px #00000010; }
 .atlas-graph-flow .react-flow__edge-text { fill: var(--atlas-ink); }
 .atlas-graph-flow .react-flow__controls, .atlas-graph-flow .react-flow__minimap { border: 1px solid var(--atlas-line); border-radius: 8px; box-shadow: 0 3px 12px #00000012; }

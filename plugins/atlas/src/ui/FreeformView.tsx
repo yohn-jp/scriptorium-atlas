@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { PointerEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CanvasEditor } from '@scriptorium-atlas/canvas/ui';
 import type { CanvasViewport } from '@scriptorium-atlas/canvas/ui';
 import type { BoardDocument, BoardView, SourceRef } from '@scriptorium-atlas/contracts';
@@ -92,12 +92,12 @@ function CardOverlay({
   });
 
   useEffect(() => {
-    const onMove = (event: PointerEvent) => {
+    const onMove = (event: globalThis.PointerEvent) => {
       setGesture((current) => current && current.pointerId === event.pointerId
         ? { ...current, dx: event.clientX - current.startX, dy: event.clientY - current.startY }
         : current);
     };
-    const onUp = (event: PointerEvent) => {
+    const onUp = (event: globalThis.PointerEvent) => {
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       const current = gesture;
       setGesture(null);
@@ -125,7 +125,7 @@ function CardOverlay({
 
   const cards = board.cards;
 
-  const startGesture = (event: PointerEvent<HTMLButtonElement>, card: BoardDocument['cards'][number], kind: Gesture['kind']) => {
+  const startGesture = (event: ReactPointerEvent<HTMLButtonElement>, card: BoardDocument['cards'][number], kind: Gesture['kind']) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
