@@ -2,7 +2,7 @@
   "schemaVersion": "atlas.standalone-v1-verification-summary/v1",
   "implementationHead": "ad2abd3c6002bae7e3178262039f76c8f9f70477",
   "verificationHead": "1e005e307d5856904dc2b81ad6f07bdfc5528b14",
-  "headRelationship": "Only test readiness/diagnostics and progress documentation changed between these heads; production source and all three built artifacts are unchanged. Final delivery HEAD and its recheck are published in PR #1.",
+  "headRelationship": "Only test readiness/diagnostics and progress documentation changed between these heads; production source and all three built artifacts are unchanged. Final delivery confirmation is pending because the c6391e1 exact-HEAD Q12 rerun failed.",
   "environment": {
     "node": "v24.21.0",
     "platform": "linux",
@@ -1856,5 +1856,12 @@
     "Official font lists include CDN fallbacks; product CSP blocks them, local bundled fonts render and export successfully.",
     "ZIP64 Python oracle evidence is carried forward from e4dba2a with relevant source byte equality, while current ordinary unit tests recheck maximum-count roundtrip.",
     "Unacknowledged transient edits remain subject to browser failure; only durable Host journal/commit receipts establish recovery guarantees."
-  ]
+  ],
+  "latestDelivery": {
+    "head": "c6391e1bf948846b99dbc72542dbc8ac86c4b766",
+    "q12": "FAIL",
+    "q15": "NOT_CHECKED",
+    "reason": "Atlas fatal screen from ResizeObserver loop completed with undelivered notifications during 10k traversal; other four Q12 cases passed.",
+    "reportSha256": "670eaf8ca692f4626026e6ac9635ccfc75a4aabd607b59136f2ecfc2f787b92c"
+  }
 }

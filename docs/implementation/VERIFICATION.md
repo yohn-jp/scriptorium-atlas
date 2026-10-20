@@ -1,6 +1,8 @@
 # Standalone V1 verification ledger
 
-F01–F31 remain implemented and required; Q01–Q15 retain their original contracts and budgets. The implementation snapshot is `ad2abd3c6002bae7e3178262039f76c8f9f70477`; the final test-readiness snapshot is `1e005e307d5856904dc2b81ad6f07bdfc5528b14`. Only test diagnostics/readiness and progress documentation differ between them. Production source and all three artifacts are byte-identical. The delivery HEAD, final confirmation commands/results and report hashes are published in [implementation PR #1](https://github.com/yohn-jp/scriptorium-atlas/pull/1); this avoids embedding a commit's own SHA inside that commit.
+The final-delivery rerun on `c6391e1bf948846b99dbc72542dbc8ac86c4b766` failed Q12: during 10k traversal the Atlas frame entered its fatal screen with `ResizeObserver loop completed with undelivered notifications`. Q12 is FAIL and Q15 is NOT_CHECKED until this defect is fixed and affected final-HEAD verification passes. The earlier `1e005e3` five-case PASS below remains historical evidence, not the delivery verdict. The final confirmation has not been published as a pass.
+
+F01–F31 remain required; Q01–Q15 retain their original contracts and budgets. The implementation snapshot is `ad2abd3c6002bae7e3178262039f76c8f9f70477`; the final test-readiness snapshot is `1e005e307d5856904dc2b81ad6f07bdfc5528b14`. Only test diagnostics/readiness and progress documentation differ between them. Production source and all three artifacts are byte-identical. The delivery HEAD, final confirmation commands/results and report hashes will be published in [implementation PR #1](https://github.com/yohn-jp/scriptorium-atlas/pull/1); this avoids embedding a commit's own SHA inside that commit.
 
 The compact [evidence manifest](evidence/standalone-v1.json) records environment, artifact hashes, sample counts, metrics, report hashes and retained failures. Raw logs and generated datasets remain outside Git. Results below are observed results, not target values. No production Scriptorium SDK or Git integration is claimed.
 
@@ -31,10 +33,10 @@ Hash method: `scripts/verification/artifact-evidence.mjs` hashes sorted POSIX-re
 | Q09 | PASS | Native Canvas operations and keyboard suites; Cards/export 11/11 and keyboard 3/3; shape/freehand/text/image/arrow/group, PNG/SVG/Board/scene/Bundle roundtrips and unknown preservation |
 | Q10 | PASS | Malformed/duplicate/dangling/cross-scope/grant refusal with healthy data retained; 14 real-browser SVG CSP inputs and ZIP validation |
 | Q11 | PASS | Seven malformed/stale/exception/rejection frame faults; timeout/hang/cancel-ignore/Worker crash and independent recovery; Host draft remains usable |
-| Q12 | PASS | All five canonical serialized scenarios PASS, process exit 0; original counts/budgets; detailed measurements below |
+| Q12 | FAIL | Delivery c6391e1: 10k Atlas frame failed with a ResizeObserver delivery-loop ErrorEvent; the other four cases passed. Earlier five-case PASS is historical only. |
 | Q13 | PASS | Host IME/mobile/theme cases plus Atlas/Card/Canvas keyboard tests, focus movement, native history and saved view state; 390px and desktop |
 | Q14 | PASS | Three closure/lazy/legal audits; 8 isolated pnpm archives, 25 public Node exports, 4 browser entries and a real editable Canvas/export consumer; Worker release verified |
-| Q15 | PASS | F01–F31 mapping below, fixed lock/versions, reproducible production profiles, retained failure/limit reports, public PR; delivery HEAD reconfirmation recorded in PR |
+| Q15 | NOT_CHECKED | Delivery Q12 failed. Final affected-HEAD confirmation and updated PR verdict remain required. |
 
 Frozen install, strict typecheck and unit suite passed: 156 tests, zero failures, one explicit optional ZIP-file generation skip. The ordinary maximum-count Export/Import test runs in this suite. The separately executed Python 3.13.15 oracle passed on the unchanged ZIP implementation: 100,000 total entries, 99,999 manifest payloads, all payload hashes/workspace revision/CRCs, nonempty tail. Archive size 14,682,752 bytes; SHA-256 `b6f577a073a19b215bc4769828eec3b9d6665863894d9941ae82b4073dc0226b`. Its source equality/carry-forward is explicit in the storage summary.
 
@@ -110,7 +112,7 @@ Official font sources list CDN fallbacks; CSP blocks those attempts. Bundled sam
 
 ## F01–F31 evidence map
 
-Every feature remains required and maps to the passing gates above.
+Every feature remains required and maps to the gates above. Q12/Q15 remain incomplete.
 
 | Feature | Verified evidence surface | Required gates |
 | --- | --- | --- |
