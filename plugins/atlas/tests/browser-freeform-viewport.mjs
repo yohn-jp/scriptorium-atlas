@@ -148,6 +148,21 @@ async function renameActiveView(atlas, name) {
   await atlas.getByRole('tab', { name: new RegExp(name, 'u') }).waitFor({ state: 'visible' });
 }
 
+async function createFreeformView(atlas, name) {
+  const previousCount = await atlas.getByRole('tab').count();
+  await atlas.getByLabel('ビューを追加').selectOption('freeform');
+  const tab = atlas.getByRole('tab').nth(previousCount);
+  await tab.waitFor({ state: 'visible' });
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline && await tab.getAttribute('aria-selected') !== 'true') {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  assert.equal(await tab.getAttribute('aria-selected'), 'true', 'The newly created freeform view should become active before renaming.');
+  assert.equal(await tab.locator('small').textContent(), 'キャンバス', 'The selected view should be a freeform Canvas view.');
+  await atlas.locator('.atlas-freeform-view').waitFor({ state: 'visible' });
+  await renameActiveView(atlas, name);
+}
+
 async function renameActiveBoard(atlas, name) {
   const input = atlas.getByLabel('ボード名');
   await input.fill(name);
@@ -286,8 +301,7 @@ async function run() {
     await renameActiveBoard(atlas, 'Viewport Board B');
     await commitAtlasUntilClean(page, atlas);
     await atlas.getByRole('button', { name: /Viewport Board A/u }).click();
-    await atlas.getByLabel('ビューを追加').selectOption('freeform');
-    await renameActiveView(atlas, 'Viewport B');
+    await createFreeformView(atlas, 'Viewport B');
     const freeformTabs = atlas.getByRole('tab', { name: /キャンバス/u });
     await freeformTabs.first().click();
     await renameActiveView(atlas, 'Viewport A');
