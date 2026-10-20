@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { currentHead, hashTree } from './artifact-evidence.mjs';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const repoRoot = resolve(process.env.ATLAS_PERF_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
 const report = {
   schemaVersion: 'atlas.performance-e2e-evidence/v1',
   purpose: 'Real Chromium performance subset for deterministic Graph and Canvas datasets; this is not a full Q12 or Q01-Q15 verdict.',
@@ -118,7 +119,12 @@ try {
   const [oneK, tenK, canvas100, canvas500] = generated;
   const datasets = { oneK: oneK.summary, tenK: tenK.summary, canvas100: canvas100.summary, canvas500: canvas500.summary };
 
-  const { chromium } = await import('@playwright/test');
+  const requireFromRepository = createRequire(resolve(repoRoot, 'package.json'));
+  const playwrightPackageJson = requireFromRepository.resolve('@playwright/test/package.json');
+  const playwrightManifest = JSON.parse(await readFile(playwrightPackageJson, 'utf8'));
+  const playwrightImport = playwrightManifest.exports?.['.']?.import;
+  if (typeof playwrightImport !== 'string') throw new Error('@playwright/test does not provide its ESM entry for performance browser verification.');
+  const { chromium } = await import(pathToFileURL(resolve(dirname(playwrightPackageJson), playwrightImport)).href);
   const chromiumPath = process.env.ATLAS_E2E_CHROMIUM;
   browser = await chromium.launch({ headless: true, ...(chromiumPath ? { executablePath: chromiumPath } : {}) });
   report.environment.browser = { name: 'Chromium', version: browser.version(), executablePath: chromiumPath ?? 'Playwright bundled Chromium' };
