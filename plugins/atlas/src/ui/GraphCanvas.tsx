@@ -62,6 +62,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   const [addingManualNode, setAddingManualNode] = useState(false);
   const [manualNodeLabelDraft, setManualNodeLabelDraft] = useState('');
   const handledDragPositions = useRef(new Map<string, string>());
+  const pendingRevealFitRef = useRef<{ nodeIds: string[] } | null>(null);
 
   const graphNodeByKey = useMemo(() => new Map(props.graph?.nodes.map((node) => [nodeKey(node.ref), node]) ?? []), [props.graph?.nodes]);
   const boardNodes = useMemo(() => props.board.nodes.filter((node) => {
@@ -167,9 +168,52 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     return [...savedEdges, ...providerEdges];
   }, [props.board.edges, props.board.nodes, props.graph?.edges, previewNodes, flowNodes, selectedEdgeIds]);
 
+  const focusReferencesAndReveal = useCallback((refs: readonly GraphNode['ref'][]) => {
+    const refKeys = new Set(refs.map(nodeKey));
+    const boardRefKeys = new Set(props.board.nodes.flatMap((node) => node.ref ? [nodeKey(node.ref)] : []));
+    const boardNodeIds = props.board.nodes
+      .filter((node) => node.ref && refKeys.has(nodeKey(node.ref)))
+      .map((node) => node.id);
+    const previewNodeIds = (props.graph?.nodes ?? [])
+      .filter((node) => refKeys.has(nodeKey(node.ref)) && !boardRefKeys.has(nodeKey(node.ref)))
+      .map((node) => previewNodeId(node.ref));
+    pendingRevealFitRef.current = { nodeIds: [...boardNodeIds, ...previewNodeIds] };
+    setFocusRefs(refKeys);
+  }, [props.board.nodes, props.graph?.nodes]);
+
+  useEffect(() => {
+    const request = pendingRevealFitRef.current;
+    if (!request) return;
+    const renderedIds = new Set(flowNodes.map((node) => node.id));
+    const targetIds = request.nodeIds.filter((id) => renderedIds.has(id));
+    if (!targetIds.length) {
+      pendingRevealFitRef.current = null;
+      return;
+    }
+
+    let frame = 0;
+    let attempts = 0;
+    const fitAfterNodeStoreUpdate = () => {
+      frame = window.requestAnimationFrame(() => {
+        if (pendingRevealFitRef.current !== request) return;
+        const availableIds = new Set(getNodes().map((node) => node.id));
+        if (targetIds.every((id) => availableIds.has(id))) {
+          pendingRevealFitRef.current = null;
+          void fitView({ nodes: targetIds.map((id) => ({ id })), padding: 0.35, duration: 0 });
+          return;
+        }
+        if (attempts++ < 4) fitAfterNodeStoreUpdate();
+        else if (pendingRevealFitRef.current === request) pendingRevealFitRef.current = null;
+      });
+    };
+    fitAfterNodeStoreUpdate();
+    return () => window.cancelAnimationFrame(frame);
+  }, [fitView, flowNodes, getNodes]);
+
   useEffect(() => {
     setPositions({});
     setFocusRefs(null);
+    pendingRevealFitRef.current = null;
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
   }, [props.board.boardId, props.view.id]);
@@ -327,7 +371,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     if (!selectedRef || !props.graph) return;
     try {
       const result = await props.graphWorker.neighbors({ from: selectedRef, direction, depth, limit: 5000 });
-      setFocusRefs(new Set([nodeKey(result.from), ...result.nodes.map((entry) => nodeKey(entry.ref))]));
+      focusReferencesAndReveal([result.from, ...result.nodes.map((entry) => entry.ref)]);
       setAnalysis(`${result.nodes.length} 件の近傍を表示しました${result.unresolved.length ? `。未解決参照 ${result.unresolved.length} 件` : ''}${result.complete ? '' : '（上限により一部）'}`);
     } catch (error) { setAnalysis(`近傍の解析に失敗しました: ${errorMessage(error)}`); }
   };
@@ -340,7 +384,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       const result = await props.graphWorker.shortestPath({ from, to, maxHops: 64, maxVisited: 10_000 });
       if (result.status === 'found') {
         const labels = result.nodes.map((node, index) => node?.label ?? result.refs[index]!.localId);
-        setFocusRefs(new Set(result.refs.map(nodeKey)));
+        focusReferencesAndReveal(result.refs);
         setAnalysis(`最短経路 ${result.hops}ホップ: ${labels.join(' → ')}`);
       } else setAnalysis(result.status === 'bounded' ? '探索上限に達しました。範囲を絞って再試行してください。' : 'このProviderスナップショットに経路はありません。');
     } catch (error) { setAnalysis(`経路の検索に失敗しました: ${errorMessage(error)}`); }
@@ -410,7 +454,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
           <button type="button" onClick={() => void props.onLayout('timeline')}>タイムライン配置</button>
           <button type="button" onClick={() => void props.onLayout('manual')}>手動配置</button>
           <button type="button" onClick={props.onCancelLayout}>レイアウトを中止</button>
-          <button type="button" onClick={() => setFocusRefs(null)} disabled={!focusRefs}>注目範囲を解除</button>
+          <button type="button" onClick={() => { pendingRevealFitRef.current = null; setFocusRefs(null); }} disabled={!focusRefs}>注目範囲を解除</button>
         </div>
         <div className="atlas-graph-flow">
           <ReactFlow
