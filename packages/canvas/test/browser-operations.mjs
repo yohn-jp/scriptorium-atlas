@@ -223,14 +223,8 @@ try {
     viewport: { width: 1600, height: 1200 },
   });
 
-  const fontRequests = [];
   const fontResponses = [];
   const fontFailures = [];
-  context.on("request", (request) => {
-    if (/\.(?:woff2?|ttf|otf)(?:$|[?#])/iu.test(request.url())) {
-      fontRequests.push({ url: request.url(), resourceType: request.resourceType() });
-    }
-  });
   context.on("response", (response) => {
     if (/\.(?:woff2?|ttf|otf)(?:$|[?#])/iu.test(response.url())) {
       fontResponses.push({ url: response.url(), status: response.status() });
@@ -241,11 +235,29 @@ try {
       fontFailures.push({ url: request.url(), error: request.failure()?.errorText ?? "unknown" });
     }
   });
+  await context.addInitScript(() => {
+    globalThis.__atlasFontFaceInputs = [];
+    const NativeFontFace = globalThis.FontFace;
+    globalThis.FontFace = new Proxy(NativeFontFace, {
+      construct(target, args, newTarget) {
+        if (/Cascadia|ComicShanns|Excalifont|Xiaolai/iu.test(String(args[0]))) {
+          globalThis.__atlasFontFaceInputs.push({ family: String(args[0]), source: String(args[1]) });
+        }
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+  });
 
   const page = await context.newPage();
   page.setDefaultTimeout(20_000);
   const pageErrors = [];
+  const fontConsoleErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("Failed to fetch font family") && fontConsoleErrors.length < 3) {
+      fontConsoleErrors.push(message.text().slice(0, 4_000));
+    }
+  });
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.getByLabel("Workspace名").fill(`Canvas browser ${crypto.randomUUID()}`);
   await page.getByRole("button", { name: "空のWorkspaceを作成" }).click();
@@ -417,17 +429,27 @@ try {
       return { family: font.family, status: font.status, error: String(error) };
     }
   });
+  const fontFaceInputs = await reloadedFrame.evaluate(() => globalThis.__atlasFontFaceInputs?.slice(0, 10));
+  const fontFaceSourceExample = fontFaceInputs?.find(({ family }) => family === "Cascadia");
   assert.equal(fontProbe.status, "loaded", `The official Canvas font face must load: ${JSON.stringify(fontProbe)}.`);
+  assert.ok(fontFaceSourceExample?.source.includes(`${new URL(await reloadedFrame.evaluate(() => location.href)).origin}/fonts/Cascadia/CascadiaCode-Regular.woff2`),
+    "Excalidraw's Cascadia FontFace must list the same-origin bundled font first.");
+  assert.ok(fontFaceSourceExample.source.includes("https://esm.sh/@excalidraw/excalidraw@0.18.1/dist/prod/fonts/Cascadia/CascadiaCode-Regular.woff2"),
+    "Excalidraw 0.18.1's hardcoded esm.sh fallback must remain blocked by CSP.");
   const atlasOrigin = new URL(await reloadedFrame.evaluate(() => location.href)).origin;
   const localFont = fontResponses.find((response) => response.url === `${atlasOrigin}/fonts/Cascadia/CascadiaCode-Regular.woff2`);
   assert.equal(localFont?.status, 200, "The bundled Excalidraw font must be fetched from same-origin /fonts/ with HTTP 200.");
   const remoteFontResponses = fontResponses.filter((response) => new URL(response.url).origin !== atlasOrigin);
   assert.deepEqual(remoteFontResponses, [], "Excalidraw fonts must not load from an external origin.");
+  const sameOriginFontFailures = fontFailures.filter((failure) => new URL(failure.url).origin === atlasOrigin);
   const externalFontFailures = fontFailures.filter((failure) => new URL(failure.url).origin !== atlasOrigin);
   assert.ok(externalFontFailures.length > 0,
     "Excalidraw's official remote fallback attempts must be blocked by the Host's restrictive CSP.");
   assert.ok(externalFontFailures.every(({ error }) => /csp/iu.test(error)),
     `Every external font fallback must be CSP-blocked: ${JSON.stringify([...new Set(externalFontFailures.map(({ error }) => error))])}.`);
+  assert.deepEqual(fontConsoleErrors, [], `Canvas font loading must not report exhausted font fallbacks: ${fontConsoleErrors.join("; ")}`);
+  const sameOriginFontResponses = fontResponses.filter((response) => new URL(response.url).origin === atlasOrigin);
+  const sameOriginNonOkFontResponses = sameOriginFontResponses.filter(({ status }) => status < 200 || status >= 300);
 
   assert.deepEqual(pageErrors, [], `The Host or Canvas frame must not throw browser errors: ${pageErrors.join("; ")}`);
   console.log(JSON.stringify({
@@ -442,8 +464,13 @@ try {
     groupId: groupedRects[0].groupIds[0],
     fontAssetPath: assetPath,
     fontProbe,
+    fontFaceSourceExample,
     localFontResponse: localFont,
+    sameOriginFontResponseCount: sameOriginFontResponses.length,
+    sameOriginFontNonOkResponseCount: sameOriginNonOkFontResponses.length,
+    sameOriginFontFailureCount: sameOriginFontFailures.length,
     externalFontFallbackAttemptsBlocked: externalFontFailures.length,
+    fontConsoleErrorCount: fontConsoleErrors.length,
     hostCommits: 2 + drawingChanges.committed.length,
     drawingProposalsApproved: drawingChanges.committed.length,
     hostScenePath: drawingScenePath,
