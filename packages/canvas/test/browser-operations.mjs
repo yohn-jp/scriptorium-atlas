@@ -235,9 +235,11 @@ async function dragElementAfterInnerFrameScroll(page, atlas, frame, editor) {
   const element = before.data.elements.find((item) => !item.isDeleted && item.type === "rectangle");
   assert.ok(element, "The scrolled-frame regression needs a real native Excalidraw rectangle.");
   const appState = before.data.appState;
-  const zoom = appState.zoom.value;
-  const scrollX = appState.scrollX;
-  const scrollY = appState.scrollY;
+  // Excalidraw intentionally omits its transient viewport state from downloaded
+  // scene JSON. This test starts from the new-board default viewport.
+  const zoom = appState.zoom?.value ?? 1;
+  const scrollX = appState.scrollX ?? 0;
+  const scrollY = appState.scrollY ?? 0;
   const frameScrollBefore = await frame.evaluate(() => window.scrollY);
   await frame.evaluate(() => {
     const scrollRoot = document.scrollingElement ?? document.documentElement;
@@ -245,19 +247,23 @@ async function dragElementAfterInnerFrameScroll(page, atlas, frame, editor) {
     window.scrollTo(0, maximum);
   });
   await editor.scrollIntoViewIfNeeded();
+  await frame.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
   const frameScrollY = await frame.evaluate(() => window.scrollY);
   assert.ok(frameScrollY > 0,
     `The Atlas document must be scrolled independently inside the Host iframe; before=${frameScrollBefore}, after=${frameScrollY}.`);
 
   const bounds = await editor.boundingBox();
+  const canvasBounds = await frame.locator("canvas.excalidraw__canvas.interactive").boundingBox();
   const iframeBounds = await page.locator('iframe[title="Atlas"]').boundingBox();
-  assert.ok(bounds && iframeBounds, "The scrolled Canvas and its owning iframe must remain measurable.");
-  const sceneCenter = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
+  assert.ok(bounds && canvasBounds && iframeBounds, "The scrolled Canvas surface and its owning iframe must remain measurable.");
+  // New native rectangles are unfilled, so a center click lands on transparent
+  // pixels. Start on the visible top stroke to exercise real shape hit testing.
+  const sceneBorderPoint = { x: element.x + element.width / 2, y: element.y };
   const toCanvasPoint = (point) => ({ x: (point.x + scrollX) * zoom, y: (point.y + scrollY) * zoom });
-  const startCanvas = toCanvasPoint(sceneCenter);
+  const startCanvas = toCanvasPoint(sceneBorderPoint);
   const endCanvas = { x: startCanvas.x + 28, y: startCanvas.y + 18 };
-  const start = { x: bounds.x + startCanvas.x, y: bounds.y + startCanvas.y };
-  const end = { x: bounds.x + endCanvas.x, y: bounds.y + endCanvas.y };
+  const start = { x: canvasBounds.x + startCanvas.x, y: canvasBounds.y + startCanvas.y };
+  const end = { x: canvasBounds.x + endCanvas.x, y: canvasBounds.y + endCanvas.y };
   const startInFrame = { x: start.x - iframeBounds.x, y: start.y - iframeBounds.y };
   const hit = await frame.evaluate((point) => {
     const target = document.elementFromPoint(point.x, point.y);
@@ -286,6 +292,8 @@ async function dragElementAfterInnerFrameScroll(page, atlas, frame, editor) {
           pointerType: event.pointerType,
           isPrimary: event.isPrimary,
           isTrusted: event.isTrusted,
+          clientX: event.clientX,
+          clientY: event.clientY,
         });
       }, true);
     }
@@ -294,16 +302,24 @@ async function dragElementAfterInnerFrameScroll(page, atlas, frame, editor) {
   // Select first, then drag, so the assertion is about offset-aware native
   // Excalidraw hit testing rather than initial iframe focus.
   await page.mouse.click(start.x, start.y);
+  const accessibility = atlas.locator(".atlas-canvas-accessibility");
+  if (await accessibility.evaluate((details) => details.open)) {
+    await accessibility.locator("summary").click();
+  }
+  await accessibility.locator("summary").click();
+  const selectedByCanvasClick = await accessibility.locator('input[type="checkbox"]').first().isChecked();
+  await accessibility.locator("summary").click();
+  assert.ok(selectedByCanvasClick, `The physical canvas click must select ${element.id} before its drag.`);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 12 });
   await page.mouse.up();
   await page.waitForTimeout(500);
+  const pointerEvents = await frame.evaluate(() => window.__atlasScrolledCanvasPointerEvents ?? []);
   const after = await downloadScene(page, atlas);
   const moved = after.data.elements.find((item) => item.id === element.id && !item.isDeleted);
   assert.ok(moved && moved.x === element.x + 28 && moved.y === element.y + 18,
-    `A real drag after inner-frame scrolling must move ${element.id}: ${JSON.stringify({ before: { x: element.x, y: element.y }, after: moved && { x: moved.x, y: moved.y }, frameScrollY })}.`);
-  const pointerEvents = await frame.evaluate(() => window.__atlasScrolledCanvasPointerEvents ?? []);
+    `A real drag after inner-frame scrolling must move ${element.id}: ${JSON.stringify({ before: { x: element.x, y: element.y }, after: moved && { x: moved.x, y: moved.y }, frameScrollY, start, end, bounds, hit, pointerEvents })}.`);
   assert.ok(pointerEvents.some((event) => event.type === "pointerdown" && event.isTrusted && event.isPrimary && event.pointerType === "mouse"),
     "The scrolled-frame selection and drag must use a trusted primary physical mouse pointerdown.");
   assert.ok(pointerEvents.some((event) => event.type === "pointermove" && event.buttons === 1 && event.isTrusted),
@@ -315,7 +331,7 @@ async function dragElementAfterInnerFrameScroll(page, atlas, frame, editor) {
     before: { x: element.x, y: element.y },
     after: { x: moved.x, y: moved.y },
     frameScroll: { before: frameScrollBefore, after: frameScrollY },
-    viewport: { editor: bounds, iframe: iframeBounds, hit },
+    viewport: { editor: bounds, canvas: canvasBounds, iframe: iframeBounds, hit },
     pointerEvents: pointerEvents.length,
   };
 }
