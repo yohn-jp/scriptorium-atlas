@@ -923,7 +923,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       const bytes = sanitizeImageBytes(originalBytes, mime);
       if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('安全化後の画像サイズは10 MiB以下にしてください。');
       const digest = await sha256Hex(bytes);
-      const path = `documents/assets/${digest}.${assetExtension(mime)}`;
+      const path = `assets/${digest}.${assetExtension(mime)}`;
       const existing = filesRef.current.get(path);
       if (existing) {
         await verifyAssetBytes({ id: 'existing', path, sha256: digest, bytes: bytes.byteLength, mime }, await readFileBytes(host, existing));

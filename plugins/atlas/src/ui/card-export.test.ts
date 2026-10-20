@@ -14,7 +14,7 @@ async function boardWithEveryCard(): Promise<{ board: BoardDocument; asset: Asse
   const digest = await sha256Hex(pngBytes);
   const asset: Asset = {
     id: 'asset-export',
-    path: `documents/assets/${digest}.png`,
+    path: `assets/${digest}.png`,
     sha256: digest,
     bytes: pngBytes.byteLength,
     mime: 'image/png',
