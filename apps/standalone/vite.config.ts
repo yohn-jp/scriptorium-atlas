@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, relative } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import {writeBundleLicenses} from '../../scripts/verification/write-bundle-licenses.mjs';
+import {collectWorkerImports} from '../../scripts/verification/worker-imports.mjs';
 
 const profileValue = process.env['ATLAS_PROFILE'] ?? 'combined';
 if (profileValue!=='atlas'&&profileValue!=='story'&&profileValue!=='combined') throw new Error('Invalid ATLAS_PROFILE');
@@ -50,10 +51,7 @@ function composition(): Plugin {
         const emitted=await readFile(resolve(outputDirectory,chunk.file));
         chunk.bytes=emitted.byteLength;
         const code=emitted.toString('utf8');
-        chunk.workerImports=workerEntries.filter(worker=>{
-          const path=worker.file.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-          return new RegExp(String.raw`new\s+Worker\s*\(\s*new\s+URL\s*\(\s*['"\x60]/?${path}['"\x60]`).test(code);
-        }).map(worker=>worker.file);
+        chunk.workerImports=collectWorkerImports(code,chunk.file,workerEntries.map(worker=>worker.file));
       }
       await writeFile(resolve(outputDirectory,'closure.json'),JSON.stringify({profile,...closure},null,2)+'\n');
       if (profile!=='story') {
@@ -69,6 +67,7 @@ export default defineConfig({
   plugins: [composition()],
   define: { __ATLAS_PROFILE__: JSON.stringify(profile) },
   build: {
+    modulePreload: { polyfill: false },
     outDir: `../../dist/${profile}`, emptyOutDir: true, sourcemap: true,
     rollupOptions: { input: { host: fileURLToPath(new URL('index.html', import.meta.url)), frame: fileURLToPath(new URL('frame.html', import.meta.url)) } },
   },

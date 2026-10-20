@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { computeChunkReachability, inspectLazyDependency } from '../../scripts/verification/chunk-reachability.mjs';
+import { collectWorkerImports } from '../../scripts/verification/worker-imports.mjs';
+
+test('accounts for annotated nested Worker URLs and resolves relative chunk paths', () => {
+  const files = ['assets/child.js', 'assets/sibling.js', 'assets/external.js'];
+  const code = 'new Worker(new URL(\n/* @vite-ignore */\n`/assets/child.js`, `` + import.meta.url));'
+    + 'new Worker(new URL("./sibling.js", import.meta.url));'
+    + 'new Worker(new URL("https://other.invalid/assets/external.js", import.meta.url));';
+  assert.deepEqual(collectWorkerImports(code, 'assets/parent.js', files), ['assets/child.js', 'assets/sibling.js']);
+});
 
 test('follows nested dynamic imports and explicit Worker entries without making them eager', () => {
   const chunks = new Map([

@@ -196,6 +196,9 @@ async function auditProfile(profile) {
 
   const entryFiles = await htmlEntryChunks(directory, chunkByFile);
   const { staticReachable, lazyReachable } = computeChunkReachability(entryFiles, chunkByFile);
+  for (const chunk of closure.chunks.filter(chunk => chunk.workerEntry)) {
+    check(staticReachable.has(chunk.file) || lazyReachable.has(chunk.file), `${profile} Worker entry is not connected through a native Worker import: ${chunk.file}`);
+  }
   const modules = closure.chunks.flatMap(chunk => chunk.modules);
 
   if (expectedOwner[profile]) check(modules.some(module => expectedOwner[profile].test(module)), `${profile} closure has no ${profile} plugin modules`);
