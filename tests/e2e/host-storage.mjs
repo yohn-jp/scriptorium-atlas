@@ -58,8 +58,12 @@ async function approveSource(page, article) {
 }
 
 async function reopenWorkspace(page, workspaceId) {
-  await page.getByLabel('開く').selectOption(workspaceId);
-  await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
+  const workspaceSelect = page.getByLabel('開く');
+  await workspaceSelect.selectOption(workspaceId);
+  assert.equal(await workspaceSelect.inputValue(), workspaceId, 'the requested Workspace must be selected before waiting for its recovery state');
+  await page.getByRole('status').filter({
+    hasText: /(?:Workspaceを開きました。|復旧したJournal操作: \d+件。|COMMIT_UNKNOWN:)/,
+  }).waitFor();
 }
 
 async function selectSource(page, path) {

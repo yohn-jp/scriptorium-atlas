@@ -207,12 +207,15 @@ if (browserError) {
         record: async (id, run) => {
           try {
             profileReport.cases.push({ id, status: 'PASS', evidence: await run() });
+            process.stderr.write(`[Browser E2E] ${profile} ${id}: PASS\n`);
           } catch (error) {
+            const detail = error instanceof Error ? `${error.name}: ${error.message.split('\n')[0]}` : String(error);
             profileReport.cases.push({
               id,
               status: 'FAIL',
               error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
             });
+            process.stderr.write(`[Browser E2E] ${profile} ${id}: FAIL — ${detail.slice(0, 240)}\n`);
           }
         }
       });
