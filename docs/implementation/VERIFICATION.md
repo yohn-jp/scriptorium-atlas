@@ -34,8 +34,12 @@ Standalone static servers are started with `node apps/standalone/scripts/serve.m
 - Real combined transport checks passed: four delayed Provider opens plus nine queued interactive queries; all nine settled as TIMEOUT in approximately 5,008 ms. Metadata discovery/denied acquisition created no Workers; last-lease close left zero. A malicious out-of-scope Provider SourceRef isolated the producer; ignored Cancel plus hung responses stopped only that Provider while the author could still commit the preserved Host draft.
 - Combined frame faults passed stale epoch, malformed method, 8 MiB, cyclic object and BigInt rejection, independent frame reload with renewed nonce/epoch, and exact bytes through author commit/Host reload. These are transport subsets, not a complete Q11 declaration.
 - Package Worker measurements, 30 samples for each query dataset, are in `packages/graph/benchmark/RUN-2026-10-21.md`: exact 1k/2k and 10k/20k generated graphs, 1k seeded Force completion 1,195.1 ms, 10k cancellation 137.7 ms, zero Workers after close. Raw report SHA-256 `6667aa28bcaa4e8650a1d144c688d6516e77856b3fb0c5c547218ecc8c100976`. These do not prove product UI performance.
-- Eight package archives passed validation and isolated external dependency installation passed. The Node-only consumer incorrectly attempted browser UI/CSS imports; a real bundled browser consumer is being added. The full pack/consumer gate remains FAIL until that run succeeds.
-- The first closure audit exposed post-emission byte substitutions and incomplete nested/Worker edge accounting. Producer accounting and audit traversal are corrected; final three-profile closure reruns remain pending.
+- Independent package verification subsequently passed at intermediate Host `2ce9412`: eight archives, isolated dependency installation, 25 public Node exports, and a real Vite/Chromium consumer rendering Canvas, Atlas and Story UI. Runner `scripts/verification/check-pack-consumer.mjs` now checks browser exports in a browser; final-HEAD rerun remains pending.
+- The first closure audit exposed post-emission byte substitutions and incomplete nested/Worker edge accounting. Producer accounting and audit traversal are corrected. Intermediate three-profile closure runs passed (Atlas 143, Story 5, combined 144 external packages); final-HEAD reruns remain pending.
+- Graph browser/history flow passed with runner `plugins/atlas/tests/browser-graph-history.mjs`: visible manual node, physical selection, rename, duplicate, undo/redo, author Commit, explicit Workspace reopen and exact IDs/labels after reload. Controlled React Flow nodes now have explicit dimensions, and manual-node creation uses an inline form compatible with the frame sandbox.
+- The expanded Host Q02/Q03 cases passed against intermediate combined artifact `50dcbb6`: Workspace rename/close/reopen, source edit/reload with unchanged revisions; valid Bundle roundtrip plus invalid ZIP, unknown schema version, hash mismatch, traversal, duplicate ZIP entry and declared expansion-bomb rejection. Every rejected input retains source bytes/revision and a separate existing Workspace. `tests/e2e/host-storage.mjs` generates these small synthetic archives; no ZIP fixture is committed.
+- Actual Canvas Card PNG/SVG exports include text, image, source and Provider reference Cards. Broader Excalidraw gesture/durability verification is still running; this is not a Q09 PASS. Atlas board/node Japanese composing-Enter and legacy keyCode 229 checks passed; full Q13 remains pending.
+- A real 65,536-entry export exposed pinned fflate's 16-bit EOCD count overflow. The storage owner is implementing count-only ZIP64 end metadata around the existing compressor and testing the full 100,000-entry limit. The limits, original Workspace data, Goal and gates remain unchanged.
 
 Raw browser logs, ZIP fixtures, heap data and large generated bundles stay outside Git. Release evidence will retain concise manifests, hashes, environment, exact CLI, sample counts and PASS/FAIL/NOT_CHECKED results.
 
@@ -58,7 +62,7 @@ These statuses remain provisional until all affected checks run on the final HEA
 | Q11 | NOT_CHECKED | Final transport and cross-Plugin fault reruns |
 | Q12 | NOT_CHECKED | Product cold visibility, query/layout, Canvas frame time, heap and lifecycle budgets |
 | Q13 | NOT_CHECKED | Complete IME, keyboard alternatives, focus, theme and 390px runs |
-| Q14 | FAIL | Final closure plus independent packed browser/Node consumer and assets |
+| Q14 | NOT_CHECKED | Intermediate closure and packed browser/Node consumer passed; final runs pending |
 | Q15 | NOT_CHECKED | Final HEAD, completed F/Q evidence, published implementation PR readiness |
 
 ## Feature evidence map
