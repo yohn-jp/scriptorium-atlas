@@ -2,10 +2,11 @@
 
 This runner proves that an actual Chromium process crash does not lose committed files or a prepared, durably journaled draft. It launches Chromium itself with a fresh persistent profile under the OS temporary directory, connects Playwright over the process's DevTools port, and only signals the Chromium child it spawned. It reuses the production Host UI and the real Host-origin IndexedDB.
 
-The Host's production `dist/story` build must be served at the configured URL. From the Host checkout, run:
+The production Host build selected by `ATLAS_Q05_PROFILE` must be served at the configured URL. The runner supports `atlas`, `story`, and `combined`, and verifies that the root page and every file in `dist/$ATLAS_Q05_PROFILE` exactly match what the URL serves before launching Chromium. From the Host checkout, run:
 
 ```sh
 ATLAS_HOST_ROOT="$PWD" \
+ATLAS_Q05_PROFILE=combined \
 ATLAS_Q05_BASE_URL=http://127.0.0.1:44990 \
 ATLAS_E2E_CHROMIUM=/path/to/chromium \
 pnpm --filter @scriptorium-atlas/persistence test:browser:q05:crash

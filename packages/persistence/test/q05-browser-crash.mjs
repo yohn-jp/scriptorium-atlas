@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,22 +11,73 @@ const storageRoot = resolve(storagePackage, '../..');
 const hostRoot = process.env.ATLAS_HOST_ROOT && resolve(process.env.ATLAS_HOST_ROOT);
 const executablePath = process.env.ATLAS_E2E_CHROMIUM && resolve(process.env.ATLAS_E2E_CHROMIUM);
 const baseUrl = process.env.ATLAS_Q05_BASE_URL ?? 'http://127.0.0.1:44990';
+const profile = process.env.ATLAS_Q05_PROFILE;
 if (!hostRoot) throw new Error('Set ATLAS_HOST_ROOT to the Host checkout that built the running production UI.');
 if (!executablePath) throw new Error('Set ATLAS_E2E_CHROMIUM to the Chromium executable to launch.');
 if (!isAbsolute(executablePath)) throw new Error('ATLAS_E2E_CHROMIUM must resolve to an absolute executable path.');
-if (!(await stat(resolve(hostRoot, 'dist/story/index.html')).catch(() => undefined))?.isFile()) {
-  throw new Error(`Production Story Host build is missing under ${hostRoot}/dist/story.`);
+if (!['atlas', 'story', 'combined'].includes(profile)) throw new Error('Set ATLAS_Q05_PROFILE to atlas, story, or combined.');
+const base = new URL(baseUrl);
+if (!['http:', 'https:'].includes(base.protocol) || base.pathname !== '/' || base.search || base.hash) {
+  throw new Error('ATLAS_Q05_BASE_URL must be an HTTP(S) origin without a path, query, or fragment.');
 }
+const profileRoot = resolve(hostRoot, 'dist', profile);
+if (!(await stat(resolve(profileRoot, 'index.html')).catch(() => undefined))?.isFile()) {
+  throw new Error(`Production ${profile} Host build is missing under ${profileRoot}.`);
+}
+const artifact = await validateServedProfile(profileRoot, base.origin);
 const { chromium } = await import(pathToFileURL(resolve(hostRoot, 'node_modules/@playwright/test/index.mjs')).href);
 
 const sourcePath = 'notes/q05-process-crash.md';
 const baselineText = '# Crash recovery fixture\n\nDurable baseline before the browser process crash.\n';
 const draftText = '# Crash recovery fixture\n\nPrepared draft restored after the browser process crash.\n';
-const expectedOrigin = new URL(baseUrl).origin;
+const expectedOrigin = base.origin;
 
 function within(root, path) {
   const fromRoot = relative(root, path);
   return fromRoot === '' || (fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot));
+}
+
+async function validateServedProfile(directory, origin) {
+  const paths = [];
+  async function visit(path) {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const full = resolve(path, entry.name);
+      if (entry.isDirectory()) await visit(full);
+      else if (entry.isFile()) paths.push(full);
+    }
+  }
+  await visit(directory);
+  const indexBytes = await readFile(resolve(directory, 'index.html'));
+  const rootResponse = await fetch(`${origin}/`, { signal: AbortSignal.timeout(5000) });
+  assert.equal(rootResponse.status, 200, `Host did not serve the ${profile} profile index at its root URL.`);
+  assert.ok(Buffer.from(await rootResponse.arrayBuffer()).equals(indexBytes), `Host root URL does not match the ${profile} index.html artifact.`);
+  const basePort = Number(base.port || (base.protocol === 'https:' ? 443 : 80));
+  const pluginPort = basePort + (profile === 'story' ? 2 : 1);
+  if (pluginPort > 65_535) throw new Error('ATLAS_Q05_BASE_URL leaves no port for the selected plugin profile.');
+  const pluginOrigin = `${base.protocol}//${base.hostname}:${pluginPort}`;
+  paths.sort((left, right) => {
+    const leftName = relative(directory, left).split(sep).join('/');
+    const rightName = relative(directory, right).split(sep).join('/');
+    return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+  });
+  const digest = createHash('sha256');
+  let bytes = 0;
+  for (const path of paths) {
+    const relativePath = relative(directory, path).split(sep).join('/');
+    const expected = await readFile(path);
+    const urlPath = relativePath.split('/').map(encodeURIComponent).join('/');
+    const artifactOrigin = relativePath === 'frame.html' ? pluginOrigin : origin;
+    const response = await fetch(new URL(urlPath, `${artifactOrigin}/`), { signal: AbortSignal.timeout(5000) });
+    assert.equal(response.status, 200, `Host did not serve the expected ${relativePath} from ${profile} profile.`);
+    const served = Buffer.from(await response.arrayBuffer());
+    assert.ok(served.equals(expected), `Served ${relativePath} does not match the ${profile} build artifact.`);
+    bytes += expected.byteLength;
+    digest.update(`${relativePath}\0${expected.byteLength}\0`);
+    digest.update(expected);
+    digest.update('\0');
+  }
+  assert.ok(paths.some(path => relative(directory, path).split(sep).join('/') === 'index.html'));
+  return { sha256: digest.digest('hex'), files: paths.length, bytes };
 }
 
 async function makeProfile() {
@@ -294,7 +345,8 @@ try {
     host: {
       origin: expectedOrigin,
       head: execFileSync('git', ['-C', hostRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-      profile: 'story'
+      profile,
+      artifact
     },
     persistenceHead: execFileSync('git', ['-C', storageRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     browser: { name: 'Chromium', version: secondBrowser.version(), executablePath },
@@ -319,7 +371,7 @@ try {
     schemaVersion: 'atlas.persistence.q05-browser-process-crash/v1',
     status: 'FAIL',
     error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-    host: { origin: expectedOrigin, profile: 'story' }
+    host: { origin: expectedOrigin, profile, artifact }
   };
 } finally {
   await stopOwnedBrowser(secondBrowser, secondChild);
