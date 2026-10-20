@@ -4,6 +4,7 @@ import {
   assertBoardIntegrity,
   decodeVersionedFile,
   decodeVersionedFileText,
+  validateBundleManifest,
   validateAssetChunk,
   validateBoard,
   validateBoardIntegrity,
@@ -14,10 +15,29 @@ import {
   validateWorkspaceSnapshotPage,
 } from '../src/index.js';
 import type { VersionedFile } from '../src/index.js';
+import type { BundleManifest } from '../src/index.js';
 
 const boardFixtureUrl = new URL('../../../docs/contracts/examples/board.json', import.meta.url);
 
 describe('schema-backed contracts', () => {
+  it('validates the exact atlas.bundle/v1 manifest shape', () => {
+    const manifest: BundleManifest = {
+      schema: 'atlas.bundle/v1',
+      workspaceId: 'workspace-1',
+      name: 'Research notebook',
+      sourceRevision: 'a'.repeat(64),
+      files: [{ path: 'notes.md', sha256: 'b'.repeat(64), bytes: 0 }],
+    };
+    expect(validateBundleManifest(manifest)).toBe(true);
+    expect(validateBundleManifest({ ...manifest, unexpected: true })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, schema: 'atlas.bundle/v2' })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, sourceRevision: 'not-a-sha256' })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, name: '   ' })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, files: [{ ...manifest.files[0], sha256: 'bad' }] })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, files: [{ ...manifest.files[0], bytes: -1 }] })).toBe(false);
+    expect(validateBundleManifest({ ...manifest, files: [{ path: 'notes.md', sha256: 'b'.repeat(64) }] })).toBe(false);
+  });
+
   it('accepts the canonical Board fixture and rejects invalid integrity relationships', async () => {
     const board: unknown = JSON.parse(await readFile(boardFixtureUrl, 'utf8'));
     expect(validateBoard(board)).toBe(true);
