@@ -95,7 +95,26 @@ try {
   const discovery = await atlas.evaluate(() => globalThis.__providerHostCall('describeProviders', {}));
   assert.equal(discovery.ok, true);
   assert.equal(createdWorkers, 0, 'metadata discovery and denied acquisition must not start a worker');
+  const scopedPages = await atlas.evaluate(async () => {
+    const call = globalThis.__providerHostCall;
+    const list = await call('list', {limit:1});
+    const snapshot = await call('snapshot', {limit:1});
+    const second = await call('list', {limit:1,cursor:list.result.nextCursor});
+    const foreign = await call('snapshot', {limit:1,cursor:list.result.nextCursor});
+    const forged = await call('list', {limit:1,cursor:encodeURIComponent('bible/characters/provider.yaml')});
+    return {list,snapshot,second,foreign,forged};
+  });
+  for (const key of ['list','snapshot','second']) {
+    assert.equal(scopedPages[key].ok,true);
+    assert.deepEqual(scopedPages[key].result.files,[]);
+    assert.ok(!JSON.stringify(scopedPages[key]).includes('bible'), 'ungranted paths must not leak through rows or cursors');
+  }
+  assert.ok(scopedPages.list.result.nextCursor);
+  assert.equal(scopedPages.second.result.nextCursor,null);
+  for (const key of ['foreign','forged']) assert.equal(scopedPages[key].error.code,'INVALID_INPUT');
   await page.getByRole('checkbox', { name: 'AtlasへStory ProviderとSourceの読取りを許可', exact: true }).check();
+  const oldGrantCursor = await atlas.evaluate(cursor => globalThis.__providerHostCall('list',{limit:1,cursor}),scopedPages.list.result.nextCursor);
+  assert.equal(oldGrantCursor.error.code,'INVALID_INPUT');
   const initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
   assert.equal(initial.ok, true, JSON.stringify(initial));
   const nodes = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall', {

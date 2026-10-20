@@ -3,6 +3,7 @@ import { assertContract, validateContract, type ChangeIntent, type HostRpcReques
 import type { IndexedDbHostPort } from '@scriptorium-atlas/persistence/host';
 import { sha256 } from '@scriptorium-atlas/persistence/bytes';
 import { serializedMessageBytes as size } from './message-budget.js';
+import { ScopedCursors } from './scoped-cursors.js';
 import { metadata } from 'virtual:atlas-profile';
 import { acquireProvider, callProvider, registerProvider, registerProviderOwner, releaseOwner, releaseProvider } from './provider-broker.js';
 
@@ -35,6 +36,7 @@ export function PluginFrame(props: Props) {
     const queue: Array<{start():void;reject(err:Error):void;timer:ReturnType<typeof setTimeout>}> = [];
     const seenCalls = new Set<string>();
     const assetUploads = new Set<string>();
+    const cursors = new ScopedCursors();
     let inFlightHost = 0;
     const fail = (message: string) => {
       if (!active) return;
@@ -133,12 +135,18 @@ export function PluginFrame(props: Props) {
       const workspace = current.workspace;
       switch (request.method) {
         case 'snapshot': {
-          const page = await current.host.getSnapshotPage(workspace, request.params);
-          return {...page,workspace:{...page.workspace,epoch:session.epoch},files:page.files.filter(file => canRead(file.path))};
+          const scope = JSON.stringify(['snapshot', workspace.sourceRevision, current.storyGrant]);
+          const {cursor:token,...query} = request.params;
+          const cursor = cursors.decode(token,scope);
+          const page = await current.host.getSnapshotPage(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
+          return {...page,workspace:{...page.workspace,epoch:session.epoch},files:page.files.filter(file => canRead(file.path)),nextCursor:cursors.encode(page.nextCursor,scope)};
         }
         case 'list': {
-          const page = await current.host.list(workspace, request.params);
-          return {...page, files:page.files.filter(file => canRead(file.path))};
+          const scope = JSON.stringify(['list', workspace.sourceRevision, current.storyGrant, request.params.prefix ?? '']);
+          const {cursor:token,...query} = request.params;
+          const cursor = cursors.decode(token,scope);
+          const page = await current.host.list(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
+          return {...page, files:page.files.filter(file => canRead(file.path)),nextCursor:cursors.encode(page.nextCursor,scope)};
         }
         case 'read': {
           if (!canRead(request.params.path)) throw new Error('PERMISSION_DENIED');
