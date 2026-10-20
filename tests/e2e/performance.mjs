@@ -422,6 +422,7 @@ function readExcalidrawAppStateFromPage() {
     scrollX: appState.scrollX,
     scrollY: appState.scrollY,
     zoom: { value: appState.zoom.value },
+    selectedElementIds: Object.keys(appState.selectedElementIds ?? {}).filter((id) => appState.selectedElementIds[id]),
     offsetLeft: appState.offsetLeft,
     offsetTop: appState.offsetTop,
     width: appState.width,
@@ -482,9 +483,78 @@ async function canvasViewportEvidence(page, frame, editor) {
     interactiveCanvasFrameRect: canvasFrameRect, atlasIframe: iframeBounds, atlasIframeContentClip: iframeClip, liveAppState };
 }
 
-async function runSampledGesture(page, frame, editor, start, end, { pan = false } = {}) {
+async function selectCanvasObjectWithPhysicalInput(page, frame, viewport, point, expectedElementId) {
+  const pagePoint = { x: viewport.interactiveCanvas.x + point.x, y: viewport.interactiveCanvas.y + point.y };
+  const framePoint = { x: viewport.interactiveCanvasFrameRect.x + point.x,
+    y: viewport.interactiveCanvasFrameRect.y + point.y };
+  const canvasBounds = viewport.interactiveCanvas;
+  const frameClip = viewport.atlasIframeContentClip;
+  assert.ok(pagePoint.x >= 0 && pagePoint.x < viewport.hostViewport.width
+    && pagePoint.y >= 0 && pagePoint.y < viewport.hostViewport.height,
+  `Freeform selection point must be inside the top-level Host viewport: ${JSON.stringify({ pagePoint, viewport })}.`);
+  assert.ok(pagePoint.x >= frameClip.x && pagePoint.x < frameClip.x + frameClip.width
+    && pagePoint.y >= frameClip.y && pagePoint.y < frameClip.y + frameClip.height,
+  `Freeform selection point must be inside the Atlas iframe clipping rectangle: ${JSON.stringify({ pagePoint, frameClip })}.`);
+  assert.ok(pagePoint.x >= canvasBounds.x && pagePoint.x <= canvasBounds.x + canvasBounds.width
+    && pagePoint.y >= canvasBounds.y && pagePoint.y <= canvasBounds.y + canvasBounds.height,
+  `Freeform selection point must be inside the visible interactive canvas: ${JSON.stringify({ pagePoint, canvasBounds })}.`);
+  const hitTest = await frame.evaluate((pointInFrame) => {
+    const canvas = document.querySelector('canvas.excalidraw__canvas.interactive');
+    const target = document.elementFromPoint(pointInFrame.x, pointInFrame.y);
+    return { hitsInteractiveCanvas: Boolean(canvas && target === canvas),
+      target: target instanceof Element ? { tagName: target.tagName, className: typeof target.className === 'string' ? target.className : String(target.className ?? '') } : null };
+  }, framePoint);
+  assert.ok(hitTest.hitsInteractiveCanvas,
+    `The physical preselection point must hit the actual Excalidraw canvas: ${JSON.stringify({ pagePoint, framePoint, hitTest })}.`);
+  await frame.evaluate(() => {
+    const events = [];
+    const listener = (event) => events.push({ type: event.type, isTrusted: event.isTrusted,
+      pointerType: event.pointerType, button: event.button, buttons: event.buttons,
+      targetIsInteractiveCanvas: event.target === document.querySelector('canvas.excalidraw__canvas.interactive'),
+      hitTargetIsInteractiveCanvas: document.elementFromPoint(event.clientX, event.clientY) === document.querySelector('canvas.excalidraw__canvas.interactive') });
+    document.addEventListener('pointerdown', listener, true);
+    window.__atlasQ12PreselectionInput = { events, listener };
+  });
+  await page.mouse.click(pagePoint.x, pagePoint.y);
+  const input = await frame.evaluate(() => {
+    const evidence = window.__atlasQ12PreselectionInput;
+    if (!evidence) return null;
+    document.removeEventListener('pointerdown', evidence.listener, true);
+    delete window.__atlasQ12PreselectionInput;
+    return evidence.events;
+  });
+  assert.ok(input?.some((event) => event.type === 'pointerdown' && event.isTrusted && event.button === 0
+    && event.targetIsInteractiveCanvas && event.hitTargetIsInteractiveCanvas),
+  `Canvas object preselection must use a trusted physical primary pointer input: ${JSON.stringify(input)}.`);
+  let liveAppState = await readLiveCanvasAppState(frame);
+  const deadline = Date.now() + 5_000;
+  while (!liveAppState.selectedElementIds.includes(expectedElementId) && Date.now() < deadline) {
+    await frame.waitForTimeout(50);
+    liveAppState = await readLiveCanvasAppState(frame);
+  }
+  assert.ok(liveAppState.selectedElementIds.includes(expectedElementId),
+    `A physical click at the rectangle's filled center must select its exact scene ID ${expectedElementId}; selected=${JSON.stringify(liveAppState.selectedElementIds)}.`);
+  return { pagePoint, framePoint, hitTest, input, selectedElementId: expectedElementId, liveAppState };
+}
+
+async function runSampledGesture(page, frame, editor, start, end, { pan = false, expectedViewport = null } = {}) {
   await positionCanvasWithinHostViewport(page, frame, editor);
   const viewport = await canvasViewportEvidence(page, frame, editor);
+  if (expectedViewport) {
+    const near = (left, right) => Math.abs(left - right) <= 0.5;
+    for (const key of ['editorRoot', 'interactiveCanvas', 'interactiveCanvasFrameRect', 'atlasIframeContentClip']) {
+      for (const dimension of ['x', 'y', 'width', 'height']) {
+        assert.ok(near(viewport[key][dimension], expectedViewport[key][dimension]),
+          `Freeform object drag ${key}.${dimension} changed after selection and before measurement: ${JSON.stringify({ expected: expectedViewport[key], actual: viewport[key] })}.`);
+      }
+    }
+    assert.equal(viewport.hostScroll.scrollX, expectedViewport.hostScroll.scrollX, 'Host horizontal scroll must remain stable between selection and measured drag.');
+    assert.equal(viewport.hostScroll.scrollY, expectedViewport.hostScroll.scrollY, 'Host vertical scroll must remain stable between selection and measured drag.');
+    assert.ok(near(viewport.liveAppState.scrollX, expectedViewport.liveAppState.scrollX)
+      && near(viewport.liveAppState.scrollY, expectedViewport.liveAppState.scrollY)
+      && near(viewport.liveAppState.zoom.value, expectedViewport.liveAppState.zoom.value),
+    `Freeform live viewport must remain stable between selection and measured drag: ${JSON.stringify({ expected: expectedViewport.liveAppState, actual: viewport.liveAppState })}.`);
+  }
   const bounds = viewport.interactiveCanvas;
   for (const point of [start, end]) {
     assert.ok(point.x >= 0 && point.x <= bounds.width && point.y >= 0 && point.y <= bounds.height,
@@ -662,6 +732,39 @@ async function waitForQ12Proposal(page, timeoutMs = 30_000) {
   throw new Error(`Host did not publish a review proposal within ${timeoutMs} ms.`);
 }
 
+async function downloadAtlasBoard(page, atlas) {
+  const downloadPromise = page.waitForEvent('download');
+  await atlas.locator.getByRole('button', { name: '.atlas.jsonをエクスポート', exact: true }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  assert.ok(path, `Atlas board export ${download.suggestedFilename()} must produce a readable file.`);
+  const bytes = await readFile(path);
+  return { bytes, text: bytes.toString('utf8'), data: JSON.parse(bytes.toString('utf8')) };
+}
+
+function onlyFreeformView(board) {
+  const views = board?.views?.filter((view) => view.kind === 'freeform') ?? [];
+  assert.equal(views.length, 1, `The deterministic Canvas Workspace must expose exactly one freeform view; found ${views.length}.`);
+  return views[0];
+}
+
+function expectedBoardViewport(liveAppState) {
+  return { x: liveAppState.scrollX * liveAppState.zoom.value,
+    y: liveAppState.scrollY * liveAppState.zoom.value,
+    zoom: liveAppState.zoom.value };
+}
+
+function assertBoardViewport(board, viewId, expectedViewport, message) {
+  const view = board?.views?.find((candidate) => candidate.id === viewId && candidate.kind === 'freeform');
+  assert.ok(view, `${message}: freeform view ${viewId} must exist in exported Board JSON.`);
+  for (const key of ['x', 'y', 'zoom']) {
+    assert.ok(Number.isFinite(view.viewport?.[key])
+      && Math.abs(view.viewport[key] - expectedViewport[key]) <= 1e-9,
+    `${message}: persisted ${key}=${view.viewport?.[key]} must match the live Excalidraw viewport ${expectedViewport[key]}.`);
+  }
+  return view;
+}
+
 async function approveQ12Proposal(page) {
   const proposal = page.locator('section[aria-label="変更の承認"] article').last();
   await proposal.waitFor({ state: 'visible', timeout: 30_000 });
@@ -688,10 +791,25 @@ async function approveQ12Proposal(page) {
   return { receiptText, proposedFiles };
 }
 
-async function commitQ12SceneUntilCurrent(page, expectedSceneBytes, maxAttempts = 8) {
+function viewportMatchesExpected(boardText, expectedViewId, expectedViewport) {
+  if (typeof boardText !== 'string') return false;
+  try {
+    const board = JSON.parse(boardText);
+    const view = board.views?.find((candidate) => candidate.id === expectedViewId && candidate.kind === 'freeform');
+    return Boolean(view && view.viewport
+      && ['x', 'y', 'zoom'].every((key) => Number.isFinite(view.viewport[key])
+        && Math.abs(view.viewport[key] - expectedViewport[key]) <= 1e-9));
+  } catch { return false; }
+}
+
+async function commitQ12SceneUntilCurrent(page, expectedSceneBytes, expectedViewId, expectedViewport, maxAttempts = 8) {
   const expectedSceneText = expectedSceneBytes.toString('utf8');
   const committed = [];
   let finalScenePath = '';
+  let sceneMatchesExpected = false;
+  let boardViewportMatchesExpected = false;
+  let matchingSceneProposal = null;
+  let matchingBoardProposal = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await waitForQ12Proposal(page);
     const result = await approveQ12Proposal(page);
@@ -708,8 +826,17 @@ async function commitQ12SceneUntilCurrent(page, expectedSceneBytes, maxAttempts 
       })),
     });
     const scene = result.proposedFiles.find(({ path }) => path.endsWith('.excalidraw'));
-    if (scene?.afterText === expectedSceneText) {
-      finalScenePath = scene.path;
+    if (scene) {
+      sceneMatchesExpected = scene.afterText === expectedSceneText;
+      matchingSceneProposal = sceneMatchesExpected ? scene : null;
+      finalScenePath = sceneMatchesExpected ? scene.path : '';
+    }
+    const board = result.proposedFiles.find(({ path }) => path.endsWith('.atlas.json'));
+    if (board) {
+      boardViewportMatchesExpected = viewportMatchesExpected(board.afterText, expectedViewId, expectedViewport);
+      matchingBoardProposal = boardViewportMatchesExpected ? board : null;
+    }
+    if (sceneMatchesExpected && boardViewportMatchesExpected) {
       const followUpDeadline = Date.now() + 1_200;
       const proposals = page.locator('section[aria-label="変更の承認"] article');
       let hasFollowUpProposal = false;
@@ -717,14 +844,18 @@ async function commitQ12SceneUntilCurrent(page, expectedSceneBytes, maxAttempts 
         if (await proposals.count()) { hasFollowUpProposal = true; break; }
         await page.waitForTimeout(100);
       }
-      if (!hasFollowUpProposal) return { committed, scenePath: finalScenePath, sceneProposal: scene };
+      if (!hasFollowUpProposal) return { committed, scenePath: finalScenePath,
+        sceneProposal: matchingSceneProposal, boardProposal: matchingBoardProposal };
     }
   }
   const last = committed.at(-1);
   const lastScene = last?.proposedFiles.find(({ path }) => path.endsWith('.excalidraw'));
-  throw new Error(`Host did not commit the latest measured Canvas scene after ${committed.length} explicitly approved proposal(s). `
+  const lastBoard = last?.proposedFiles.find(({ path }) => path.endsWith('.atlas.json'));
+  throw new Error(`Host did not commit the latest measured Canvas scene and viewport after ${committed.length} explicitly approved proposal(s). `
     + `Expected ${expectedSceneBytes.byteLength} bytes / sha256 ${sha256(expectedSceneBytes)}; `
-    + `last proposal scene ${lastScene?.path ?? 'missing'} had ${lastScene?.afterText === null || lastScene?.afterText === undefined ? 'no text' : Buffer.byteLength(lastScene.afterText, 'utf8') + ' bytes / sha256 ' + sha256(Buffer.from(lastScene.afterText, 'utf8'))}.`);
+    + `sceneMatch=${sceneMatchesExpected}; boardViewportMatch=${boardViewportMatchesExpected}; expectedViewport=${JSON.stringify(expectedViewport)}; `
+    + `last proposal scene ${lastScene?.path ?? 'missing'} had ${lastScene?.afterText === null || lastScene?.afterText === undefined ? 'no text' : Buffer.byteLength(lastScene.afterText, 'utf8') + ' bytes / sha256 ' + sha256(Buffer.from(lastScene.afterText, 'utf8'))}; `
+    + `last proposal board ${lastBoard?.path ?? 'missing'} matched=${viewportMatchesExpected(lastBoard?.afterText, expectedViewId, expectedViewport)}.`);
 }
 
 async function reopenWorkspace(page, workspaceId) {
@@ -1120,38 +1251,95 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.equal(visibleElements.length, expectedObjects, 'The benchmark must use the real Excalidraw scene, not Atlas cards.');
       const first = visibleElements[0];
       assert.equal(first.type, 'rectangle');
+      activeScenarioTrace.freeformPartial = { stage: 'scene-loaded', activeSceneObjects: visibleElements.length,
+        sceneBytes: initialScene.bytes.byteLength, sceneSha256: sha256(initialScene.bytes),
+        firstObject: { id: first.id, type: first.type, x: first.x, y: first.y, width: first.width, height: first.height } };
       const initialAppState = viewportBeforeScene.liveAppState;
-      const dragStart = scenePointToCanvasViewportPoint({ x: first.x + 1, y: first.y + first.height / 2 }, initialAppState);
-      const dragEnd = scenePointToCanvasViewportPoint({ x: first.x + 29, y: first.y + first.height / 2 + 18 }, initialAppState);
+      const objectCenter = { x: first.x + first.width / 2, y: first.y + first.height / 2 };
+      const selectionPoint = scenePointToCanvasViewportPoint(objectCenter, initialAppState);
+      const preselection = await selectCanvasObjectWithPhysicalInput(page, atlas.frame, viewportBeforeScene,
+        selectionPoint, first.id);
+      activeScenarioTrace.freeformPartial = { ...activeScenarioTrace.freeformPartial, stage: 'object-selected',
+        viewportBeforeScene, objectPreselection: preselection };
+      await positionCanvasWithinHostViewport(page, atlas.frame, editor);
+      const viewportBeforeDrag = await canvasViewportEvidence(page, atlas.frame, editor);
+      assert.ok(viewportBeforeDrag.liveAppState.selectedElementIds.includes(first.id),
+        `The exact first rectangle ID must remain selected before the measured drag: ${JSON.stringify(viewportBeforeDrag.liveAppState.selectedElementIds)}.`);
+      const dragStart = scenePointToCanvasViewportPoint(objectCenter, viewportBeforeDrag.liveAppState);
+      const dragEnd = scenePointToCanvasViewportPoint({ x: objectCenter.x + 28, y: objectCenter.y + 18 }, viewportBeforeDrag.liveAppState);
       const drag = await runSampledGesture(page, atlas.frame, editor,
-        dragStart, dragEnd);
+        dragStart, dragEnd, { expectedViewport: viewportBeforeDrag });
+      const viewportAfterDrag = await canvasViewportEvidence(page, atlas.frame, editor);
+      for (const key of ['editorRoot', 'interactiveCanvas', 'interactiveCanvasFrameRect', 'atlasIframeContentClip']) {
+        for (const dimension of ['x', 'y', 'width', 'height']) {
+          assert.ok(Math.abs(viewportAfterDrag[key][dimension] - viewportBeforeDrag[key][dimension]) <= 0.5,
+            `Freeform layout ${key}.${dimension} must remain aligned during the measured object drag: ${JSON.stringify({ before: viewportBeforeDrag[key], after: viewportAfterDrag[key] })}.`);
+        }
+      }
+      assert.ok(Math.abs(viewportAfterDrag.liveAppState.scrollX - viewportBeforeDrag.liveAppState.scrollX) <= 0.5
+        && Math.abs(viewportAfterDrag.liveAppState.scrollY - viewportBeforeDrag.liveAppState.scrollY) <= 0.5
+        && Math.abs(viewportAfterDrag.liveAppState.zoom.value - viewportBeforeDrag.liveAppState.zoom.value) <= 0.000001,
+      `Canvas pan/zoom must stay fixed during the measured object drag: ${JSON.stringify({ before: viewportBeforeDrag.liveAppState, after: viewportAfterDrag.liveAppState })}.`);
       const afterDrag = await downloadScene(page, atlas);
       const dragged = afterDrag.data.elements.find((element) => element.id === first.id && !element.isDeleted);
-      assert.ok(dragged && (dragged.x !== first.x || dragged.y !== first.y), 'A real Excalidraw object must move through the pointer drag.');
+      const expectedScenePosition = { x: first.x + 28, y: first.y + 18 };
+      activeScenarioTrace.freeformPartial = { ...activeScenarioTrace.freeformPartial, stage: 'object-dragged',
+        objectDrag: { objectId: first.id, sceneFrom: { x: first.x, y: first.y },
+          sceneTo: dragged && { x: dragged.x, y: dragged.y }, sceneExpectedTo: expectedScenePosition,
+          sceneBytes: afterDrag.bytes.byteLength, sceneSha256: sha256(afterDrag.bytes),
+          viewportBefore: viewportBeforeDrag, viewportAfter: viewportAfterDrag } };
+      assert.ok(dragged && Math.abs(dragged.x - expectedScenePosition.x) <= 1
+        && Math.abs(dragged.y - expectedScenePosition.y) <= 1,
+      `The selected Excalidraw rectangle must move by the measured scene delta (+28,+18), independent of page/container layout: ${JSON.stringify({ id: first.id, before: { x: first.x, y: first.y }, expected: expectedScenePosition, actual: dragged && { x: dragged.x, y: dragged.y }, containerBefore: viewportBeforeDrag.liveAppState.containerBounds, containerAfter: viewportAfterDrag.liveAppState.containerBounds, canvasBoundsBefore: viewportBeforeDrag.interactiveCanvas, canvasBoundsAfter: viewportAfterDrag.interactiveCanvas })}.`);
 
       const canvasBounds = (await canvasViewportEvidence(page, atlas.frame, editor)).interactiveCanvas;
       const pan = await runSampledGesture(page, atlas.frame, editor,
         { x: canvasBounds.width - 50, y: canvasBounds.height - 60 },
         { x: canvasBounds.width - 170, y: canvasBounds.height - 110 }, { pan: true });
-      const panAppStateAfter = await readLiveCanvasAppState(atlas.frame);
+      const panAppStateAfterGesture = await readLiveCanvasAppState(atlas.frame);
       const panAppStateBefore = pan.viewportEvidence.liveAppState;
-      const panChanged = panAppStateAfter.scrollX !== panAppStateBefore.scrollX
-        || panAppStateAfter.scrollY !== panAppStateBefore.scrollY;
-      activeScenarioTrace.freeformPartial = {
-        activeSceneObjects: visibleElements.length,
-        viewportBeforeScene,
-        objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y } },
-        normalPan: { ...pan, stateSource: 'read-only ExcalidrawImperativeAPI.getAppState()',
-          scrollBefore: [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
-          scrollAfter: [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
-          changed: panChanged,
-          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; persisted scene assertions use exported bytes.' },
-      };
+      const panChanged = panAppStateAfterGesture.scrollX !== panAppStateBefore.scrollX
+        || panAppStateAfterGesture.scrollY !== panAppStateBefore.scrollY;
       assert.ok(panChanged,
-        `A real Space+drag must change the official live Excalidraw viewport scroll state; before=${JSON.stringify({ scrollX: panAppStateBefore.scrollX, scrollY: panAppStateBefore.scrollY })}, after=${JSON.stringify({ scrollX: panAppStateAfter.scrollX, scrollY: panAppStateAfter.scrollY })}, hitTests=${JSON.stringify(pan.hitTestEvidence)}, input=${JSON.stringify(pan.inputEvidence)}.`);
+        `A real Space+drag must change the official live Excalidraw viewport scroll state; before=${JSON.stringify({ scrollX: panAppStateBefore.scrollX, scrollY: panAppStateBefore.scrollY })}, after=${JSON.stringify({ scrollX: panAppStateAfterGesture.scrollX, scrollY: panAppStateAfterGesture.scrollY })}, hitTests=${JSON.stringify(pan.hitTestEvidence)}, input=${JSON.stringify(pan.inputEvidence)}.`);
       const afterPan = await downloadScene(page, atlas);
       assert.equal(afterPan.data.elements.filter((element) => !element.isDeleted).length, expectedObjects,
         'Pan and drag must preserve every benchmark scene object.');
+      await page.waitForTimeout(250);
+      const panAppStateAfter = await readLiveCanvasAppState(atlas.frame);
+      assert.ok(Math.abs(panAppStateAfter.scrollX - panAppStateAfterGesture.scrollX) <= 0.5
+        && Math.abs(panAppStateAfter.scrollY - panAppStateAfterGesture.scrollY) <= 0.5
+        && Math.abs(panAppStateAfter.zoom.value - panAppStateAfterGesture.zoom.value) <= 0.000001,
+      `Scene export and the viewport persistence debounce must preserve the actual pan state: ${JSON.stringify({ afterGesture: panAppStateAfterGesture, settled: panAppStateAfter })}.`);
+      const boardAfterPan = await downloadAtlasBoard(page, atlas);
+      const freeformView = onlyFreeformView(boardAfterPan.data);
+      const boardViewport = expectedBoardViewport(panAppStateAfter);
+      assertBoardViewport(boardAfterPan.data, freeformView.id, boardViewport,
+        'The Atlas Board export after Space+drag must persist the live Freeform viewport');
+      const viewportAfterBoardExport = await readLiveCanvasAppState(atlas.frame);
+      assert.ok(Math.abs(viewportAfterBoardExport.scrollX - panAppStateAfter.scrollX) <= 0.5
+        && Math.abs(viewportAfterBoardExport.scrollY - panAppStateAfter.scrollY) <= 0.5
+        && Math.abs(viewportAfterBoardExport.zoom.value - panAppStateAfter.zoom.value) <= 0.000001,
+      `Board export must not change the measured runtime viewport: ${JSON.stringify({ beforeExport: panAppStateAfter, afterExport: viewportAfterBoardExport })}.`);
+      activeScenarioTrace.freeformPartial = {
+        activeSceneObjects: visibleElements.length,
+        viewportBeforeScene,
+        objectPreselection: preselection,
+        objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y },
+          sceneExpectedTo: expectedScenePosition, sceneDelta: { x: dragged.x - first.x, y: dragged.y - first.y },
+          scenePointerFrom: dragStart, scenePointerTo: dragEnd,
+          viewportBefore: viewportBeforeDrag, viewportAfter: viewportAfterDrag,
+          containerBoundsBefore: viewportBeforeDrag.liveAppState.containerBounds,
+          containerBoundsAfter: viewportAfterDrag.liveAppState.containerBounds,
+          canvasBoundsBefore: viewportBeforeDrag.interactiveCanvas, canvasBoundsAfter: viewportAfterDrag.interactiveCanvas },
+        normalPan: { ...pan, stateSource: 'read-only ExcalidrawImperativeAPI.getAppState()',
+          scrollBefore: [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
+          scrollAfter: [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
+          persistedBoardViewport: boardViewport, boardViewId: freeformView.id,
+          boardExportBytes: boardAfterPan.bytes.byteLength, boardExportSha256: sha256(boardAfterPan.bytes),
+          changed: panChanged,
+          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; the Atlas Board view stores x/y/zoom and is checked against the live Excalidraw API.' },
+      };
 
       let commitEvidence = null;
       let notCheckedReasons = [...drag.notCheckedReasons, ...pan.notCheckedReasons];
@@ -1162,15 +1350,30 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         await durableDraft.waitFor({ state: 'visible', timeout: 30_000 });
         assert.equal(await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).count(), 0,
           'The prepared Canvas draft must wait for explicit Host review and approval; preparing must not commit automatically.');
-        const commitChain = await commitQ12SceneUntilCurrent(page, afterPan.bytes);
+        const commitChain = await commitQ12SceneUntilCurrent(page, afterPan.bytes, freeformView.id, boardViewport);
         const sceneProposal = commitChain.sceneProposal;
         assert.equal(sceneProposal.afterText, afterPan.text, 'The final explicitly approved Host proposal must contain the exact measured Excalidraw scene bytes.');
+        const boardProposal = commitChain.boardProposal;
+        assert.ok(boardProposal?.afterText, 'The final explicitly approved Host proposal must contain the measured Atlas Board viewport.');
+        const proposedBoard = JSON.parse(boardProposal.afterText);
+        assertBoardViewport(proposedBoard, freeformView.id, boardViewport,
+          'The final Host Commit proposal must preserve the measured Freeform viewport');
         const proposalSha256 = sha256(Buffer.from(sceneProposal.afterText, 'utf8'));
 
+        const boardBeforeReload = await downloadAtlasBoard(page, atlas);
+        assertBoardViewport(boardBeforeReload.data, freeformView.id, boardViewport,
+          'The committed Atlas Board export before reload must preserve the measured Freeform viewport');
+        assert.deepEqual(boardBeforeReload.data, proposedBoard,
+          'The Host committed Board document must equal the Board state exported before reload.');
         const exportedBeforeReload = await exportInventoryFromCurrentHost(page, unzipSync);
         await reopenWorkspace(page, workspaceId);
         const reloadedAtlas = await atlasFrame(page);
         await reloadedAtlas.locator.getByRole('tab', { name: /キャンバス/u }).last().click();
+        const boardAfterReload = await downloadAtlasBoard(page, reloadedAtlas);
+        assertBoardViewport(boardAfterReload.data, freeformView.id, boardViewport,
+          'The Atlas Board export after reload must preserve the measured Freeform viewport');
+        assert.deepEqual(boardAfterReload.data, boardBeforeReload.data,
+          'The exact committed Board document and Freeform viewport must survive reload.');
         const reloadedScene = await downloadScene(page, reloadedAtlas);
         assert.deepEqual(reloadedScene.bytes, Buffer.from(sceneProposal.afterText, 'utf8'),
           'The approved scene must survive an IndexedDB page reload byte for byte.');
@@ -1184,6 +1387,11 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
           draftPreparation: 'Atlas durable draft observed before explicit Host review and approval; no automatic Commit',
           proposedSceneSha256: proposalSha256,
           sceneBytes: Buffer.byteLength(sceneProposal.afterText, 'utf8'),
+          boardViewId: freeformView.id,
+          expectedRuntimeBoardViewport: boardViewport,
+          committedBoardSha256: sha256(boardBeforeReload.bytes),
+          reloadedBoardSha256: sha256(boardAfterReload.bytes),
+          boardViewportAndDocumentIdenticalAfterReload: true,
           beforeReload: { archiveBytes: exportedBeforeReload.archiveBytes, archiveSha256: exportedBeforeReload.archiveSha256,
             manifestBytes: exportedBeforeReload.manifestBytes, manifestSha256: exportedBeforeReload.manifestSha256,
             sourceRevision: exportedBeforeReload.manifest.sourceRevision,
@@ -1214,13 +1422,20 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       return {
         dataset, activeSceneObjects: visibleElements.length,
         viewportBeforeScene,
+        objectPreselection: preselection,
         objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y },
-          scenePointerFrom: dragStart, scenePointerTo: dragEnd, sceneZoom: initialAppState.zoom.value,
-          sceneScroll: [initialAppState.scrollX, initialAppState.scrollY], hitTarget: 'rectangle stroke near its left border' },
+          sceneExpectedTo: expectedScenePosition, sceneDelta: { x: dragged.x - first.x, y: dragged.y - first.y },
+          scenePointerFrom: dragStart, scenePointerTo: dragEnd, sceneZoom: viewportBeforeDrag.liveAppState.zoom.value,
+          sceneScroll: [viewportBeforeDrag.liveAppState.scrollX, viewportBeforeDrag.liveAppState.scrollY],
+          viewportBefore: viewportBeforeDrag, viewportAfter: viewportAfterDrag,
+          containerBoundsBefore: viewportBeforeDrag.liveAppState.containerBounds,
+          containerBoundsAfter: viewportAfterDrag.liveAppState.containerBounds,
+          hitTarget: 'selected rectangle filled center' },
         normalPan: { ...pan, stateSource: 'read-only ExcalidrawImperativeAPI.getAppState()',
           scrollBefore: [panAppStateBefore.scrollX, panAppStateBefore.scrollY],
           scrollAfter: [panAppStateAfter.scrollX, panAppStateAfter.scrollY],
-          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; persisted scene assertions use exported bytes.' },
+          persistedBoardViewport: boardViewport, boardViewId: freeformView.id,
+          serializedSceneViewportNote: 'The official local scene serializer omits transient viewport scroll; the Atlas Board view stores x/y/zoom and is checked against the live Excalidraw API.' },
         ...(commitEvidence ? { commitReloadManifestRevisionEquality: commitEvidence } : {}),
         notCheckedReasons,
         thresholds: { fpsP50AtLeast: 30, longTaskMs: 50, maximumConsecutive: 1 },
