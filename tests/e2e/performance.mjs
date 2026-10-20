@@ -398,6 +398,82 @@ async function positionCanvasWithinHostViewport(page, frame, editor) {
   ]);
 }
 
+async function waitForStableCancelTarget(page, atlas, cancelButton, { timeoutMs = 10_000 } = {}) {
+  const iframe = page.locator('section[aria-label="Atlas Plugin"] iframe');
+  const hostViewport = page.viewportSize();
+  assert.ok(hostViewport, 'The browser viewport must be available before targeting the actual Cancel button.');
+  const settleFrames = async () => Promise.all([
+    page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+    atlas.frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+  ]);
+  const exposeTargets = async () => {
+    await iframe.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+    await cancelButton.evaluate((button) => button.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }));
+    await settleFrames();
+  };
+  await exposeTargets();
+
+  const deadline = Date.now() + timeoutMs;
+  let previous = null;
+  let lastEvidence = null;
+  let consecutiveStableSamples = 0;
+  const geometryStable = (left, right) => {
+    const near = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.5;
+    for (const key of ['bounds', 'iframeBounds', 'iframeClip']) {
+      if (!left[key] || !right[key]) return false;
+      for (const dimension of ['x', 'y', 'width', 'height']) {
+        if (!near(left[key][dimension], right[key][dimension])) return false;
+      }
+    }
+    return near(left.hostScroll.x, right.hostScroll.x) && near(left.hostScroll.y, right.hostScroll.y)
+      && left.buttonEvidence.visible === right.buttonEvidence.visible
+      && left.buttonEvidence.enabled === right.buttonEvidence.enabled
+      && left.buttonEvidence.text === right.buttonEvidence.text
+      && left.buttonEvidence.centerHitsButton === right.buttonEvidence.centerHitsButton;
+  };
+  while (Date.now() < deadline) {
+    const [bounds, iframeBounds, iframeClip, hostScroll, buttonEvidence] = await Promise.all([
+      cancelButton.boundingBox(),
+      iframe.boundingBox(),
+      iframe.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x + element.clientLeft, y: rect.y + element.clientTop,
+          width: element.clientWidth, height: element.clientHeight };
+      }),
+      page.evaluate(() => ({ x: window.scrollX, y: window.scrollY })),
+      cancelButton.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        const target = document.elementFromPoint(point.x, point.y);
+        return { visible: Boolean(button.getClientRects().length && rect.width > 0 && rect.height > 0),
+          enabled: !button.disabled, text: button.textContent?.trim() ?? '',
+          frameRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          center: point, centerHitsButton: target === button || button.contains(target),
+          centerTarget: target instanceof Element ? { tagName: target.tagName, text: target.textContent?.trim().slice(0, 100) ?? '' } : null };
+      }),
+    ]);
+    lastEvidence = { bounds, iframeBounds, iframeClip, hostViewport, hostScroll, buttonEvidence };
+    const insideHostViewport = Boolean(bounds && bounds.x >= 0 && bounds.y >= 0
+      && bounds.x + bounds.width <= hostViewport.width && bounds.y + bounds.height <= hostViewport.height);
+    const insideIframeClip = Boolean(bounds && iframeClip && bounds.x >= iframeClip.x && bounds.y >= iframeClip.y
+      && bounds.x + bounds.width <= iframeClip.x + iframeClip.width
+      && bounds.y + bounds.height <= iframeClip.y + iframeClip.height);
+    const targetReady = Boolean(buttonEvidence.visible && buttonEvidence.enabled && buttonEvidence.centerHitsButton
+      && insideHostViewport && insideIframeClip);
+    if (targetReady && previous && geometryStable(previous, lastEvidence)) {
+      consecutiveStableSamples += 1;
+      if (consecutiveStableSamples >= 2) return lastEvidence;
+    } else {
+      consecutiveStableSamples = 0;
+    }
+    previous = lastEvidence;
+    if (!targetReady) await exposeTargets();
+    else await settleFrames();
+    await page.waitForTimeout(25);
+  }
+  assert.fail(`The actual Cancel button did not settle as a visible, enabled, unobscured target inside the Host viewport and Atlas iframe clip: ${JSON.stringify(lastEvidence)}.`);
+}
+
 function readExcalidrawAppStateFromPage() {
   const canvas = document.querySelector('canvas.excalidraw__canvas.interactive');
   if (!canvas) return null;
@@ -483,6 +559,65 @@ async function canvasViewportEvidence(page, frame, editor) {
     interactiveCanvasFrameRect: canvasFrameRect, atlasIframe: iframeBounds, atlasIframeContentClip: iframeClip, liveAppState };
 }
 
+function viewportEvidenceStable(previous, current) {
+  const near = (left, right) => Math.abs(left - right) <= 0.5;
+  for (const key of ['editorRoot', 'interactiveCanvas', 'interactiveCanvasFrameRect', 'atlasIframe', 'atlasIframeContentClip']) {
+    for (const dimension of ['x', 'y', 'width', 'height']) {
+      if (!near(previous[key][dimension], current[key][dimension])) return false;
+    }
+  }
+  for (const key of ['scrollX', 'scrollY']) {
+    if (!near(previous.hostScroll[key], current.hostScroll[key])) return false;
+  }
+  const previousApp = previous.liveAppState;
+  const currentApp = current.liveAppState;
+  return near(previousApp.scrollX, currentApp.scrollX)
+    && near(previousApp.scrollY, currentApp.scrollY)
+    && near(previousApp.zoom.value, currentApp.zoom.value)
+    && near(previousApp.offsetLeft, currentApp.offsetLeft)
+    && near(previousApp.offsetTop, currentApp.offsetTop)
+    && near(previousApp.width, currentApp.width)
+    && near(previousApp.height, currentApp.height)
+    && ['x', 'y', 'width', 'height'].every((dimension) => near(previousApp.containerBounds[dimension], currentApp.containerBounds[dimension]))
+    && JSON.stringify(previousApp.selectedElementIds) === JSON.stringify(currentApp.selectedElementIds)
+    && JSON.stringify(previous.hostStatuses) === JSON.stringify(current.hostStatuses);
+}
+
+async function waitForStableCanvasViewport(page, frame, editor,
+  { selectedElementId = null, timeoutMs = 20_000, quietMs = 1_200 } = {}) {
+  const readEvidence = async () => {
+    const [viewport, hostStatuses] = await Promise.all([
+      canvasViewportEvidence(page, frame, editor),
+      page.locator('[role="status"]').evaluateAll((items) => items
+        .filter((item) => item.getClientRects().length > 0)
+        .map((item) => item.textContent?.trim().replace(/\s+/gu, ' ').slice(0, 160) ?? '').filter(Boolean).slice(0, 12)),
+    ]);
+    return { ...viewport, hostStatuses };
+  };
+  const deadline = Date.now() + timeoutMs;
+  let previous = null;
+  let lastEvidence = null;
+  let stableSince = null;
+  while (Date.now() < deadline) {
+    lastEvidence = await readEvidence();
+    const selectionReady = selectedElementId === null
+      || lastEvidence.liveAppState.selectedElementIds.includes(selectedElementId);
+    if (selectionReady && previous && viewportEvidenceStable(previous, lastEvidence)) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= quietMs) return lastEvidence;
+    } else {
+      stableSince = null;
+    }
+    previous = lastEvidence;
+    await Promise.all([
+      page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+      frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+    ]);
+    await page.waitForTimeout(25);
+  }
+  assert.fail(`Host status, Canvas root geometry and official Excalidraw API viewport did not settle${selectedElementId ? ` with ${selectedElementId} selected` : ''}: ${JSON.stringify(lastEvidence)}.`);
+}
+
 async function selectCanvasObjectWithPhysicalInput(page, frame, viewport, point, expectedElementId) {
   const pagePoint = { x: viewport.interactiveCanvas.x + point.x, y: viewport.interactiveCanvas.y + point.y };
   const framePoint = { x: viewport.interactiveCanvasFrameRect.x + point.x,
@@ -537,8 +672,8 @@ async function selectCanvasObjectWithPhysicalInput(page, frame, viewport, point,
   return { pagePoint, framePoint, hitTest, input, selectedElementId: expectedElementId, liveAppState };
 }
 
-async function runSampledGesture(page, frame, editor, start, end, { pan = false, expectedViewport = null } = {}) {
-  await positionCanvasWithinHostViewport(page, frame, editor);
+async function runSampledGesture(page, frame, editor, start, end, { pan = false, expectedViewport = null, prepareViewport = true } = {}) {
+  if (prepareViewport) await positionCanvasWithinHostViewport(page, frame, editor);
   const viewport = await canvasViewportEvidence(page, frame, editor);
   if (expectedViewport) {
     const near = (left, right) => Math.abs(left - right) <= 0.5;
@@ -1097,19 +1232,8 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const priorRequests = before.filter((item) => item.kind === 'request' && item.origin === atlas.origin && item.operation === 'layout-force').length;
       const cancelClickCount = before.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).length;
       const cancelButton = atlas.locator.getByRole('button', { name: 'レイアウトを中止', exact: true });
-      await cancelButton.scrollIntoViewIfNeeded();
-      assert.equal(await cancelButton.isVisible(), true, 'The real Cancel button must be visible before starting Force.');
-      assert.equal(await cancelButton.isEnabled(), true, 'The real Cancel button must be enabled before starting Force.');
-      const viewport = page.viewportSize();
-      const assertCancelButtonInViewport = async () => {
-        const bounds = await cancelButton.boundingBox();
-        assert.ok(bounds, 'The actual Cancel button must have a visible pointer target.');
-        assert.ok(viewport && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width
-          && bounds.y + bounds.height <= viewport.height,
-        `The actual Cancel button must be inside the browser viewport: ${JSON.stringify({ bounds, viewport })}.`);
-        return bounds;
-      };
-      const cancelBounds = await assertCancelButtonInViewport();
+      const cancelReadyBeforeForce = await waitForStableCancelTarget(page, atlas, cancelButton);
+      activeScenarioTrace.cancelReadiness = { beforeForce: cancelReadyBeforeForce };
       await atlas.locator.getByRole('button', { name: '力学レイアウト', exact: true }).click();
       const requestHandle = await page.waitForFunction(({ origin, count }) => (window.__atlasPerfStore ?? [])
         .filter((item) => item.kind === 'request' && item.origin === origin && item.operation === 'layout-force').length > count
@@ -1121,8 +1245,13 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.ok(requested?.workerId, 'The real Layout Worker must start the in-flight Force calculation.');
       assert.equal(requested.nodeCount, 1_000, 'Cancellation must be measured on the deterministic 1k-node Force workload.');
       assert.equal(requested.edgeCount, 2_000, 'Cancellation must use the same 2k-edge Force workload.');
+      const cancelReadyAfterRequest = await waitForStableCancelTarget(page, atlas, cancelButton);
+      activeScenarioTrace.cancelReadiness.afterRequest = cancelReadyAfterRequest;
+      assert.equal(cancelReadyAfterRequest.buttonEvidence.text, 'レイアウトを中止',
+        'The fresh post-request physical target must still be the actual Cancel control.');
       const automationClickStartedAt = Date.now();
-      await page.mouse.click(cancelBounds.x + cancelBounds.width / 2, cancelBounds.y + cancelBounds.height / 2);
+      await page.mouse.click(cancelReadyAfterRequest.bounds.x + cancelReadyAfterRequest.bounds.width / 2,
+        cancelReadyAfterRequest.bounds.y + cancelReadyAfterRequest.bounds.height / 2);
       const clickHandle = await page.waitForFunction(({ origin, count }) => {
         const clicks = (window.__atlasPerfStore ?? []).filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === origin);
         return clicks.length > count ? clicks.at(-1) : false;
@@ -1246,7 +1375,7 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       await positionCanvasWithinHostViewport(page, atlas.frame, editor);
       const initialScene = await downloadScene(page, atlas);
       await positionCanvasWithinHostViewport(page, atlas.frame, editor);
-      const viewportBeforeScene = await canvasViewportEvidence(page, atlas.frame, editor);
+      const viewportBeforeScene = await waitForStableCanvasViewport(page, atlas.frame, editor);
       const visibleElements = initialScene.data.elements.filter((element) => !element.isDeleted);
       assert.equal(visibleElements.length, expectedObjects, 'The benchmark must use the real Excalidraw scene, not Atlas cards.');
       const first = visibleElements[0];
@@ -1261,14 +1390,13 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         selectionPoint, first.id);
       activeScenarioTrace.freeformPartial = { ...activeScenarioTrace.freeformPartial, stage: 'object-selected',
         viewportBeforeScene, objectPreselection: preselection };
-      await positionCanvasWithinHostViewport(page, atlas.frame, editor);
-      const viewportBeforeDrag = await canvasViewportEvidence(page, atlas.frame, editor);
+      const viewportBeforeDrag = await waitForStableCanvasViewport(page, atlas.frame, editor, { selectedElementId: first.id });
       assert.ok(viewportBeforeDrag.liveAppState.selectedElementIds.includes(first.id),
         `The exact first rectangle ID must remain selected before the measured drag: ${JSON.stringify(viewportBeforeDrag.liveAppState.selectedElementIds)}.`);
       const dragStart = scenePointToCanvasViewportPoint(objectCenter, viewportBeforeDrag.liveAppState);
       const dragEnd = scenePointToCanvasViewportPoint({ x: objectCenter.x + 28, y: objectCenter.y + 18 }, viewportBeforeDrag.liveAppState);
       const drag = await runSampledGesture(page, atlas.frame, editor,
-        dragStart, dragEnd, { expectedViewport: viewportBeforeDrag });
+        dragStart, dragEnd, { expectedViewport: viewportBeforeDrag, prepareViewport: false });
       const viewportAfterDrag = await canvasViewportEvidence(page, atlas.frame, editor);
       for (const key of ['editorRoot', 'interactiveCanvas', 'interactiveCanvasFrameRect', 'atlasIframeContentClip']) {
         for (const dimension of ['x', 'y', 'width', 'height']) {
