@@ -17,7 +17,20 @@ export type CanvasAssetsCopyResult = Readonly<{
   files: readonly CanvasAssetRecord[];
 }>;
 
+export type ExcalidrawWorkerVitePlugin = Readonly<{
+  name: string;
+  enforce: "pre";
+  resolveId(source: string, importer?: string): string | null;
+  load(id: string): string | null;
+}>;
+
 /** Copy the pinned Excalidraw fonts and a license/hash manifest into `<outputDirectory>/fonts`. */
 export declare function copyCanvasAssets(
   outputDirectory: string,
 ): Promise<CanvasAssetsCopyResult>;
+
+/**
+ * Return a Node-only Vite plugin that routes Excalidraw 0.18.1's subset worker
+ * through Vite's worker pipeline while preserving the official worker module.
+ */
+export declare function excalidrawWorkerVitePlugin(): ExcalidrawWorkerVitePlugin;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, relative, resolve, sep } from "node:path";
@@ -9,6 +10,60 @@ const packageDirectory = resolve(scriptDirectory, "..");
 const packageJson = JSON.parse(
   await readFile(resolve(packageDirectory, "package.json"), "utf8"),
 );
+const WORKER_VIRTUAL_PREFIX = "\0@scriptorium-atlas/canvas/excalidraw-subset-worker:";
+
+/**
+ * Keep Excalidraw's production subset worker in Vite's dedicated worker graph.
+ * Excalidraw 0.18.1 exports a URL created from import.meta.url, which prevents
+ * Vite from recognizing the official worker entry without this narrow rewrite.
+ */
+export function excalidrawWorkerVitePlugin() {
+  const require = createRequire(import.meta.url);
+  const excalidrawEntry = require.resolve("@excalidraw/excalidraw");
+  const productionDirectory = dirname(excalidrawEntry);
+  const excalidrawPackagePath = resolve(productionDirectory, "../../package.json");
+  const excalidrawPackage = JSON.parse(readFileSync(excalidrawPackagePath, "utf8"));
+  const expectedVersion = packageJson.dependencies?.["@excalidraw/excalidraw"];
+  if (excalidrawPackage.version !== expectedVersion) {
+    throw new Error(
+      `Canvas expects @excalidraw/excalidraw@${expectedVersion}, found ${excalidrawPackage.version}.`,
+    );
+  }
+
+  const importerPath = resolve(productionDirectory, "chunk-K2UTITRG.js");
+  const workerPath = resolve(productionDirectory, "subset-worker.chunk.js");
+  const importerText = readFileSync(importerPath, "utf8");
+  if (!importerText.includes('import("./subset-worker.chunk.js")')) {
+    throw new Error(
+      `The pinned Excalidraw subset-worker import was not found in ${importerPath}.`,
+    );
+  }
+  const workerModuleId = `${WORKER_VIRTUAL_PREFIX}${workerPath}`;
+  const viteWorkerUrlSpecifier = `${workerPath}?worker&url`;
+
+  return {
+    name: "@scriptorium-atlas/canvas/excalidraw-worker",
+    enforce: "pre",
+    resolveId(source, importer) {
+      if (
+        source !== "./subset-worker.chunk.js" ||
+        !importer ||
+        importer.includes("?") ||
+        resolve(importer) !== importerPath
+      ) {
+        return null;
+      }
+      return workerModuleId;
+    },
+    load(id) {
+      if (id !== workerModuleId) return null;
+      return [
+        `import workerUrl from ${JSON.stringify(viteWorkerUrlSpecifier)};`,
+        "export const WorkerUrl = new URL(workerUrl, import.meta.url);",
+      ].join("\n");
+    },
+  };
+}
 
 const FONT_LICENSES = Object.freeze({
   Assistant: {

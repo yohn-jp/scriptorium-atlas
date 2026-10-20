@@ -1,10 +1,35 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { copyCanvasAssets } from "@scriptorium-atlas/canvas/assets";
+import { copyCanvasAssets, excalidrawWorkerVitePlugin } from "@scriptorium-atlas/canvas/assets";
+
+test("Vite plugin rewrites only Excalidraw's pinned unqueried production subset worker import", () => {
+  const require = createRequire(import.meta.url);
+  const productionDirectory = dirname(require.resolve("@excalidraw/excalidraw"));
+  const importer = resolve(productionDirectory, "chunk-K2UTITRG.js");
+  const worker = resolve(productionDirectory, "subset-worker.chunk.js");
+  const plugin = excalidrawWorkerVitePlugin();
+
+  assert.equal(plugin.name, "@scriptorium-atlas/canvas/excalidraw-worker");
+  assert.equal(plugin.enforce, "pre");
+  const virtualId = plugin.resolveId("./subset-worker.chunk.js", importer);
+  assert.match(virtualId ?? "", /^\0@scriptorium-atlas\/canvas\/excalidraw-subset-worker:/u);
+  assert.equal(plugin.resolveId("./subset-worker.chunk.js?raw", importer), null);
+  assert.equal(plugin.resolveId("./subset-worker.chunk.js", `${importer}?worker`), null);
+  assert.equal(plugin.resolveId("./subset-shared.chunk.js", importer), null);
+  assert.equal(plugin.resolveId("./subset-worker.chunk.js", resolve(productionDirectory, "index.js")), null);
+  assert.equal(plugin.resolveId("./subset-worker.chunk.js", "/other-package/chunk-K2UTITRG.js"), null);
+
+  const virtualModule = plugin.load(virtualId);
+  assert.ok(virtualModule);
+  assert.ok(virtualModule.includes(`${worker}?worker&url`));
+  assert.ok(virtualModule.includes("export const WorkerUrl = new URL(workerUrl, import.meta.url);"));
+  assert.equal(plugin.load("\0unrelated-module"), null);
+});
 
 test("Node asset helper copies pinned fonts and emits reproducible license/hash metadata", async () => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "atlas-canvas-assets-"));
