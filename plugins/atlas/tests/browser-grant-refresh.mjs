@@ -189,10 +189,13 @@ async function run() {
     assert.equal(await boardName.inputValue(), nextName, 'Undo/redo after refresh must retain the Board-name draft.');
 
     const trace = await atlasFrame.evaluate(() => globalThis.__atlasSnapshotTrace);
-    assert.ok(trace.length >= 5, `Both inventory traversals should have paged: ${JSON.stringify(trace)}`);
+    assert.ok(trace.length >= 4, `Both inventory traversals should have paged: ${JSON.stringify(trace)}`);
     assert.equal(trace[0].limit, 500);
     assert.ok(trace[1].cursor, 'The delayed initial request should carry an opaque cursor.');
     assert.equal(trace[2].cursor, null, 'The notified refresh must restart from page one.');
+    assert.equal(trace[2].limit, 500, 'The notified refresh should keep the snapshot page limit.');
+    assert.ok(trace[3].cursor, 'The refreshed inventory should continue with its own opaque cursor.');
+    assert.equal(trace[3].limit, 500, 'The refreshed cursor page should keep the snapshot page limit.');
     assert.deepEqual(pageErrors, [], 'Grant refresh must not cause uncaught browser errors.');
     report.snapshotTrace = trace.map((entry) => ({ cursor: entry.cursor === null ? null : '<opaque>', limit: entry.limit }));
     report.cases.push('grant-notification-restarts-at-page-one-after-cursor-scope-change');

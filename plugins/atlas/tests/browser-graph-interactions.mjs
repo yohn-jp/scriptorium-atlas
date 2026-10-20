@@ -108,6 +108,75 @@ async function downloadBoard(page, atlas) {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
+async function installGraphInputTrace(frame) {
+  await frame.evaluate(() => {
+    const trace = [];
+    globalThis.__atlasGraphInputTrace = trace;
+    globalThis.__atlasGraphInputStage = 'setup';
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      document.addEventListener(type, (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target?.closest('.react-flow, .atlas-inspector')) return;
+        const node = target.closest('.react-flow__node');
+        const action = target.closest('button');
+        trace.push({
+          stage: globalThis.__atlasGraphInputStage,
+          type,
+          trusted: event.isTrusted,
+          targetTag: target.tagName,
+          targetClass: typeof target.className === 'string' ? target.className : '',
+          targetText: (target.getAttribute('aria-label') ?? target.textContent ?? '').trim().slice(0, 80),
+          actionText: (action?.getAttribute('aria-label') ?? action?.textContent ?? '').trim().slice(0, 80),
+          nodeId: node?.getAttribute('data-id') ?? null,
+          client: { x: event.clientX, y: event.clientY },
+        });
+        if (trace.length > 80) trace.shift();
+      }, true);
+    }
+  });
+}
+
+async function setGraphInputStage(frame, stage) {
+  await frame.evaluate((nextStage) => { globalThis.__atlasGraphInputStage = nextStage; }, stage);
+}
+
+async function captureGraphRevealDiagnostic(frame, nodeId) {
+  return frame.evaluate((targetNodeId) => {
+    const rect = (element) => {
+      if (!element) return null;
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    const flow = document.querySelector('.atlas-graph-flow');
+    const reactFlow = document.querySelector('.react-flow');
+    const viewport = document.querySelector('.react-flow__viewport');
+    const target = [...document.querySelectorAll('.react-flow__node')].find((element) => element.getAttribute('data-id') === targetNodeId);
+    const selectedNodes = [...document.querySelectorAll('.react-flow__node.selected')];
+    return {
+      targetNodeId,
+      analysis: [...document.querySelectorAll('.atlas-analysis')].map((element) => element.innerText),
+      inspectorText: document.querySelector('.atlas-inspector')?.innerText ?? null,
+      selectedNodeIds: selectedNodes.map((element) => element.getAttribute('data-id')),
+      flowNodeIds: [...document.querySelectorAll('.react-flow__node')].map((element) => element.getAttribute('data-id')),
+      targetNode: target ? {
+        text: target.innerText,
+        className: target.className,
+        bounds: rect(target),
+        visibility: getComputedStyle(target).visibility,
+        transform: target.style.transform,
+      } : null,
+      camera: {
+        flowBounds: rect(flow),
+        reactFlowBounds: rect(reactFlow),
+        viewportBounds: rect(viewport),
+        viewportTransform: viewport?.style.transform ?? null,
+        viewportComputedTransform: viewport ? getComputedStyle(viewport).transform : null,
+      },
+      trustedPointerTargets: [...(globalThis.__atlasGraphInputTrace ?? [])],
+    };
+  }, nodeId);
+}
+
 async function createStoryEntity(page, story, { name, alias, tag }) {
   const create = story.locator('article.card').filter({ has: story.getByRole('heading', { name: '作成', exact: true }) });
   await create.getByLabel('種類').selectOption('character');
@@ -265,9 +334,38 @@ async function run() {
       await atlas.getByRole('button', { name: buttonName }).click();
       await atlas.locator('.atlas-analysis').filter({ hasText: `${count} 件の近傍を表示しました` }).waitFor({ state: 'visible' });
     }
-    await graphNodeTwo.click();
-    await atlas.getByRole('button', { name: '出力方向 2段' }).click();
-    await atlas.locator('.atlas-analysis').filter({ hasText: '1 件の近傍を表示しました' }).waitFor({ state: 'visible' });
+    const graphFrame = page.frames().find((frame) => frame.url().includes('/frame.html?plugin=atlas'));
+    assert.ok(graphFrame, 'The Atlas graph frame should be available for bounded reveal diagnostics.');
+    await installGraphInputTrace(graphFrame);
+    report.graphRevealDiagnostic = { targetNodeId: secondNode.id };
+    report.graphRevealDiagnostic.beforeNodeClick = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+    await setGraphInputStage(graphFrame, 'graph-node-two-click');
+    try {
+      await graphNodeTwo.click();
+    } catch (error) {
+      report.graphRevealDiagnostic.nodeClickError = error instanceof Error ? error.message : String(error);
+      report.graphRevealDiagnostic.afterNodeClickError = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+      throw error;
+    }
+    report.graphRevealDiagnostic.afterNodeClick = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+    await setGraphInputStage(graphFrame, 'neighbor-button-click');
+    try {
+      await atlas.getByRole('button', { name: '出力方向 2段' }).click();
+    } catch (error) {
+      report.graphRevealDiagnostic.neighborButtonClickError = error instanceof Error ? error.message : String(error);
+      report.graphRevealDiagnostic.afterNeighborButtonClickError = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+      throw error;
+    }
+    report.graphRevealDiagnostic.afterNeighborButtonClick = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+    await setGraphInputStage(graphFrame, 'neighbor-status-wait');
+    try {
+      await atlas.locator('.atlas-analysis').filter({ hasText: '1 件の近傍を表示しました' }).waitFor({ state: 'visible' });
+    } catch (error) {
+      report.graphRevealDiagnostic.statusWaitError = error instanceof Error ? error.message : String(error);
+      report.graphRevealDiagnostic.afterStatusWaitError = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+      throw error;
+    }
+    report.graphRevealDiagnostic.afterStatusWait = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
     await atlas.locator('.atlas-flow-preview').filter({ hasText: thirdName }).waitFor({ state: 'visible' });
     report.cases.push('provider-neighbor-focus-reveals-unboarded-provider-node');
     await atlas.getByRole('button', { name: '連結成分をグループ化' }).click();
