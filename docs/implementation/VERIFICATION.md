@@ -62,7 +62,7 @@ These statuses remain provisional until all affected checks run on the final HEA
 | Q09 | NOT_CHECKED | Intermediate drawing/Card/scene I/O passed; final full roundtrip matrix pending |
 | Q10 | NOT_CHECKED | Final malformed source/path/grant/identity rejection matrix |
 | Q11 | NOT_CHECKED | Final transport and cross-Plugin fault reruns |
-| Q12 | NOT_CHECKED | Product cold visibility, query/layout, Canvas frame time, heap and lifecycle budgets |
+| Q12 | FAIL | Serialized candidates `5a8ffff` and `62b80c2` failed. Cursor recovery, snapshot sizing, cancellation and Graph no-op rendering were corrected; combined Canvas physical drag still fails. Bounded diagnostics are not a full performance pass; final serialized budgets remain pending. |
 | Q13 | NOT_CHECKED | Complete IME, keyboard alternatives, focus, theme and 390px runs |
 | Q14 | NOT_CHECKED | Intermediate closure and packed browser/Node consumer passed; final runs pending |
 | Q15 | NOT_CHECKED | Final HEAD, completed F/Q evidence, published implementation PR readiness |
