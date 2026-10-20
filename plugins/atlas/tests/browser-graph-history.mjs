@@ -13,7 +13,8 @@ const requireFromHost = createRequire(resolve(hostRoot, 'package.json'));
 const { chromium } = requireFromHost('@playwright/test');
 const serverScript = resolve(hostRoot, 'apps/standalone/scripts/serve.mjs');
 const browserPath = process.env.ATLAS_E2E_CHROMIUM;
-const report = { artifactRoot: resolve(hostRoot, 'dist/atlas'), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, cases: [], browser: null };
+const profile = process.env.ATLAS_PROFILE ?? 'atlas';
+const report = { artifactRoot: resolve(hostRoot, `dist/${profile}`), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, profile, cases: [], browser: null };
 
 async function reservePorts() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -103,7 +104,7 @@ async function downloadBoard(page, atlas) {
 async function run() {
   const basePort = await reservePorts();
   const baseUrl = `http://127.0.0.1:${basePort}`;
-  const server = spawn(process.execPath, [serverScript, 'atlas'], {
+  const server = spawn(process.execPath, [serverScript, profile], {
     cwd: hostRoot,
     env: { ...process.env, ATLAS_HOST_PORT: String(basePort), ATLAS_PLUGIN_PORT: String(basePort + 1), ATLAS_STORY_PORT: String(basePort + 2) },
     stdio: 'ignore',
