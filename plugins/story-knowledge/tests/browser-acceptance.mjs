@@ -2,14 +2,22 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-const HOST_ROOT = process.env.ATLAS_HOST_ROOT ?? "/home/sophia/src/scriptorium-atlas-host";
-const HOST_PORT = resolve(HOST_ROOT, "apps/standalone/scripts/serve.mjs");
+const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "../../..");
+const DEFAULT_HOST_ROOT = existsSync(resolve(REPOSITORY_ROOT, "apps/standalone/scripts/serve.mjs"))
+  ? REPOSITORY_ROOT
+  : resolve(REPOSITORY_ROOT, "../scriptorium-atlas-host");
+const HOST_ROOT = process.env.ATLAS_HOST_ROOT ?? DEFAULT_HOST_ROOT;
+const HOST_SERVE_SCRIPT = resolve(HOST_ROOT, "apps/standalone/scripts/serve.mjs");
 const PROFILE_ROOT = resolve(HOST_ROOT, "dist/story");
-const BROWSER_PATH = process.env.ATLAS_E2E_CHROMIUM ?? "/nix/store/ini1ifgvcsvw48x4mxawrv9jvbdwn70p-chromium-155.0.8059.79/bin/chromium";
+const BROWSER_PATH = process.env.ATLAS_E2E_CHROMIUM;
 const { chromium } = createRequire(resolve(HOST_ROOT, "package.json"))("@playwright/test");
 
 const CREATE_TYPES = [
@@ -94,6 +102,10 @@ function createCard(story) {
   return story.locator("article.card").filter({ has: story.getByRole("heading", { name: "作成", exact: true }) });
 }
 
+function deleteCard(story) {
+  return story.locator("article.card").filter({ has: story.getByRole("heading", { name: "削除", exact: true }) });
+}
+
 function preview(story) {
   return story.locator('section[aria-label="変更案プレビュー"]');
 }
@@ -154,6 +166,7 @@ async function createEntity(page, story, { type, name, volumeName, chapterName, 
   const paths = await changePreview.locator("tbody tr td:first-child").allTextContents();
   assert.ok(paths.length > 0, `${type} preview must contain at least one source write.`);
   if (type === "scene") assert.equal(paths.length, 2, "Scene creation must preview both the scene YAML and its manuscript.");
+  assert.equal(paths.some((path) => path.endsWith(".md.md")), false, "Manuscript paths must have one Markdown extension.");
   await changePreview.getByRole("button", { name: "HostのReviewへ変更案を提出" }).click();
   await story.getByRole("status").filter({ hasText: "HostのReviewへ変更案を提出しました" }).waitFor({ state: "visible" });
   await hostCommit(page, story, name);
@@ -231,7 +244,7 @@ async function runAcceptance({ browser, baseUrl }) {
 
     await createEntity(page, story, { type: "character", name: names.character });
     evidence.createdTypes.push("character");
-    const beforeReload = await waitForEntity(story, names.character).innerText();
+    const beforeReload = await (await waitForEntity(story, names.character)).innerText();
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByLabel("開く").waitFor();
     await page.getByLabel("開く").selectOption(evidence.workspaceId);
@@ -272,11 +285,11 @@ async function runAcceptance({ browser, baseUrl }) {
     const editedName = `${names.character} 改訂`;
     await characterDetail.getByLabel("表示名").fill(editedName);
     await characterDetail.getByRole("button", { name: "編集案をプレビュー" }).click();
-    await submitPreview(page, reloadedStory, editedName);
+    await submitPreview(page, reloadedStory, "を編集");
     await waitForEntity(reloadedStory, editedName);
 
     const locationDetail = await chooseEntity(reloadedStory, names.location);
-    await locationDetail.getByRole("button", { name: "削除案を確認" }).click();
+    await deleteCard(reloadedStory).getByRole("button", { name: "削除案を確認" }).click();
     await preview(reloadedStory).waitFor({ state: "visible" });
     await submitPreview(page, reloadedStory, names.location);
     await reloadedStory.getByRole("option").filter({ hasText: names.location }).first().waitFor({ state: "detached" });
@@ -286,7 +299,7 @@ async function runAcceptance({ browser, baseUrl }) {
       evidence: { editedName, deletedEntity: names.location },
     });
 
-    const sourceDetail = await chooseEntity(reloadedStory, editedName);
+    await chooseEntity(reloadedStory, editedName);
     const relationCard = reloadedStory.locator("article.card").filter({ has: reloadedStory.getByRole("heading", { name: "関連する項目", exact: true }) });
     const targetSelect = relationCard.getByLabel("Target");
     const targetValue = await targetSelect.locator("option").filter({ hasText: names.target }).getAttribute("value");
@@ -303,11 +316,14 @@ async function runAcceptance({ browser, baseUrl }) {
     await editForm.getByLabel("Kind").fill("appears");
     await editForm.getByLabel("Note").fill("編集後の関係ノート");
     await editForm.getByRole("button", { name: "関連編集案を作成" }).click();
+    const relationEditPreview = preview(reloadedStory);
+    await relationEditPreview.locator("details summary").first().click();
+    await relationEditPreview.getByText("編集後の関係ノート", { exact: true }).waitFor({ state: "visible" });
     await submitPreview(page, reloadedStory, "関連を編集");
-    await relationCard.locator(".relation").filter({ hasText: "appears" }).filter({ hasText: "編集後の関係ノート" }).waitFor({ state: "visible" });
+    await relationCard.locator(".relation").filter({ hasText: "appears" }).waitFor({ state: "visible" });
 
     const targetDetail = await chooseEntity(reloadedStory, names.target);
-    await targetDetail.getByRole("button", { name: "削除案を確認" }).click();
+    await deleteCard(reloadedStory).getByRole("button", { name: "削除案を確認" }).click();
     const incomingAlert = reloadedStory.getByRole("alert").filter({ hasText: "Incoming references must be removed explicitly" });
     await incomingAlert.waitFor({ state: "visible" });
     assert.ok((await incomingAlert.innerText()).includes("→"), "Delete protection must identify the incoming reference.");
@@ -384,7 +400,7 @@ async function main() {
   await stat(resolve(PROFILE_ROOT, "index.html"));
   const basePort = await reserveBasePort();
   const baseUrl = `http://127.0.0.1:${basePort}`;
-  const server = spawn(process.execPath, [HOST_PORT, "story"], {
+  const server = spawn(process.execPath, [HOST_SERVE_SCRIPT, "story"], {
     cwd: HOST_ROOT,
     env: { ...process.env, ATLAS_HOST_PORT: String(basePort) },
     stdio: "ignore",
@@ -393,13 +409,13 @@ async function main() {
   let report;
   try {
     await waitForServer(server, baseUrl);
-    browser = await chromium.launch({ headless: true, executablePath: BROWSER_PATH });
+    browser = await chromium.launch({ headless: true, ...(BROWSER_PATH ? { executablePath: BROWSER_PATH } : {}) });
     const evidence = await runAcceptance({ browser, baseUrl });
     report = {
       schemaVersion: "atlas.story-ui-browser-acceptance/v1",
       scope: "Story-only built Host artifact; public Japanese UI and Host author/commit workflow only.",
       artifact: PROFILE_ROOT,
-      browser: { name: "Chromium", version: browser.version(), executablePath: BROWSER_PATH },
+      browser: { name: "Chromium", version: browser.version(), executablePath: BROWSER_PATH ?? "Playwright-managed Chromium" },
       baseUrl,
       ...evidence,
       status: "PASS",

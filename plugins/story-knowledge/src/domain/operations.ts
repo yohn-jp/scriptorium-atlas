@@ -201,7 +201,7 @@ export function planCreateStoryEntity(index: StoryIndex, input: CreateStoryInput
     const volume = parentEntity(index, volumeId, "volume");
     const path = defaultStoryPath("scene", id, { volumeId: volume.id, chapterId: chapter.id });
     const manuscriptId = createStoryId("manuscript");
-    const manuscriptPath = defaultStoryPath("manuscript", `${id}.md`);
+    const manuscriptPath = defaultStoryPath("manuscript", id);
     if (index.files.has(path) || index.files.has(manuscriptPath)) {
       throw new StoryEditError("SOURCE_PATH_EXISTS", "A source file for this scene already exists.", [path, manuscriptPath]);
     }
@@ -221,7 +221,7 @@ export function planCreateStoryEntity(index: StoryIndex, input: CreateStoryInput
     reads.set(path, null);
     writes.set(path, serializeYamlRecord({ ...sourceRecord, order: index.entities.filter((entity) => entity.type === "volume").length }));
   } else if (input.type === "manuscript") {
-    const path = defaultStoryPath("manuscript", `${id}.md`);
+    const path = defaultStoryPath("manuscript", id);
     if (index.files.has(path)) throw new StoryEditError("SOURCE_PATH_EXISTS", `Source path '${path}' already exists.`, [path]);
     reads.set(path, null);
     writes.set(path, markdownContent(id, input.name, input.manuscriptBody ?? "", copiedFields));

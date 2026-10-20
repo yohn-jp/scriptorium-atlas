@@ -220,10 +220,17 @@ describe("Story index and source-safe operations", () => {
     const sceneFile = proposal.writes.find((write) => write.path.includes("/scenes/"));
     const manuscript = proposal.writes.find((write) => write.path.startsWith("manuscript/"));
     expect(sceneFile?.content).toContain("chapter: ch-1");
-    expect(sceneFile?.content).toContain("manuscript: manuscript/");
+    expect(sceneFile?.content).toContain(`manuscript: ${manuscript?.path}`);
+    expect(manuscript?.path).toMatch(/^manuscript\/.+\.md$/u);
+    expect(manuscript?.path).not.toMatch(/\.md\.md$/u);
     expect(manuscript?.content).toContain("本文\n\n");
     expect(proposal.reads.some((read) => read.path.endsWith("chapter.yaml"))).toBe(true);
     expect(proposal.reads.some((read) => read.revision === null)).toBe(true);
+
+    const standalone = planCreateStoryEntity(index, { type: "manuscript", name: "独立原稿", manuscriptBody: "本文\n" });
+    const standaloneManuscript = standalone.writes[0];
+    expect(standaloneManuscript?.path).toMatch(/^manuscript\/.+\.md$/u);
+    expect(standaloneManuscript?.path).not.toMatch(/\.md\.md$/u);
   });
 
   it("keeps manuscript display-name edits on the title field and protects hierarchy parents", async () => {
