@@ -40,7 +40,7 @@ async function fillSource(page, path, content) {
   await openSourcePanel(page);
   const pathInput = page.getByLabel('相対Path');
   if (await pathInput.inputValue() !== path) await pathInput.fill(path);
-  await page.getByLabel('Source').fill(content);
+  await page.getByLabel('Source', { exact: true }).fill(content);
 }
 
 async function prepareSource(page, path, content) {
@@ -100,7 +100,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await page.getByLabel('開く').waitFor();
       await reopenWorkspace(page, workspaceId);
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
       assert.equal(await revisionText(page, SOURCE_PATH), initialRevision);
       return { workspaceId, path: SOURCE_PATH, revision: initialRevision, bytes: Buffer.byteLength(SOURCE_V1) };
     } finally {
@@ -147,7 +147,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       });
       await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
       assert.equal(await revisionText(page, SOURCE_PATH), revision,
         'the source SHA-256 revision must survive the ZIP export/import roundtrip');
 
@@ -158,11 +158,11 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       });
       await page.getByRole('alert').waitFor();
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1,
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1,
         'a rejected import must leave the imported Workspace readable');
       await reopenWorkspace(page, workspaceId);
       await selectSource(page, 'notes/preserve.md');
-      assert.equal(await page.getByLabel('Source').inputValue(), '既存Workspaceを保持します。\n',
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), '既存Workspaceを保持します。\n',
         'a rejected import must preserve a pre-existing Workspace');
 
       return {
@@ -199,7 +199,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await page.getByLabel('開く').waitFor();
       await reopenWorkspace(page, workspaceId);
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
       return { workspaceId, recoveredDraftBytes: Buffer.byteLength(SOURCE_V1), committedAfterRecovery: true };
     } finally {
       await context.close();
@@ -302,7 +302,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await reopenWorkspace(page, workspaceId);
       await page.getByRole('status').filter({ hasText: '復旧したJournal操作: 1件' }).waitFor();
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1,
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1,
         'the atomic failure must preserve the previously committed source');
       const recovered = page.locator('section[aria-label="変更の承認"] article').last();
       assert.equal(await recovered.locator('details pre').nth(1).innerText(), SOURCE_V2,
@@ -313,7 +313,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await page.getByLabel('開く').waitFor();
       await reopenWorkspace(page, workspaceId);
       await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V2);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V2);
       return {
         workspaceId,
         failedCommit: 'QUOTA_EXCEEDED',
