@@ -33,13 +33,37 @@ export function excalidrawWorkerVitePlugin() {
   const importerPath = resolve(productionDirectory, "chunk-K2UTITRG.js");
   const workerPath = resolve(productionDirectory, "subset-worker.chunk.js");
   const importerText = readFileSync(importerPath, "utf8");
+  const workerText = readFileSync(workerPath, "utf8");
   if (!importerText.includes('import("./subset-worker.chunk.js")')) {
     throw new Error(
       `The pinned Excalidraw subset-worker import was not found in ${importerPath}.`,
     );
   }
+  if (!workerText.includes("self.onmessage=") || !workerText.includes("self.postMessage(")) {
+    throw new Error(`The pinned Excalidraw subset-worker handler was not found in ${workerPath}.`);
+  }
   const workerModuleId = `${WORKER_VIRTUAL_PREFIX}${workerPath}`;
   const viteWorkerUrlSpecifier = `${workerPath}?worker&url`;
+  const cspFallbackMarker = "/* @scriptorium-atlas/canvas:excalidraw-csp-font-fallback */";
+  const cspFallbackBoundary = `${cspFallbackMarker}
+;(() => {
+  const officialSubsetHandler = self.onmessage;
+  if (typeof officialSubsetHandler !== "function") {
+    throw new Error("The official Excalidraw subset worker message handler is missing.");
+  }
+  self.onmessage = async function atlasExcalidrawCspFontFallback(event) {
+    const inputFont = event?.data?.arrayBuffer;
+    const fullFont = inputFont instanceof ArrayBuffer ? inputFont.slice(0) : null;
+    try {
+      return await officialSubsetHandler.call(self, event);
+    } catch (error) {
+      const isCspEvalError = error instanceof EvalError &&
+        /Content Security Policy|unsafe-eval/i.test(String(error.message));
+      if (!isCspEvalError || !fullFont) throw error;
+      self.postMessage(fullFont, { transfer: [fullFont] });
+    }
+  };
+})();`;
 
   return {
     name: "@scriptorium-atlas/canvas/excalidraw-worker",
@@ -54,6 +78,13 @@ export function excalidrawWorkerVitePlugin() {
         return null;
       }
       return workerModuleId;
+    },
+    transform(code, id) {
+      if (resolve(id.split("?")[0]) !== workerPath || code.includes(cspFallbackMarker)) {
+        return null;
+      }
+      if (!/self\.onmessage\s*=/u.test(code)) return null;
+      return { code: `${code}\n${cspFallbackBoundary}\n`, map: null };
     },
     load(id) {
       if (id !== workerModuleId) return null;

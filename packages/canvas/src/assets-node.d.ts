@@ -21,6 +21,7 @@ export type ExcalidrawWorkerVitePlugin = Readonly<{
   name: string;
   enforce: "pre";
   resolveId(source: string, importer?: string): string | null;
+  transform(code: string, id: string): { code: string; map: null } | null;
   load(id: string): string | null;
 }>;
 

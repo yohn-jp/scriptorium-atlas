@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { createContext, runInContext } from "node:vm";
 import { copyCanvasAssets, excalidrawWorkerVitePlugin } from "@scriptorium-atlas/canvas/assets";
 
 test("Vite plugin rewrites only Excalidraw's pinned unqueried production subset worker import", () => {
@@ -29,6 +30,63 @@ test("Vite plugin rewrites only Excalidraw's pinned unqueried production subset 
   assert.ok(virtualModule.includes(`${worker}?worker&url`));
   assert.ok(virtualModule.includes("export const WorkerUrl = new URL(workerUrl, import.meta.url);"));
   assert.equal(plugin.load("\0unrelated-module"), null);
+});
+
+test("worker CSP font fallback passes success through, returns original font bytes, and rethrows other errors", async () => {
+  const require = createRequire(import.meta.url);
+  const productionDirectory = dirname(require.resolve("@excalidraw/excalidraw"));
+  const worker = resolve(productionDirectory, "subset-worker.chunk.js");
+  const plugin = excalidrawWorkerVitePlugin();
+  const workerId = `${worker}?worker_file&type=module`;
+  const createWorkerContext = (handlerCode) => {
+    const posts = [];
+    const context = createContext({
+      self: {
+        postMessage(message, options) {
+          posts.push({ message, transfer: options?.transfer });
+        },
+      },
+    });
+    const transformed = plugin.transform(handlerCode, workerId);
+    assert.ok(transformed, "the exact official worker module should receive the fallback boundary");
+    runInContext(transformed.code, context);
+    return { context, posts };
+  };
+
+  const inputSuccess = createWorkerContext(
+    "self.onmessage=async event=>{self.postMessage(event.data.arrayBuffer,{transfer:[event.data.arrayBuffer]});};",
+  );
+  const successfulFont = runInContext("new Uint8Array([1,2,3,255]).buffer", inputSuccess.context);
+  await inputSuccess.context.self.onmessage({ data: { arrayBuffer: successfulFont } });
+  assert.equal(inputSuccess.posts.length, 1);
+  assert.equal(inputSuccess.posts[0].message, successfulFont);
+  assert.deepEqual(Array.from(new Uint8Array(inputSuccess.posts[0].message)), [1, 2, 3, 255]);
+
+  const inputCsp = createWorkerContext("self.onmessage=async event=>{throw event.data.failure;};");
+  const blockedEval = runInContext(
+    "new EvalError(\"Evaluating a string as JavaScript violates Content Security Policy: 'unsafe-eval' is not allowed\")",
+    inputCsp.context,
+  );
+  const originalFont = runInContext("new Uint8Array([8,13,21,34]).buffer", inputCsp.context);
+  await inputCsp.context.self.onmessage({
+    data: { arrayBuffer: originalFont, failure: blockedEval },
+  });
+  assert.equal(inputCsp.posts.length, 1);
+  assert.notEqual(inputCsp.posts[0].message, originalFont, "CSP fallback must post the saved copy.");
+  assert.deepEqual(Array.from(new Uint8Array(inputCsp.posts[0].message)), [8, 13, 21, 34]);
+  assert.equal(inputCsp.posts[0].transfer.length, 1);
+  assert.equal(inputCsp.posts[0].transfer[0], inputCsp.posts[0].message);
+
+  const inputUnexpected = createWorkerContext("self.onmessage=async event=>{throw event.data.failure;};");
+  const unexpected = runInContext("new Error(\"unexpected worker failure\")", inputUnexpected.context);
+  const unexpectedFont = runInContext("new Uint8Array([5]).buffer", inputUnexpected.context);
+  await assert.rejects(
+    inputUnexpected.context.self.onmessage({
+      data: { arrayBuffer: unexpectedFont, failure: unexpected },
+    }),
+    { name: "Error", message: "unexpected worker failure" },
+  );
+  assert.equal(inputUnexpected.posts.length, 0, "unexpected worker errors must not be hidden as font fallback");
 });
 
 test("Node asset helper copies pinned fonts and emits reproducible license/hash metadata", async () => {
