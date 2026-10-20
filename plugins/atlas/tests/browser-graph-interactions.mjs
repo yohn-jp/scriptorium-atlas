@@ -306,9 +306,26 @@ async function run() {
     report.cases.push('search-by-provider-id-and-board-name-id-alias-tag-type-path-filters');
 
     const flow = atlas.locator('.atlas-graph-flow');
+    await graphNodeOne.scrollIntoViewIfNeeded();
+    await graphNodeTwo.scrollIntoViewIfNeeded();
     await marqueeSelect(page, flow, [graphNodeOne, graphNodeTwo]);
     const selectedNodes = atlas.locator('.react-flow__node.selected');
-    await selectedNodes.first().waitFor({ state: 'visible' });
+    try {
+      await selectedNodes.first().waitFor({ state: 'visible', timeout: 5000 });
+    } catch {
+      const diagnostics = await Promise.all([graphNodeOne, graphNodeTwo].map(async (node) => ({
+        id: await node.getAttribute('data-id'),
+        className: await node.getAttribute('class'),
+        rect: await node.boundingBox(),
+        visible: await node.isVisible(),
+      })));
+      const frameBox = await page.locator('iframe[title="Atlas"]').boundingBox();
+      const flowGeometry = await flow.boundingBox();
+      const selectionBox = await atlas.locator('.react-flow__selection').boundingBox().catch(() => null);
+      const screenshotPath = `/tmp/atlas-graph-selection-${randomUUID()}.png`;
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      throw new Error(`Physical graph marquee did not select the nodes: nodes=${JSON.stringify(diagnostics)} flow=${JSON.stringify(flowGeometry)} iframe=${JSON.stringify(frameBox)} selection=${JSON.stringify(selectionBox)} screenshot=${screenshotPath}`);
+    }
     assert.equal(await selectedNodes.count(), 2, 'Shift-drag selection should select both graph nodes.');
     await atlas.getByRole('button', { name: '選択項目をグループ化' }).click();
     await commitAtlasUntilClean(page, atlas);
@@ -428,11 +445,17 @@ async function run() {
       ['手動配置', /手動レイアウトを1回のUndo操作として適用/u],
     ];
     for (const [buttonName, statusPattern] of layoutCases) {
-      await atlas.getByRole('button', { name: buttonName }).click();
+      const layoutButton = atlas.getByRole('button', { name: buttonName });
+      const revisionBeforeLayout = (await downloadBoard(page, atlas)).revision;
+      await layoutButton.click();
       try {
         await atlas.locator('.atlas-notice').filter({ hasText: statusPattern }).waitFor({ state: 'visible', timeout: 20000 });
       } catch {
-        throw new Error(`Layout ${buttonName} did not complete: notices=${JSON.stringify(await atlas.locator('.atlas-notice').allTextContents())}; statuses=${JSON.stringify(await atlas.getByRole('status').allTextContents())}`);
+        const revisionAfterLayout = (await downloadBoard(page, atlas)).revision;
+        const selectedTab = await atlas.locator('[role="tab"][aria-selected="true"]').allTextContents();
+        const screenshotPath = `/tmp/atlas-layout-${randomUUID()}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        throw new Error(`Layout ${buttonName} did not complete: revision=${revisionBeforeLayout}->${revisionAfterLayout}; buttonEnabled=${await layoutButton.isEnabled()}; selectedTab=${JSON.stringify(selectedTab)}; notices=${JSON.stringify(await atlas.locator('.atlas-notice').allTextContents())}; statuses=${JSON.stringify(await atlas.getByRole('status').allTextContents())}; pageErrors=${JSON.stringify(pageErrors)}; screenshot=${screenshotPath}`);
       }
       await commitAtlasUntilClean(page, atlas);
     }
