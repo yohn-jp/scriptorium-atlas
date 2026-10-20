@@ -40,6 +40,7 @@ import {
   type WorkspaceFile,
 } from './host-utils.js';
 import { FreeformView } from './FreeformView.js';
+import { buildAtlasCardExportOverlay } from './card-export.js';
 import { GraphCanvas } from './GraphCanvas.js';
 import { StructuredViews } from './StructuredViews.js';
 import {
@@ -958,9 +959,17 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     try {
       if (activeSession.sceneText === null && activeSession.sceneError) throw new Error('The Host scene could not be read. Import a supported scene before exporting PNG or SVG.');
       const sceneText = activeSession.sceneText ?? await createEmptyExcalidrawScene();
-      const blob = await exportExcalidrawScene(sceneText, format);
+      const cardExport = await buildAtlasCardExportOverlay(activeSession.board, async (asset) => {
+        const staged = stagedAssetRef.current;
+        if (staged?.boardId === activeSession.board.boardId && staged.path === asset.path) return staged.bytes;
+        const file = filesRef.current.get(asset.path);
+        if (!file) throw new Error(`Image asset ${asset.path} is not available in the Host workspace.`);
+        return readFileBytes(host, file);
+      });
+      const blob = await exportExcalidrawScene(sceneText, format, cardExport.overlay);
       downloadBlob(`${activeSession.board.boardId}.${format}`, blob);
-      setNotice(`${format.toUpperCase()} export downloaded. Export is a local file, not a Host commit.`);
+      const missing = cardExport.unavailableImagePaths.length;
+      setNotice(`${format.toUpperCase()} export downloaded${missing ? ` with ${missing} unavailable image card${missing === 1 ? '' : 's'} represented by a placeholder` : ''}. Export is a local file, not a Host commit.`);
     } catch (error) { setNotice(`${format.toUpperCase()} export failed: ${errorMessage(error)}`); }
   };
 
