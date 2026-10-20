@@ -17,6 +17,10 @@ const browserPath = process.env.ATLAS_E2E_CHROMIUM;
 const profile = process.env.ATLAS_PROFILE ?? 'atlas';
 const report = { artifactRoot: resolve(hostRoot, `dist/${profile}`), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, profile, cases: [], browser: null };
 
+function progress(message) {
+  process.stderr.write(`[viewport-e2e] ${message}\n`);
+}
+
 async function reservePorts() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const base = 36000 + Math.floor(Math.random() * 24000);
@@ -162,14 +166,14 @@ async function zoom(atlas, direction, count) {
   const name = direction === 'in' ? /zoom in/i : /zoom out/i;
   const control = atlas.getByRole('button', { name });
   await control.first().waitFor({ state: 'visible' });
-  for (let index = 0; index < count; index += 1) await control.first().click();
+  for (let index = 0; index < count; index += 1) await control.first().press('Enter');
 }
 
 async function overflowZoomUntilRejected(atlas) {
   const zoomIn = atlas.getByRole('button', { name: /zoom in/i }).first();
   const rejection = atlas.getByRole('status').filter({ hasText: '保存範囲外' });
   for (let index = 0; index < 64; index += 1) {
-    await zoomIn.click();
+    await zoomIn.press('Enter');
     if (await rejection.count()) return;
   }
   await rejection.waitFor({ state: 'visible', timeout: 10000 });
@@ -178,10 +182,10 @@ async function overflowZoomUntilRejected(atlas) {
 async function setCanvasPosition(atlas, x, y) {
   const summary = atlas.getByText('キーボード操作と要素一覧', { exact: true });
   const open = await summary.evaluate((element) => element.parentElement instanceof HTMLDetailsElement && element.parentElement.open);
-  if (!open) await summary.click();
+  if (!open) await summary.press('Enter');
   await atlas.getByLabel('Canvas表示位置X').fill(String(x));
   await atlas.getByLabel('Canvas表示位置Y').fill(String(y));
-  await atlas.getByRole('button', { name: '表示位置を適用' }).click();
+  await atlas.getByRole('button', { name: '表示位置を適用' }).press('Enter');
 }
 
 async function pan(page, atlas, dx, dy) {
@@ -257,6 +261,7 @@ async function run() {
     await atlas.getByRole('button', { name: '＋ テキストカード' }).click();
     await atlas.locator('.atlas-canvas-card').waitFor({ state: 'visible' });
     await commitAtlasUntilClean(page, atlas);
+    progress('two-board, two-view fixture committed');
 
     const initial = await downloadBoard(page, atlas);
     const viewAId = initial.views.find((view) => view.name === 'Viewport A')?.id;
@@ -277,6 +282,7 @@ async function run() {
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Rejecting an out-of-contract pan must preserve the separate Excalidraw scene bytes.');
     report.cases.push('out-of-contract-pan-rejected-with-board-and-scene-preserved');
+    progress('out-of-contract camera rejection verified');
 
     await setCanvasPosition(atlas, -120, 80);
     await atlas.getByRole('status').filter({ hasText: '保存範囲外' }).waitFor({ state: 'detached' });
@@ -291,6 +297,7 @@ async function run() {
     let offsetA = await cardOffset(atlas);
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Pan and zoom should update only the Atlas Board viewport; the separate Excalidraw scene bytes must remain unchanged.');
+    progress('native keyboard zoom and trusted physical pan updated the active view');
     await pan(page, atlas, -42, 34);
     await atlas.getByRole('button', { name: /Viewport Board B/u }).click();
     await atlas.getByRole('button', { name: /Viewport Board A/u }).click();
@@ -304,6 +311,7 @@ async function run() {
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Switching Boards while a Canvas pan is pending must leave the original Excalidraw scene unchanged.');
     report.cases.push('pending-pan-flushes-to-original-board-on-board-switch');
+    progress('pending camera callback flushed to its original Board');
 
     await selectView(atlas, 'Viewport B');
     const beforeB = await downloadBoard(page, atlas);
@@ -329,8 +337,10 @@ async function run() {
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Viewport state for a second Canvas view must not be written into the shared Excalidraw scene.');
     report.cases.push('physical-pan-and-zoom-persist-independently-per-freeform-view');
+    progress('independent viewports and scene-byte stability verified');
 
     const { board: committed, scene: committedScene } = await commitAtlasUntilStable(page, atlas);
+    progress('explicit Host approvals drained until Board and scene bytes were stable');
     const committedA = committed.views.find((view) => view.id === viewAId)?.viewport;
     const committedB = committed.views.find((view) => view.id === viewBId)?.viewport;
     assert.deepEqual(committedA, viewportA, 'The Host proposal must contain the exact first view viewport.');
@@ -357,6 +367,7 @@ async function run() {
       'Host reload should restore the exact second Atlas viewport.');
     assert.deepEqual(restoredOffsetB, offsetB, 'Host reload should restore the second Canvas camera independently.');
     report.cases.push('host-commit-and-reload-restores-each-freeform-camera');
+    progress('Host commit and reload restored both cameras');
     assert.deepEqual(dialogs, [], 'Viewport navigation should not require native dialogs.');
     assert.deepEqual(pageErrors, [], 'Canvas viewport interaction must not throw uncaught page errors.');
     report.cases.push('no-native-dialogs-or-uncaught-page-errors');

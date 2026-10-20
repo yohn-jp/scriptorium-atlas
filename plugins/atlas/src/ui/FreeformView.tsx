@@ -49,7 +49,7 @@ export function FreeformView(props: FreeformViewProps) {
       const signature = [next.scrollX, next.scrollY, next.zoom].map(String).join('|');
       if (rejectedViewport.current !== signature) {
         rejectedViewport.current = signature;
-        setViewportNotice('Canvasの表示位置がAtlasの保存範囲外です。最後に保存した表示位置へ戻しました。');
+        setViewportNotice('Canvasの表示位置がAtlasの保存範囲外です。直前の有効な表示位置へ戻しました。');
         setViewportResetEpoch((epoch) => epoch + 1);
       }
       return;
