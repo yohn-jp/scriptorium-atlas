@@ -75,6 +75,7 @@ export type LayoutErrorCode =
   | 'CANCELLED'
   | 'STALE_RESULT'
   | 'WORKER_FAILED'
+  | 'TIMEOUT'
   | 'CLOSED';
 
 export class LayoutError extends Error {

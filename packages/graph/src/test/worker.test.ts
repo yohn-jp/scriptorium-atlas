@@ -57,6 +57,63 @@ test('graph worker rejects replies made stale by snapshot replacement', async ()
   client.close();
 });
 
+test('graph worker bounds active and queued queries and removes an aborted queued query', async () => {
+  const worker = new FakeGraphWorker(false);
+  const client = createGraphWorkerClient({ workerFactory: () => worker, maxInFlight: 1, maxQueued: 1 });
+  await client.replaceSnapshot(snapshot, [node], []);
+
+  const active = client.search({ query: 'A' });
+  const queuedController = new AbortController();
+  const queued = client.search({ query: 'B' }, queuedController.signal);
+  const overflow = client.search({ query: 'C' });
+  await assert.rejects(overflow, (error: unknown) => error instanceof GraphWorkerClientError && error.code === 'QUEUE_FULL');
+  await waitFor(() => worker.requests.filter((request) => request.type === 'search').length === 1);
+  queuedController.abort();
+  await assert.rejects(queued, (error: unknown) => error instanceof Error && error.name === 'AbortError');
+  assert.equal(worker.terminateCount, 0, 'cancelling a queued query should not terminate the active Worker');
+
+  const activeRequest = worker.requests.find((request) => request.type === 'search')!;
+  worker.respond({ id: activeRequest.id, snapshotKey: activeRequest.type === 'search' ? activeRequest.snapshotKey : null, ok: true, value: { items: [], totalMatches: 0, complete: true } });
+  assert.deepEqual((await active).items, []);
+  assert.equal(worker.requests.filter((request) => request.type === 'search').length, 1, 'the cancelled request must never be posted');
+  client.close();
+});
+
+test('graph worker deadline terminates a hung Worker and reloads the cached snapshot', async () => {
+  const firstWorker = new FakeGraphWorker(false);
+  const secondWorker = new FakeGraphWorker(true);
+  const workers = [firstWorker, secondWorker];
+  let created = 0;
+  const client = createGraphWorkerClient({ workerFactory: () => workers[created++]!, timeoutMs: 15 });
+  await client.replaceSnapshot(snapshot, [node], []);
+
+  await assert.rejects(client.search({ query: 'A' }), (error: unknown) => error instanceof GraphWorkerClientError && error.code === 'TIMEOUT');
+  assert.equal(firstWorker.terminateCount, 1);
+  assert.deepEqual((await client.search({ query: 'A' })).items, []);
+  assert.deepEqual(secondWorker.requests.map((request) => request.type), ['replace', 'search']);
+  client.close();
+});
+
+test('graph worker caps pending snapshot transitions at 64', async () => {
+  const worker = new FakeGraphWorker(true);
+  const client = createGraphWorkerClient({ workerFactory: () => worker });
+  const transitions = Array.from({ length: 64 }, (_, index) => client.replaceSnapshot(
+    { ...snapshot, sourceRevision: `source-${index}`, providerRevision: `provider-${index}` },
+    [node],
+    [],
+  ));
+  await assert.rejects(client.replaceSnapshot({ ...snapshot, sourceRevision: 'overflow' }, [node], []), (error: unknown) => error instanceof GraphWorkerClientError && error.code === 'QUEUE_FULL');
+  const results = await Promise.allSettled(transitions);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  client.close();
+});
+
+test('graph worker validates configured concurrency and deadline limits', () => {
+  assert.throws(() => createGraphWorkerClient({ maxInFlight: 5 }), RangeError);
+  assert.throws(() => createGraphWorkerClient({ maxQueued: 65 }), RangeError);
+  assert.throws(() => createGraphWorkerClient({ timeoutMs: 0 }), RangeError);
+});
+
 class FakeGraphWorker implements WorkerPort {
   readonly requests: GraphWorkerRequest[] = [];
   terminateCount = 0;

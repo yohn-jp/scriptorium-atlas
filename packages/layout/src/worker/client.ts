@@ -4,6 +4,8 @@ import type { LayoutWorkerPort, LayoutWorkerResponse } from './protocol.js';
 
 export interface LayoutWorkerClientOptions {
   readonly workerFactory?: () => LayoutWorkerPort;
+  /** End-to-end calculation deadline. Expiry terminates the Worker. */
+  readonly timeoutMs?: number;
 }
 
 export interface LayoutWorkerClient {
@@ -20,6 +22,7 @@ interface ActiveCalculation {
   readonly boardRevision: LayoutInput['boardRevision'];
   readonly resolve: (result: LayoutResult) => void;
   readonly reject: (error: Error) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
   readonly signal?: AbortSignal;
   readonly onAbort?: () => void;
 }
@@ -27,6 +30,7 @@ interface ActiveCalculation {
 /** Creates the layout Worker only when a caller explicitly calculates a layout. */
 export function createLayoutWorkerClient(options: LayoutWorkerClientOptions = {}): LayoutWorkerClient {
   const createWorker = options.workerFactory ?? defaultWorkerFactory;
+  const timeoutMs = boundedInteger(options.timeoutMs ?? 30_000, 1, 300_000, 'timeoutMs');
   let worker: LayoutWorkerPort | undefined;
   let active: ActiveCalculation | undefined;
   let activeRevisionKey = JSON.stringify([null, null]);
@@ -46,6 +50,7 @@ export function createLayoutWorkerClient(options: LayoutWorkerClientOptions = {}
   const clearActive = (): ActiveCalculation | undefined => {
     const previous = active;
     active = undefined;
+    if (previous) clearTimeout(previous.timer);
     if (previous?.signal && previous.onAbort) previous.signal.removeEventListener('abort', previous.onAbort);
     return previous;
   };
@@ -131,7 +136,12 @@ export function createLayoutWorkerClient(options: LayoutWorkerClientOptions = {}
           if (active?.requestId === requestId) cancelWith(abortError() as LayoutError);
         };
       }
-      active = { requestId, generation: requestGeneration, snapshotKey: currentSnapshotKey, boardRevision: currentRevision, resolve, reject, ...(signal ? { signal } : {}), ...(onAbort ? { onAbort } : {}) };
+      const timer = setTimeout(() => {
+        if (active?.requestId === requestId) {
+          cancelWith(new LayoutError('TIMEOUT', `Layout Worker calculation exceeded ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+      active = { requestId, generation: requestGeneration, snapshotKey: currentSnapshotKey, boardRevision: currentRevision, resolve, reject, timer, ...(signal ? { signal } : {}), ...(onAbort ? { onAbort } : {}) };
       if (signal && onAbort) signal.addEventListener('abort', onAbort, { once: true });
       try {
         ensureWorker().postMessage({ requestId, generation: requestGeneration, snapshotKey: currentSnapshotKey, boardRevision: currentRevision, input });
@@ -161,12 +171,19 @@ function abortError(): LayoutError {
   return error;
 }
 
+function boundedInteger(value: number, minimum: number, maximum: number, name: string): number {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${name} must be an integer from ${minimum} through ${maximum}`);
+  }
+  return value;
+}
+
 function defaultWorkerFactory(): LayoutWorkerPort {
   return new Worker(new URL('./entry.js', import.meta.url), { type: 'module' }) as unknown as LayoutWorkerPort;
 }
 
 function layoutError(code: string | undefined, message: string | undefined): LayoutError {
-  const allowed = new Set<LayoutErrorCode>(['INVALID_INPUT', 'DUPLICATE_NODE', 'DUPLICATE_EDGE', 'INVALID_PIN', 'CANCELLED', 'STALE_RESULT', 'WORKER_FAILED', 'CLOSED']);
+  const allowed = new Set<LayoutErrorCode>(['INVALID_INPUT', 'DUPLICATE_NODE', 'DUPLICATE_EDGE', 'INVALID_PIN', 'CANCELLED', 'STALE_RESULT', 'WORKER_FAILED', 'TIMEOUT', 'CLOSED']);
   return new LayoutError(allowed.has(code as LayoutErrorCode) ? code as LayoutErrorCode : 'WORKER_FAILED', message ?? 'Layout calculation failed');
 }
 

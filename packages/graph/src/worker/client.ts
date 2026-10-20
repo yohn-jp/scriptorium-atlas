@@ -29,7 +29,7 @@ type WorkerMessageWithoutId<T = GraphWorkerRequest> = T extends { readonly id: n
 type GraphWorkerMessage = WorkerMessageWithoutId;
 
 export class GraphWorkerClientError extends Error {
-  constructor(readonly code: 'CLOSED' | 'CANCELLED' | 'STALE_RESULT' | 'WORKER_FAILED' | 'SNAPSHOT_NOT_READY', message: string) {
+  constructor(readonly code: 'CLOSED' | 'CANCELLED' | 'STALE_RESULT' | 'WORKER_FAILED' | 'SNAPSHOT_NOT_READY' | 'QUEUE_FULL' | 'TIMEOUT', message: string) {
     super(message);
     this.name = 'GraphWorkerClientError';
   }
@@ -37,6 +37,12 @@ export class GraphWorkerClientError extends Error {
 
 export interface GraphWorkerClientOptions {
   readonly workerFactory?: () => WorkerPort;
+  /** Maximum requests posted to the Worker at once. The hard maximum is four. */
+  readonly maxInFlight?: number;
+  /** Maximum requests waiting in the client queue. The hard maximum is 64. */
+  readonly maxQueued?: number;
+  /** Deadline for each Worker request, including time spent in its local request queue. */
+  readonly timeoutMs?: number;
 }
 
 export interface GraphWorkerClient {
@@ -53,10 +59,13 @@ export interface GraphWorkerClient {
 }
 
 interface PendingRequest<T> {
+  readonly id: number;
+  readonly message: GraphWorkerMessage;
   readonly expectedSnapshotKey: string;
   readonly requireCurrentSnapshot: boolean;
   readonly resolve: (value: T) => void;
   readonly reject: (error: Error) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
   readonly abortSignal?: AbortSignal;
   readonly onAbort?: () => void;
 }
@@ -76,6 +85,9 @@ interface LoadingSnapshot {
 /** Lazily creates one dedicated Worker and releases it on close or cancellation. */
 export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}): GraphWorkerClient {
   const createWorker = options.workerFactory ?? defaultWorkerFactory;
+  const maxInFlight = boundedInteger(options.maxInFlight ?? 4, 1, 4, 'maxInFlight');
+  const maxQueued = boundedInteger(options.maxQueued ?? 64, 0, 64, 'maxQueued');
+  const timeoutMs = boundedInteger(options.timeoutMs ?? 30_000, 1, 300_000, 'timeoutMs');
   let worker: WorkerPort | undefined;
   let loadedSnapshotKey: string | undefined;
   let loadingSnapshot: LoadingSnapshot | undefined;
@@ -83,16 +95,20 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
   let nextRequestId = 1;
   let closed = false;
   let transitionTail: Promise<void> = Promise.resolve();
+  let transitionCount = 0;
+  let queryCount = 0;
   const pending = new Map<number, PendingRequest<unknown>>();
+  const requestQueue: number[] = [];
+  const activeRequests = new Set<number>();
 
   const onMessage = (event: MessageEvent<GraphWorkerResponse>): void => {
     const message = event.data;
     const request = pending.get(message.id);
     if (!request) return; // duplicate or late response after cancellation
-    pending.delete(message.id);
-    if (request.abortSignal && request.onAbort) request.abortSignal.removeEventListener('abort', request.onAbort);
+    detachRequest(request);
     if (request.requireCurrentSnapshot && request.expectedSnapshotKey !== desiredSnapshot?.key) {
       request.reject(new GraphWorkerClientError('STALE_RESULT', 'Worker reply belongs to a stale graph snapshot'));
+      pumpRequests();
       return;
     }
     if (!message.ok) {
@@ -101,13 +117,16 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
       request.reject(code
         ? new GraphError(code, remote?.message ?? 'Graph Worker request failed')
         : new GraphWorkerClientError('WORKER_FAILED', remote?.message ?? 'Graph Worker request failed'));
+      pumpRequests();
       return;
     }
     if (message.snapshotKey !== request.expectedSnapshotKey) {
       request.reject(new GraphWorkerClientError('STALE_RESULT', 'Worker reply has a mismatched snapshot identity'));
+      pumpRequests();
       return;
     }
     request.resolve(message.value);
+    pumpRequests();
   };
 
   const onFailure = (): void => {
@@ -124,10 +143,12 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
 
   function rejectAll(error: Error): void {
     for (const request of pending.values()) {
-      if (request.abortSignal && request.onAbort) request.abortSignal.removeEventListener('abort', request.onAbort);
+      clearRequest(request);
       request.reject(error);
     }
     pending.clear();
+    requestQueue.length = 0;
+    activeRequests.clear();
   }
 
   function ensureWorker(): WorkerPort {
@@ -142,6 +163,48 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
     return worker;
   }
 
+  function clearRequest(request: PendingRequest<unknown>): void {
+    clearTimeout(request.timer);
+    if (request.abortSignal && request.onAbort) request.abortSignal.removeEventListener('abort', request.onAbort);
+  }
+
+  function detachRequest(request: PendingRequest<unknown>): void {
+    pending.delete(request.id);
+    activeRequests.delete(request.id);
+    const queuedAt = requestQueue.indexOf(request.id);
+    if (queuedAt >= 0) requestQueue.splice(queuedAt, 1);
+    clearRequest(request);
+  }
+
+  function pumpRequests(): void {
+    while (!closed && activeRequests.size < maxInFlight && requestQueue.length > 0) {
+      const id = requestQueue.shift()!;
+      const request = pending.get(id);
+      if (!request) continue;
+      activeRequests.add(id);
+      try {
+        ensureWorker().postMessage({ ...request.message, id } as GraphWorkerRequest);
+      } catch (error) {
+        detachRequest(request);
+        request.reject(error instanceof Error ? error : new GraphWorkerClientError('WORKER_FAILED', String(error)));
+      }
+    }
+  }
+
+  function terminateWorkerForTimeout(timedOutRequest: PendingRequest<unknown>): void {
+    const active = worker;
+    worker = undefined;
+    loadedSnapshotKey = undefined;
+    loadingSnapshot = undefined;
+    active?.removeEventListener('message', onMessage);
+    active?.removeEventListener('error', onFailure);
+    active?.removeEventListener('messageerror', onFailure);
+    active?.terminate();
+    detachRequest(timedOutRequest);
+    timedOutRequest.reject(new GraphWorkerClientError('TIMEOUT', `Graph Worker request exceeded ${timeoutMs}ms`));
+    rejectAll(new GraphWorkerClientError('WORKER_FAILED', 'Graph Worker was terminated after a request deadline expired'));
+  }
+
   function request<T>(
     message: GraphWorkerMessage,
     expectedKey: string,
@@ -150,6 +213,9 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
   ): Promise<T> {
     if (closed) return Promise.reject(new GraphWorkerClientError('CLOSED', 'Graph Worker client is closed'));
     if (signal?.aborted) return Promise.reject(abortError());
+    if (activeRequests.size >= maxInFlight && requestQueue.length >= maxQueued) {
+      return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', `Graph Worker queue is full (${maxInFlight} active, ${maxQueued} queued)`));
+    }
     const id = nextRequestId++;
     return new Promise<T>((resolve, reject) => {
       let abortListener: (() => void) | undefined;
@@ -157,28 +223,37 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
         abortListener = () => {
           const activeRequest = pending.get(id);
           if (!activeRequest) return;
-          pending.delete(id);
-          signal.removeEventListener('abort', abortListener!);
+          const wasActive = activeRequests.has(id);
+          detachRequest(activeRequest);
           reject(abortError());
-          terminateWorkerForCancellation();
+          if (wasActive) terminateWorkerForCancellation();
+          else pumpRequests();
         };
       }
+      const timer = setTimeout(() => {
+        const timedOut = pending.get(id);
+        if (!timedOut) return;
+        if (activeRequests.has(id)) terminateWorkerForTimeout(timedOut);
+        else {
+          detachRequest(timedOut);
+          timedOut.reject(new GraphWorkerClientError('TIMEOUT', `Graph Worker request exceeded ${timeoutMs}ms while queued`));
+          pumpRequests();
+        }
+      }, timeoutMs);
       pending.set(id, {
+        id,
+        message,
         expectedSnapshotKey: expectedKey,
         requireCurrentSnapshot,
         resolve: resolve as (value: unknown) => void,
         reject,
+        timer,
         ...(signal ? { abortSignal: signal } : {}),
         ...(abortListener ? { onAbort: abortListener } : {}),
       });
       if (signal && abortListener) signal.addEventListener('abort', abortListener, { once: true });
-      try {
-        ensureWorker().postMessage({ ...message, id } as GraphWorkerRequest);
-      } catch (error) {
-        pending.delete(id);
-        if (signal && abortListener) signal.removeEventListener('abort', abortListener);
-        reject(error instanceof Error ? error : new GraphWorkerClientError('WORKER_FAILED', String(error)));
-      }
+      requestQueue.push(id);
+      pumpRequests();
     });
   }
 
@@ -195,9 +270,11 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
   }
 
   function enqueueTransition<T>(operation: () => Promise<T>): Promise<T> {
+    if (transitionCount >= 64) return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', 'Graph snapshot transition queue is full (64 pending)'));
+    transitionCount += 1;
     const result = transitionTail.then(operation);
     transitionTail = result.then(() => undefined, () => undefined);
-    return result;
+    return result.finally(() => { transitionCount -= 1; });
   }
 
   function ensureLoaded(cache: SnapshotCache, signal?: AbortSignal): Promise<void> {
@@ -226,12 +303,19 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
     return cache;
   }
 
-  async function query<T>(makeMessage: (key: string) => GraphWorkerMessage, signal?: AbortSignal): Promise<T> {
-    const snapshot = await currentSnapshot(signal);
-    return request<T>(makeMessage(snapshot.key), snapshot.key, signal);
+  function query<T>(makeMessage: (key: string) => GraphWorkerMessage, signal?: AbortSignal): Promise<T> {
+    if (queryCount >= maxInFlight + maxQueued) {
+      return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', `Graph Worker query queue is full (${maxInFlight + maxQueued} pending)`));
+    }
+    queryCount += 1;
+    return (async () => {
+      const snapshot = await currentSnapshot(signal);
+      return request<T>(makeMessage(snapshot.key), snapshot.key, signal);
+    })().finally(() => { queryCount -= 1; });
   }
 
   function replaceSnapshot(snapshot: SnapshotRef, nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Promise<void> {
+    if (transitionCount >= 64) return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', 'Graph snapshot transition queue is full (64 pending)'));
     const cache = makeSnapshotCache(snapshot, nodes, edges);
     const previous = desiredSnapshot;
     desiredSnapshot = cache;
@@ -248,6 +332,7 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
     nodePages: readonly ProviderPage[],
     edgePages: readonly GraphEdgePage[],
   ): Promise<void> {
+    if (transitionCount >= 64) return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', 'Graph snapshot transition queue is full (64 pending)'));
     const builder = new GraphSnapshotBuilder(snapshot);
     for (const page of nodePages) builder.addNodesPage(page);
     for (const page of edgePages) builder.addEdgesPage(page);
@@ -256,6 +341,7 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
   }
 
   function applyDelta(delta: GraphDelta, signal?: AbortSignal): Promise<void> {
+    if (transitionCount >= 64) return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', 'Graph snapshot transition queue is full (64 pending)'));
     const stableDelta = structuredClone(delta);
     return enqueueTransition(async () => {
       const current = desiredSnapshot;
@@ -273,6 +359,7 @@ export function createGraphWorkerClient(options: GraphWorkerClientOptions = {}):
   }
 
   function applyDeltaPages(pages: readonly GraphDeltaPage[], signal?: AbortSignal): Promise<void> {
+    if (transitionCount >= 64) return Promise.reject(new GraphWorkerClientError('QUEUE_FULL', 'Graph snapshot transition queue is full (64 pending)'));
     return enqueueTransition(async () => {
       const current = desiredSnapshot;
       if (!current) throw new GraphWorkerClientError('SNAPSHOT_NOT_READY', 'Load a complete graph snapshot before applying a delta');
@@ -352,6 +439,13 @@ function abortError(): Error {
   const error = new Error('Graph Worker operation was aborted');
   error.name = 'AbortError';
   return error;
+}
+
+function boundedInteger(value: number, minimum: number, maximum: number, name: string): number {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${name} must be an integer from ${minimum} through ${maximum}`);
+  }
+  return value;
 }
 
 function graphErrorCode(code: string | undefined): GraphErrorCode | undefined {

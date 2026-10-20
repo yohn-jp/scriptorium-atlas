@@ -139,6 +139,36 @@ test('layout worker rejects a reply after the board revision changes', async () 
   client.close();
 });
 
+test('layout worker deadline terminates a hung Worker and allows a fresh calculation', async () => {
+  const firstWorker = new FakeLayoutWorker();
+  const secondWorker = new FakeLayoutWorker();
+  const workers = [firstWorker, secondWorker];
+  let created = 0;
+  const client = createLayoutWorkerClient({ workerFactory: () => workers[created++]!, timeoutMs: 15 });
+  const input: LayoutInput = { ...layoutInput(), kind: 'force' };
+
+  await assert.rejects(client.calculate(input), (error: unknown) => error instanceof LayoutError && error.code === 'TIMEOUT');
+  assert.equal(firstWorker.terminateCount, 1);
+  const next = client.calculate(input);
+  assert.equal(created, 2);
+  const request = secondWorker.requests[0]!;
+  secondWorker.respond({
+    requestId: request.requestId,
+    generation: request.generation,
+    snapshotKey: request.snapshotKey,
+    boardRevision: request.boardRevision,
+    ok: true,
+    result: resultFor(request.input),
+  });
+  assert.deepEqual((await next).positions.map((item) => item.nodeId), ['a', 'b']);
+  client.close();
+});
+
+test('layout worker validates its deadline bound', () => {
+  assert.throws(() => createLayoutWorkerClient({ timeoutMs: 0 }), RangeError);
+  assert.throws(() => createLayoutWorkerClient({ timeoutMs: 300_001 }), RangeError);
+});
+
 class FakeLayoutWorker implements LayoutWorkerPort {
   readonly requests: LayoutWorkerRequest[] = [];
   terminateCount = 0;
