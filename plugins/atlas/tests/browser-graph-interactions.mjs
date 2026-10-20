@@ -288,8 +288,8 @@ async function run() {
     const boardFilterCases = [
       [firstName, [firstNode.id]],
       [firstNode.ref.localId, [firstNode.id]],
-      [alias, [firstNode.id]],
-      [tag, [firstNode.id]],
+      [`${alias}-two`, [secondNode.id]],
+      [`${tag}-two`, [secondNode.id]],
       ['story.character', [firstNode.id, secondNode.id]],
       ['bible/characters', [firstNode.id, secondNode.id]],
     ];
