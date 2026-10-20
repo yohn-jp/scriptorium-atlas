@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import {
   Background,
@@ -58,6 +58,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   const [edgeLabelDraft, setEdgeLabelDraft] = useState('');
   const [addingManualNode, setAddingManualNode] = useState(false);
   const [manualNodeLabelDraft, setManualNodeLabelDraft] = useState('');
+  const handledDragPositions = useRef(new Map<string, string>());
 
   const graphNodeByKey = useMemo(() => new Map(props.graph?.nodes.map((node) => [nodeKey(node.ref), node]) ?? []), [props.graph?.nodes]);
   const boardNodes = useMemo(() => props.board.nodes.filter((node) => {
@@ -173,11 +174,29 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     props.onBoardChange(applyAtlasCommand(props.board, command));
   }, [props.board, props.onBoardChange]);
 
+  const persistNodePositions = useCallback((moves: Array<{ nodeId: string; position: { x: number; y: number } }>) => {
+    const boardPositions = new Map(props.board.nodes.map((node) => [node.id, node.position]));
+    const pending = moves.filter(({ nodeId, position }) => {
+      if (!boardPositions.has(nodeId)) return false;
+      const current = boardPositions.get(nodeId)!;
+      const key = `${position.x},${position.y}`;
+      if (current.x === position.x && current.y === position.y) return false;
+      if (handledDragPositions.current.get(nodeId) === key) return false;
+      handledDragPositions.current.set(nodeId, key);
+      return true;
+    });
+    if (pending.length) dispatch({ type: 'view.move-nodes', viewId: props.view.id, positions: pending, pin: true });
+  }, [dispatch, props.board.nodes, props.view.id]);
+
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
+    if (changes.some((change) => change.type === 'position' && change.dragging)) handledDragPositions.current.clear();
     setPositions((current) => {
       const next = { ...current };
       for (const change of changes) {
-        if (change.type === 'position' && change.position) next[change.id] = change.position;
+        if (change.type === 'position' && change.position) {
+          if (change.dragging === false) delete next[change.id];
+          else next[change.id] = change.position;
+        }
       }
       return next;
     });
@@ -192,7 +211,11 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       }
       return ids;
     });
-  }, []);
+    const completedMoves = changes.flatMap((change) => change.type === 'position' && change.dragging === false && change.position
+      ? [{ nodeId: change.id, position: change.position }]
+      : []);
+    if (completedMoves.length) persistNodePositions(completedMoves);
+  }, [persistNodePositions]);
 
   const onNodeDragStop = useCallback((_event: unknown, node: FlowNode) => {
     const movingIds = selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id];
@@ -200,13 +223,13 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     const positionsToSave = props.board.nodes
       .filter((item) => movingIds.includes(item.id))
       .map((item) => ({ nodeId: item.id, position: livePositions.get(item.id) ?? (item.id === node.id ? node.position : positions[item.id] ?? item.position) }));
-    if (positionsToSave.length) dispatch({ type: 'view.move-nodes', viewId: props.view.id, positions: positionsToSave, pin: true });
+    persistNodePositions(positionsToSave);
     setPositions((current) => {
       const next = { ...current };
       for (const id of movingIds) delete next[id];
       return next;
     });
-  }, [dispatch, props.view.id, props.board.nodes, selectedNodeIds, getNodes, positions]);
+  }, [persistNodePositions, props.board.nodes, selectedNodeIds, getNodes, positions]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
