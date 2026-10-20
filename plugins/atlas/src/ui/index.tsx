@@ -47,6 +47,7 @@ import { FreeformView } from './FreeformView.js';
 import { buildAtlasCardExportOverlay } from './card-export.js';
 import { GraphCanvas } from './GraphCanvas.js';
 import { StructuredViews } from './StructuredViews.js';
+import { isCurrentLayoutRequest, layoutErrorNotice, LAYOUT_CANCELLED_NOTICE } from './layout-notice.js';
 import { initialWorkspaceRefreshStatus, reduceWorkspaceRefreshStatus } from './workspace-refresh.js';
 import {
   applyRemoteBaseline,
@@ -130,6 +131,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const graphRef = useRef<ProviderSnapshot | null>(graph);
   const graphWorkerRef = useRef<GraphWorkerClient | null>(null);
   const layoutWorkerRef = useRef<LayoutWorkerClient | null>(null);
+  const layoutRequestSequenceRef = useRef(0);
   const providerEntriesRef = useRef<Map<string, ConnectedProvider>>(new Map());
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResult, setSearchResult] = useState<Awaited<ReturnType<GraphWorkerClient['search']>> | null>(null);
@@ -816,6 +818,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
   const runLayout = async (kind: 'force' | 'layered' | 'timeline' | 'manual') => {
     if (!activeSession || !activeView || activeView.kind !== 'graph') return;
+    const requestSequence = ++layoutRequestSequenceRef.current;
     const board = activeSession.board;
     const snapshot = graph?.snapshot;
     const worker = layoutWorkerRef.current ?? createLayoutWorkerClient();
@@ -839,6 +842,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       } else if (kind === 'force') input = { ...base, kind, seed: stableSeed(`${board.boardId}:${board.revision}`) };
       else input = { ...base, kind };
       const result = await worker.calculate(input);
+      if (!isCurrentLayoutRequest(requestSequence, layoutRequestSequenceRef.current)) return;
       const current = sessionsRef.current.get(board.boardId);
       const currentSnapshot = graphRef.current?.snapshot;
       const snapshotMatches = snapshot ? Boolean(result.snapshot && currentSnapshot && sameSnapshot(snapshot, currentSnapshot) && sameSnapshot(result.snapshot, snapshot)) : !result.snapshot;
@@ -849,12 +853,16 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       const positions = result.positions.map(({ nodeId, position }) => ({ id: nodeId, position }));
       acceptBoard(board.boardId, applyAtlasCommand(current.board, { type: 'node.apply-layout', positions }));
       setNotice(`${layoutName}レイアウトを1回のUndo操作として適用しました。端点が未解決のエッジ: ${result.unresolvedEdgeIds.length}件。`);
-    } catch (error) { setNotice(`レイアウトに失敗しました: ${errorMessage(error)}`); }
+    } catch (error) {
+      if (!isCurrentLayoutRequest(requestSequence, layoutRequestSequenceRef.current)) return;
+      setNotice(layoutErrorNotice(error, errorMessage(error)));
+    }
   };
 
   const cancelLayout = () => {
+    layoutRequestSequenceRef.current += 1;
     layoutWorkerRef.current?.cancel();
-    setNotice('レイアウト計算を中止しました。');
+    setNotice(LAYOUT_CANCELLED_NOTICE);
   };
 
   const prepareChanges = async () => {
