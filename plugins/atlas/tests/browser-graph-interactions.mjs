@@ -200,11 +200,14 @@ async function run() {
     await story.getByRole('heading', { name: 'Story Knowledge', exact: true }).waitFor({ state: 'visible' });
     const firstName = `青木${randomUUID().slice(0, 5)}`;
     const secondName = `桜${randomUUID().slice(0, 5)}`;
+    const thirdName = `楓${randomUUID().slice(0, 5)}`;
     const alias = `atlas-alias-${randomUUID().slice(0, 5)}`;
     const tag = `atlas-tag-${randomUUID().slice(0, 5)}`;
     await createStoryEntity(page, story, { name: firstName, alias, tag });
     await createStoryEntity(page, story, { name: secondName, alias: `${alias}-two`, tag: `${tag}-two` });
+    await createStoryEntity(page, story, { name: thirdName, alias: `${alias}-three`, tag: `${tag}-three` });
     await createStoryRelation(page, story, { from: firstName, to: secondName });
+    await createStoryRelation(page, story, { from: secondName, to: thirdName });
     report.cases.push('real-story-provider-source-created-and-linked-through-host-review');
 
     const atlas = page.frameLocator('iframe[title="Atlas"]');
@@ -215,7 +218,7 @@ async function run() {
     await provider.waitFor({ state: 'visible' });
     await provider.selectOption('scriptorium.story-knowledge');
     await atlas.getByRole('button', { name: '選択したProviderを接続' }).click();
-    await atlas.locator('.atlas-status-inline').filter({ hasText: 'ノード 2 件' }).waitFor({ state: 'visible', timeout: 30000 });
+    await atlas.locator('.atlas-status-inline').filter({ hasText: 'ノード 3 件' }).waitFor({ state: 'visible', timeout: 30000 });
     report.cases.push('connect-real-story-provider-snapshot');
 
     for (const [query, field] of [[firstName, '名前'], [alias, '別名'], [tag, 'タグ'], ['story.character', '種類'], ['bible/characters', 'パス']]) {
@@ -257,10 +260,15 @@ async function run() {
     await atlas.getByLabel('経路の終点').selectOption(secondNode.id);
     await atlas.getByRole('button', { name: '最短経路を検索' }).click();
     await atlas.getByRole('status').filter({ hasText: '最短経路 1ホップ' }).waitFor({ state: 'visible' });
-    for (const [buttonName, count] of [['入力方向 1段', 0], ['出力方向 2段', 1], ['双方向 3段', 1]]) {
+    for (const [buttonName, count] of [['入力方向 1段', 0], ['出力方向 2段', 2], ['双方向 3段', 2]]) {
       await atlas.getByRole('button', { name: buttonName }).click();
       await atlas.locator('.atlas-analysis').filter({ hasText: `${count} 件の近傍を表示しました` }).waitFor({ state: 'visible' });
     }
+    await graphNodeTwo.click();
+    await atlas.getByRole('button', { name: '出力方向 2段' }).click();
+    await atlas.locator('.atlas-analysis').filter({ hasText: '1 件の近傍を表示しました' }).waitFor({ state: 'visible' });
+    await atlas.locator('.atlas-flow-preview').filter({ hasText: thirdName }).waitFor({ state: 'visible' });
+    report.cases.push('provider-neighbor-focus-reveals-unboarded-provider-node');
     await atlas.getByRole('button', { name: '連結成分をグループ化' }).click();
     await atlas.locator('.atlas-analysis').filter({ hasText: '連結成分' }).waitFor({ state: 'visible' });
     await commitAtlasUntilClean(page, atlas);
@@ -269,6 +277,7 @@ async function run() {
     assert.equal(componentNodes.length, 2);
     assert.ok(componentNodes[0]?.groupId && componentNodes[0].groupId === componentNodes[1]?.groupId, 'Weak-component grouping should persist one group for the connected Story nodes.');
     report.cases.push('provider-shortest-path-all-neighbor-directions-depths-and-component-grouping');
+    await atlas.getByRole('button', { name: '注目範囲を解除' }).click();
 
     const idHits = await searchProvider(atlas, firstNode.ref.localId, 'ID');
     const idHit = idHits.filter({ hasText: firstName }).first();

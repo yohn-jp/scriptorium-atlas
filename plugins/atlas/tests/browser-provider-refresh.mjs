@@ -216,6 +216,7 @@ async function run() {
     await atlas.getByRole('button', { name: '全体を表示' }).click();
     const flowNode = atlas.locator(`.react-flow__node[data-id="${originalNode.id}"]`);
     await flowNode.waitFor({ state: 'visible' });
+    await flowNode.scrollIntoViewIfNeeded();
     const nodeBox = await flowNode.boundingBox();
     const flowBox = await atlas.locator('.atlas-graph-flow').boundingBox();
     const iframeBox = await page.locator('iframe[title="Atlas"]').boundingBox();
