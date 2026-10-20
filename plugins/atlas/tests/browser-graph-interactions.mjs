@@ -236,6 +236,7 @@ async function run() {
     await secondHit.getByRole('button', { name: 'ノードを追加' }).click();
     await commitAtlasUntilClean(page, atlas);
     let board = await downloadBoard(page, atlas);
+    const firstBoardName = board.name;
     const firstNode = board.nodes.find((node) => node.label === firstName);
     const secondNode = board.nodes.find((node) => node.label === secondName);
     assert.ok(firstNode?.ref && secondNode?.ref, 'Added Story nodes should keep their provider references.');
@@ -491,6 +492,10 @@ async function run() {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByLabel('開く').selectOption({ label: workspaceName });
     const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
+    const reloadedNav = reloadedAtlas.getByRole('navigation', { name: 'Atlasボード' });
+    const reloadedFirstBoard = reloadedNav.getByRole('button').filter({ hasText: firstBoardName });
+    await reloadedFirstBoard.waitFor({ state: 'visible' });
+    await reloadedFirstBoard.click();
     await reloadedAtlas.getByRole('tab', { name: /グラフ/u }).waitFor({ state: 'visible' });
     const reloadedBoard = await downloadBoard(page, reloadedAtlas);
     assert.ok(reloadedBoard.nodes.some((node) => node.id === firstNode.id), 'Host reload should retain provider node identities.');
