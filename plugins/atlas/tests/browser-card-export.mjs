@@ -126,9 +126,19 @@ function readSvgDimensions(svg) {
   const values = viewBox.trim().split(/[\s,]+/u).map(Number);
   assert.equal(values.length, 4, 'SVG viewBox should contain four numeric values.');
   assert.ok(values.every(Number.isFinite), 'SVG viewBox values should be finite.');
-  const dimensions = { width: Math.round(values[2]), height: Math.round(values[3]) };
+  const dimensions = { x: values[0], y: values[1], width: values[2], height: values[3] };
   assert.ok(dimensions.width > 0 && dimensions.height > 0, 'SVG export bounds should enclose a non-empty scene.');
   return dimensions;
+}
+
+function getCardBounds(board) {
+  assert.ok(board.cards.length > 0, 'Export fixture should contain Atlas cards.');
+  return board.cards.reduce((bounds, card) => ({
+    left: Math.min(bounds.left, card.position.x),
+    top: Math.min(bounds.top, card.position.y),
+    right: Math.max(bounds.right, card.position.x + card.width),
+    bottom: Math.max(bounds.bottom, card.position.y + card.height),
+  }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
 }
 
 async function run() {
@@ -259,6 +269,7 @@ async function run() {
 
     const importedBoard = JSON.parse((await downloadText(page, atlas.getByRole('button', { name: '.atlas.jsonをエクスポート' }))).content);
     assert.deepEqual(importedBoard.cards.map((card) => card.kind).sort(), ['image', 'provider-node', 'source', 'text']);
+    const cardBounds = getCardBounds(importedBoard);
     report.cases.push('import-four-card-kinds-for-export');
 
     const svgDownload = await downloadText(page, atlas.getByRole('button', { name: 'SVG', exact: true }));
@@ -268,6 +279,10 @@ async function run() {
     }
     assert.match(svgDownload.content, /<image\b/u, 'SVG export should include the embedded image card.');
     const svgDimensions = readSvgDimensions(svgDownload.content);
+    assert.ok(svgDimensions.x <= cardBounds.left && svgDimensions.y <= cardBounds.top &&
+      svgDimensions.x + svgDimensions.width >= cardBounds.right &&
+      svgDimensions.y + svgDimensions.height >= cardBounds.bottom,
+    `SVG viewBox ${JSON.stringify(svgDimensions)} should enclose all imported Card extents ${JSON.stringify(cardBounds)}.`);
     const svgBytes = Buffer.from(svgDownload.content, 'utf8');
     if (artifactPreviewDirectory) {
       await mkdir(artifactPreviewDirectory, { recursive: true });
@@ -291,6 +306,9 @@ async function run() {
     const dimensions = readPngDimensions(pngBytes);
     assert.ok(dimensions.width > 0 && dimensions.height > 0,
       `PNG export bounds ${dimensions.width}x${dimensions.height} should enclose a non-empty scene.`);
+    assert.ok(dimensions.width >= cardBounds.right - cardBounds.left &&
+      dimensions.height >= cardBounds.bottom - cardBounds.top,
+    `PNG bounds ${JSON.stringify(dimensions)} should cover the full Card extent ${JSON.stringify(cardBounds)}.`);
     const widthDifference = Math.abs(dimensions.width - svgDimensions.width) / Math.max(dimensions.width, svgDimensions.width);
     const heightDifference = Math.abs(dimensions.height - svgDimensions.height) / Math.max(dimensions.height, svgDimensions.height);
     assert.ok(widthDifference <= 0.05 && heightDifference <= 0.05,
