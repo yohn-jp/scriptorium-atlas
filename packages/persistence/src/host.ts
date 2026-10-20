@@ -308,6 +308,8 @@ export async function openIndexedDbHost(options: OpenIndexedDbHostOptions = {}):
       const pageData = await readPage(active, workspace.workspaceId, '', after, limit);
       assertHandleCurrent(pageData.workspace, workspace);
       const files: WorkspaceSnapshotFile[] = [];
+      // The empty-array envelope already contains `[]`; each accepted entry adds only its JSON and a comma.
+      let serializedFileItemsBytes = 0;
       let lastPath: string | undefined;
       let hasMore = false;
       for (const file of pageData.files) {
@@ -324,12 +326,23 @@ export async function openIndexedDbHost(options: OpenIndexedDbHostOptions = {}):
           versioned = asVersionedFile(file, false);
           entry = versioned;
         }
-        let candidate = makeSnapshotCandidate(workspace, [...files, entry], file.path, pageData.files.length);
-        if (utf8Bytes(JSON.stringify(candidate)).byteLength > MAX_SNAPSHOT_MESSAGE_BYTES && 'content' in entry) {
+        const candidateHasMore = pageData.files.length > files.length + 1;
+        const candidateEnvelope = {
+          workspace,
+          files: [],
+          nextCursor: candidateHasMore ? encodeCursor(file.path) : null,
+          complete: !candidateHasMore
+        };
+        const candidateEnvelopeBytes = utf8Bytes(JSON.stringify(candidateEnvelope)).byteLength;
+        const separatorBytes = files.length > 0 ? 1 : 0;
+        let entryBytes = utf8Bytes(JSON.stringify(entry)).byteLength;
+        let candidateBytes = candidateEnvelopeBytes + serializedFileItemsBytes + separatorBytes + entryBytes;
+        if (candidateBytes > MAX_SNAPSHOT_MESSAGE_BYTES && 'content' in entry) {
           entry = snapshotFileMetadata(file, versioned!.encoding);
-          candidate = makeSnapshotCandidate(workspace, [...files, entry], file.path, pageData.files.length);
+          entryBytes = utf8Bytes(JSON.stringify(entry)).byteLength;
+          candidateBytes = candidateEnvelopeBytes + serializedFileItemsBytes + separatorBytes + entryBytes;
         }
-        if (utf8Bytes(JSON.stringify(candidate)).byteLength > MAX_SNAPSHOT_MESSAGE_BYTES) {
+        if (candidateBytes > MAX_SNAPSHOT_MESSAGE_BYTES) {
           if (files.length === 0) {
             fail('STORAGE_UNAVAILABLE', 'Snapshot metadata exceeds the configured response byte limit.', { path: file.path });
           }
@@ -337,6 +350,7 @@ export async function openIndexedDbHost(options: OpenIndexedDbHostOptions = {}):
           break;
         }
         files.push(entry);
+        serializedFileItemsBytes += separatorBytes + entryBytes;
         lastPath = file.path;
       }
       if (!hasMore && pageData.files.length > files.length) hasMore = true;
@@ -1451,9 +1465,11 @@ function asVersionedFile(file: FileRecord, enforceMessageLimit = true): Versione
     contentType: file.contentType,
     updatedAt: file.updatedAt
   };
-  const messageBytes = utf8Bytes(JSON.stringify(result)).byteLength;
-  if (enforceMessageLimit && messageBytes > MAX_SNAPSHOT_MESSAGE_BYTES) {
-    fail('INVALID_INPUT', 'File content must be read through chunked reads to fit the Host message budget.', { path: file.path });
+  if (enforceMessageLimit) {
+    const messageBytes = utf8Bytes(JSON.stringify(result)).byteLength;
+    if (messageBytes > MAX_SNAPSHOT_MESSAGE_BYTES) {
+      fail('INVALID_INPUT', 'File content must be read through chunked reads to fit the Host message budget.', { path: file.path });
+    }
   }
   return result;
 }
@@ -1467,21 +1483,6 @@ function snapshotFileMetadata(file: FileRecord, encoding: 'utf8' | 'base64'): Sn
     updatedAt: file.updatedAt,
     byteLength: file.bytes.byteLength,
     encoding
-  };
-}
-
-function makeSnapshotCandidate(
-  workspace: WorkspaceHandle,
-  files: WorkspaceSnapshotFile[],
-  lastPath: string,
-  pageFileCount: number
-): WorkspaceSnapshotPage {
-  const hasMore = pageFileCount > files.length;
-  return {
-    workspace,
-    files,
-    nextCursor: hasMore ? encodeCursor(lastPath) : null,
-    complete: !hasMore
   };
 }
 

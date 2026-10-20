@@ -304,4 +304,103 @@ describe('IndexedDB Host persistence', () => {
     await expect(host.recover(workspace.workspace.workspaceId)).resolves.toMatchObject({ pendingOperationIds: [] });
     await expect(host.list(workspace.workspace)).resolves.toMatchObject({ files: [] });
   });
+
+  it('accounts exactly for escaped UTF-8 snapshot bytes at the page limit and downgrades at one byte over', async () => {
+    const host = await open();
+    const workspace = await host.createWorkspace({ name: 'Snapshot byte boundary' });
+    const workspaceId = workspace.workspace.workspaceId;
+    const seed = await host.prepare(workspace.workspace, {
+      operationId: 'op-snapshot-boundary-seed',
+      workspaceId,
+      baseWorkspaceRevision: workspace.workspace.sourceRevision,
+      reads: [{ path: 'a.txt', revision: null }, { path: 'b.txt', revision: null }, { path: 'z.txt', revision: null }],
+      writes: [
+        { path: 'a.txt', content: 'head', encoding: 'utf8' },
+        { path: 'b.txt', content: '', encoding: 'utf8' },
+        { path: 'z.txt', content: 'tail', encoding: 'utf8' }
+      ],
+      message: 'Seed snapshot boundary files',
+      kind: 'document'
+    });
+    await host.commit(workspace.workspace, seed.preparedId, true);
+
+    let handle = await host.getWorkspaceHandle(workspaceId);
+    const headFile = await host.read(handle, { path: 'a.txt' });
+    const emptyFile = await host.read(handle, { path: 'b.txt' });
+    expect(headFile).toMatchObject({ content: 'head', encoding: 'utf8' });
+    expect(emptyFile).toMatchObject({ content: '', encoding: 'utf8' });
+    const cursor = encodeURIComponent('b.txt');
+    const emptyCandidate = {
+      workspace: handle,
+      files: [headFile, emptyFile],
+      nextCursor: cursor,
+      complete: false
+    };
+    const emptyCandidateBytes = utf8Bytes(JSON.stringify(emptyCandidate)).byteLength;
+    const maxMessageBytes = 7 * 1024 * 1024;
+    const suffix = '日本語"\\\n';
+    const suffixJsonBytes = utf8Bytes(JSON.stringify(suffix)).byteLength - 2;
+    const contentJsonDelta = maxMessageBytes - emptyCandidateBytes;
+    const fillJsonBytes = contentJsonDelta - suffixJsonBytes;
+    expect(fillJsonBytes).toBeGreaterThan(0);
+    const nulCount = Math.floor(fillJsonBytes / 6);
+    const asciiCount = fillJsonBytes % 6;
+    const exactContent = '\0'.repeat(nulCount) + 'x'.repeat(asciiCount) + suffix;
+    expect(utf8Bytes(JSON.stringify(exactContent)).byteLength - 2).toBe(contentJsonDelta);
+    expect(utf8Bytes(exactContent).byteLength).toBeLessThanOrEqual(2 * 1024 * 1024);
+
+    const exactChange = await host.prepare(handle, {
+      operationId: 'op-snapshot-boundary-exact',
+      workspaceId,
+      baseWorkspaceRevision: handle.sourceRevision,
+      reads: [{ path: 'b.txt', revision: emptyFile.revision }],
+      writes: [{ path: 'b.txt', content: exactContent, encoding: 'utf8' }],
+      message: 'Fill exactly to the snapshot response limit',
+      kind: 'document'
+    });
+    await host.commit(handle, exactChange.preparedId, true);
+    handle = await host.getWorkspaceHandle(workspaceId);
+    const exactHeadFile = await host.read(handle, { path: 'a.txt' });
+    const exactFile = await host.read(handle, { path: 'b.txt' });
+    const exactCandidate = { workspace: handle, files: [exactHeadFile, exactFile], nextCursor: cursor, complete: false };
+    expect(utf8Bytes(JSON.stringify(exactCandidate)).byteLength).toBe(maxMessageBytes);
+
+    const exactPage = await host.getSnapshotPage(handle, { limit: 2 });
+    expect(exactPage).toMatchObject({ nextCursor: cursor, complete: false });
+    expect(exactPage.files[0]).toMatchObject({ path: 'a.txt', content: 'head', encoding: 'utf8' });
+    expect(exactPage.files[1]).toMatchObject({ path: 'b.txt', content: exactContent, encoding: 'utf8' });
+    expect(utf8Bytes(JSON.stringify(exactPage)).byteLength).toBe(maxMessageBytes);
+
+    const overContent = `${exactContent}x`;
+    const overChange = await host.prepare(handle, {
+      operationId: 'op-snapshot-boundary-over',
+      workspaceId,
+      baseWorkspaceRevision: handle.sourceRevision,
+      reads: [{ path: 'b.txt', revision: exactFile.revision }],
+      writes: [{ path: 'b.txt', content: overContent, encoding: 'utf8' }],
+      message: 'Exceed the snapshot response limit by one byte',
+      kind: 'document'
+    });
+    await host.commit(handle, overChange.preparedId, true);
+    handle = await host.getWorkspaceHandle(workspaceId);
+    const overFile = await host.read(handle, { path: 'a.txt' });
+    const overLargeFile = await host.read(handle, { path: 'b.txt' });
+    const overCandidate = { workspace: handle, files: [overFile, overLargeFile], nextCursor: cursor, complete: false };
+    expect(utf8Bytes(JSON.stringify(overCandidate)).byteLength).toBe(maxMessageBytes + 1);
+
+    const downgradedPage = await host.getSnapshotPage(handle, { limit: 2 });
+    expect(downgradedPage).toMatchObject({ nextCursor: cursor, complete: false });
+    expect(downgradedPage.files[0]).toMatchObject({
+      path: 'a.txt',
+      content: 'head',
+      encoding: 'utf8'
+    });
+    expect(downgradedPage.files[1]).toMatchObject({
+      path: 'b.txt',
+      byteLength: utf8Bytes(overContent).byteLength,
+      encoding: 'utf8'
+    });
+    expect(downgradedPage.files[1]).not.toHaveProperty('content');
+    expect(utf8Bytes(JSON.stringify(downgradedPage)).byteLength).toBeLessThanOrEqual(maxMessageBytes);
+  });
 });
