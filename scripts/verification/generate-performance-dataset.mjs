@@ -7,7 +7,7 @@ const seed = 'atlas-v1-perf-20261021';
 const STORY_PROVIDER_ID = 'scriptorium.story-knowledge';
 
 function optionsFrom(argv) {
-  const result = { nodes: 1_000, edges: 2_000, cards: 0, layoutNodes: 0, output: null, report: null };
+  const result = { nodes: 1_000, edges: 2_000, cards: 0, layoutNodes: 0, sceneElements: 0, output: null, report: null };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument.startsWith('--')) throw new Error(`Unexpected argument: ${argument}`);
@@ -16,10 +16,11 @@ function optionsFrom(argv) {
     if (value === undefined) throw new Error(`Missing value for --${key}`);
     if (key === 'output') result.output = resolve(value);
     else if (key === 'report') result.report = resolve(value);
-    else if (['nodes', 'edges', 'cards', 'layout-nodes'].includes(key)) {
+    else if (['nodes', 'edges', 'cards', 'layout-nodes', 'scene-elements'].includes(key)) {
       const number = Number(value);
       if (!Number.isSafeInteger(number) || number < 0) throw new Error(`--${key} must be a non-negative integer.`);
       if (key === 'layout-nodes') result.layoutNodes = number;
+      else if (key === 'scene-elements') result.sceneElements = number;
       else result[key] = number;
     } else throw new Error(`Unknown option: --${key}`);
   }
@@ -142,6 +143,45 @@ function deterministicBoard({ nodeCount, edgeCount, cardCount }) {
   };
 }
 
+function deterministicExcalidrawScene(elementCount) {
+  const elements = Array.from({ length: elementCount }, (_, index) => ({
+    id: `perf-excalidraw-${String(index).padStart(4, '0')}`,
+    type: 'rectangle',
+    x: 280 + (index % 8) * 120,
+    y: 150 + Math.floor(index / 8) * 96,
+    width: 72,
+    height: 48,
+    angle: 0,
+    strokeColor: '#1e1e1e',
+    backgroundColor: '#ffffff',
+    fillStyle: 'solid',
+    strokeWidth: 1,
+    strokeStyle: 'solid',
+    roughness: 0,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    index: `a${index.toString(36)}`,
+    roundness: { type: 3 },
+    seed: index + 100,
+    version: 1,
+    versionNonce: index + 1_000,
+    isDeleted: false,
+    boundElements: null,
+    updated: 0,
+    link: null,
+    locked: false,
+  }));
+  return {
+    type: 'excalidraw',
+    version: 2,
+    source: 'scriptorium-atlas-performance-fixture',
+    elements,
+    appState: { scrollX: 0, scrollY: 0, zoom: { value: 1 }, viewBackgroundColor: '#ffffff' },
+    files: {},
+  };
+}
+
 async function main() {
   const options = optionsFrom(process.argv.slice(2));
   const records = [];
@@ -173,7 +213,7 @@ async function main() {
     });
   }
 
-  if (options.nodes || options.layoutNodes || options.cards) {
+  if (options.nodes || options.layoutNodes || options.cards || options.sceneElements) {
     const boardText = JSON.stringify(deterministicBoard({
       nodeCount: options.layoutNodes,
       edgeCount: options.layoutNodes ? options.edges * options.layoutNodes / options.nodes : 0,
@@ -186,6 +226,19 @@ async function main() {
       revision: sha256(bytes),
       bytes: arrayBuffer(bytes),
       contentType: 'application/json',
+      updatedAt: '2026-10-21T00:00:00.000Z',
+    });
+  }
+
+  if (options.sceneElements) {
+    const sceneText = JSON.stringify(deterministicExcalidrawScene(options.sceneElements), null, 2);
+    const bytes = encoder.encode(sceneText);
+    records.push({
+      workspaceId: 'perf-workspace-v1',
+      path: 'documents/performance.excalidraw',
+      revision: sha256(bytes),
+      bytes: arrayBuffer(bytes),
+      contentType: 'application/vnd.excalidraw+json',
       updatedAt: '2026-10-21T00:00:00.000Z',
     });
   }
@@ -205,6 +258,7 @@ async function main() {
     layoutBoardNodes: options.layoutNodes,
     layoutBoardEdges: options.layoutNodes ? options.edges * options.layoutNodes / options.nodes : 0,
     canvasCards: options.cards,
+    canvasExcalidrawObjects: options.sceneElements,
     sourceFileCount: options.nodes,
     payloadFileCount: records.length,
     bundleEntryCountIncludingManifest: entryCount,

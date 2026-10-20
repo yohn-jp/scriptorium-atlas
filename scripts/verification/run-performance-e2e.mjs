@@ -11,7 +11,7 @@ import { currentHead, hashTree } from './artifact-evidence.mjs';
 const repoRoot = resolve(process.env.ATLAS_PERF_REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
 const report = {
   schemaVersion: 'atlas.performance-e2e-evidence/v1',
-  purpose: 'Real Chromium performance subset for deterministic Graph and Canvas datasets; this is not a full Q12 or Q01-Q15 verdict.',
+  purpose: 'Real Chromium performance subset for deterministic Graph and Excalidraw Freeform datasets; this is not a full Q12 or Q01-Q15 verdict.',
   headSha: currentHead(repoRoot),
   exactCli: process.env.ATLAS_PERF_EXACT_CLI ?? `${process.argv[0]} ${process.argv.slice(1).join(' ')}`,
   argv: process.argv,
@@ -21,9 +21,6 @@ const report = {
   datasetGeneration: [],
   scenarios: [],
   explicitlyNotChecked: [
-    { id: 'Q12-force-cancellation-ack', status: 'NOT_CHECKED', reason: 'This runner measures the production 1k Force request but does not yet guarantee cancellation while a calculation is in flight.' },
-    { id: 'Q12-disabled-plugin-network-poll-and-heavy-import', status: 'NOT_CHECKED', reason: 'Dedicated Worker teardown is observed; network polling and dynamic heavy-code import are not yet independently audited here.' },
-    { id: 'Q12-commit-reload-manifest-revision-equality', status: 'NOT_CHECKED', reason: 'This runner does not create a performance Board commit and compare the post-reload Host manifest and revision.' },
   ],
   suiteStatus: 'NOT_CHECKED',
   exitStatus: null,
@@ -113,8 +110,8 @@ try {
   const generated = [];
   generated.push(await generateDataset(generator, tempRoot, 'one-k', ['--nodes', '1000', '--edges', '2000', '--layout-nodes', '1000']));
   generated.push(await generateDataset(generator, tempRoot, 'ten-k', ['--nodes', '10000', '--edges', '20000']));
-  generated.push(await generateDataset(generator, tempRoot, 'canvas-100', ['--nodes', '0', '--edges', '0', '--cards', '100']));
-  generated.push(await generateDataset(generator, tempRoot, 'canvas-500', ['--nodes', '0', '--edges', '0', '--cards', '500']));
+  generated.push(await generateDataset(generator, tempRoot, 'canvas-100', ['--nodes', '0', '--edges', '0', '--scene-elements', '100']));
+  generated.push(await generateDataset(generator, tempRoot, 'canvas-500', ['--nodes', '0', '--edges', '0', '--scene-elements', '500']));
   if (generated.some((item) => !item)) throw new Error('At least one deterministic dataset bundle could not be generated.');
   const [oneK, tenK, canvas100, canvas500] = generated;
   const datasets = { oneK: oneK.summary, tenK: tenK.summary, canvas100: canvas100.summary, canvas500: canvas500.summary };
@@ -125,6 +122,7 @@ try {
   const playwrightImport = playwrightManifest.exports?.['.']?.import;
   if (typeof playwrightImport !== 'string') throw new Error('@playwright/test does not provide its ESM entry for performance browser verification.');
   const { chromium } = await import(pathToFileURL(resolve(dirname(playwrightPackageJson), playwrightImport)).href);
+  const { unzipSync } = requireFromRepository('fflate');
   const chromiumPath = process.env.ATLAS_E2E_CHROMIUM;
   browser = await chromium.launch({ headless: true, ...(chromiumPath ? { executablePath: chromiumPath } : {}) });
   report.environment.browser = { name: 'Chromium', version: browser.version(), executablePath: chromiumPath ?? 'Playwright bundled Chromium' };
@@ -138,7 +136,7 @@ try {
   if (!ready) throw new Error(`Combined profile static server did not become ready: ${JSON.stringify(server.evidence())}`);
 
   const { runPerformanceCases } = await import('../../tests/e2e/performance.mjs');
-  await runPerformanceCases({ browser, baseUrl, archives: { oneK: oneK.archive, tenK: tenK.archive, canvas100: canvas100.archive, canvas500: canvas500.archive }, datasets, record: async (id, run) => {
+  await runPerformanceCases({ browser, baseUrl, unzipSync, archives: { oneK: oneK.archive, tenK: tenK.archive, canvas100: canvas100.archive, canvas500: canvas500.archive }, datasets, record: async (id, run) => {
     try {
       const evidence = await run();
       const unresolved = evidence.notCheckedReasons ?? [];
