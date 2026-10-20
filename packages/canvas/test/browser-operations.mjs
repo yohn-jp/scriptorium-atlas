@@ -335,6 +335,30 @@ try {
   assert.ok(initialLayout && initialLayout.width >= 240 && initialLayout.height >= 240,
     `The real Excalidraw surface must be visible; received ${JSON.stringify(initialLayout)}.`);
 
+  await page.setViewportSize({ width: 390, height: 844 });
+  await editor.waitFor({ state: "visible" });
+  assert.equal(await atlas.locator(".atlas-canvas-accessibility").evaluate((element) => element.open), false,
+    "The keyboard alternative panel must remain collapsed by default at a compact viewport.");
+  await chooseTool(page, editor, "矩形");
+  const compactImageChooserPromise = page.waitForEvent("filechooser");
+  await chooseTool(page, editor, "画像を挿入");
+  const compactImageChooser = await compactImageChooserPromise;
+  await compactImageChooser.setFiles({ name: "compact-canvas.png", mimeType: "image/png", buffer: testPng });
+  const compactBounds = await editor.boundingBox();
+  assert.ok(compactBounds);
+  await page.mouse.click(compactBounds.x + compactBounds.width / 2, compactBounds.y + compactBounds.height / 2);
+  await page.waitForTimeout(500);
+  const compactImageScene = await downloadScene(page, atlas);
+  assert.equal(compactImageScene.data.elements.filter((element) => !element.isDeleted && element.type === "image").length, 1,
+    "The native image chooser and image placement toolbar targets must work at 390px width.");
+  const compactUndo = editor.getByRole("button", { name: "元に戻す" });
+  await compactUndo.click();
+  const compactUndoScene = await downloadScene(page, atlas);
+  assert.equal(compactUndoScene.data.elements.filter((element) => !element.isDeleted && element.type === "image").length, 0,
+    "The compact toolbar probe must remove its test image before the main gesture assertions.");
+  await page.setViewportSize({ width: 1600, height: 1200 });
+  await editor.waitFor({ state: "visible" });
+
   const assetPath = await frame.evaluate(() => globalThis.EXCALIDRAW_ASSET_PATH);
   assert.equal(new URL(assetPath).origin, new URL(frame.url()).origin, "Canvas fonts must use the Atlas frame's own origin.");
   assert.ok(assetPath.endsWith("/"), "The Excalidraw asset path must be a directory URL.");
