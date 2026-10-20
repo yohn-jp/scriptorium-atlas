@@ -289,18 +289,38 @@ async function run() {
     assert.ok(groupedNodes[0]?.groupId && groupedNodes[0].groupId === groupedNodes[1]?.groupId, 'Grouping should assign one saved group ID to both selected nodes.');
     report.cases.push('multi-select-and-group-provider-nodes');
 
-    const groupSelectionRect = atlas.locator('.react-flow__nodesselection-rect');
-    await groupSelectionRect.waitFor({ state: 'visible' });
+    // Fit and scroll before measuring: a prior locator drag used coordinates
+    // below the host iframe viewport and therefore never sent a physical drag.
+    await atlas.getByRole('button', { name: '全体を表示' }).click();
+    await graphNodeOne.scrollIntoViewIfNeeded();
+    await graphNodeOne.waitFor({ state: 'visible' });
     const beforeMove = new Map(groupedNodes.map((node) => [node.id, node.position]));
-    const selectionBox = await groupSelectionRect.boundingBox();
+    const nodeBox = await graphNodeOne.boundingBox();
     const flowBox = await flow.boundingBox();
-    assert.ok(selectionBox && flowBox, 'The selected node group should have a visible drag surface inside the graph viewport.');
-    const start = { x: selectionBox.x + selectionBox.width / 2, y: selectionBox.y + selectionBox.height / 2 };
-    const target = {
-      x: Math.min(flowBox.width - 20, start.x - flowBox.x + 80),
-      y: Math.min(flowBox.height - 20, start.y - flowBox.y + 60),
+    const iframeBox = await page.locator('iframe[title="Atlas"]').boundingBox();
+    const viewport = page.viewportSize();
+    assert.ok(nodeBox && flowBox && iframeBox && viewport, 'Selected nodes and their graph viewport should have measurable browser geometry.');
+    const visible = {
+      left: Math.max(0, flowBox.x, iframeBox.x),
+      top: Math.max(0, flowBox.y, iframeBox.y),
+      right: Math.min(viewport.width, flowBox.x + flowBox.width, iframeBox.x + iframeBox.width),
+      bottom: Math.min(viewport.height, flowBox.y + flowBox.height, iframeBox.y + iframeBox.height),
     };
-    await groupSelectionRect.dragTo(flow, { targetPosition: target });
+    const start = { x: nodeBox.x + nodeBox.width / 2, y: nodeBox.y + nodeBox.height / 2 };
+    assert.ok(start.x >= visible.left && start.x <= visible.right && start.y >= visible.top && start.y <= visible.bottom,
+      `The drag source should be inside the visible Atlas frame and graph viewport; start=${JSON.stringify(start)} visible=${JSON.stringify(visible)} node=${JSON.stringify(nodeBox)} flow=${JSON.stringify(flowBox)} iframe=${JSON.stringify(iframeBox)}.`);
+    const moveToward = (coordinate, low, high) => {
+      const negative = Math.min(70, coordinate - low - 8);
+      if (negative >= 24) return coordinate - negative;
+      const positive = Math.min(70, high - coordinate - 8);
+      return positive >= 24 ? coordinate + positive : coordinate;
+    };
+    const target = { x: moveToward(start.x, visible.left, visible.right), y: moveToward(start.y, visible.top, visible.bottom) };
+    assert.ok(target.x !== start.x || target.y !== start.y, `The visible graph viewport should have room for a physical drag; start=${JSON.stringify(start)} visible=${JSON.stringify(visible)}.`);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 12 });
+    await page.mouse.up();
     await commitAtlasUntilClean(page, atlas);
     board = await downloadBoard(page, atlas);
     const movedNodes = board.nodes.filter((node) => node.id === firstNode.id || node.id === secondNode.id);
@@ -310,15 +330,28 @@ async function run() {
         const rect = element.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       });
-      assert.ok(before && (node.position.x !== before.x || node.position.y !== before.y), `Multi-drag should move ${node.label}; before=${JSON.stringify(before)} after=${JSON.stringify(node.position)} selection=${JSON.stringify(selectionBox)} flow=${JSON.stringify(flowBox)} start=${JSON.stringify(start)} target=${JSON.stringify(target)} dom=${JSON.stringify(domRect)}.`);
+      assert.ok(before && (node.position.x !== before.x || node.position.y !== before.y), `Multi-drag should move ${node.label}; before=${JSON.stringify(before)} after=${JSON.stringify(node.position)} node=${JSON.stringify(nodeBox)} flow=${JSON.stringify(flowBox)} iframe=${JSON.stringify(iframeBox)} visible=${JSON.stringify(visible)} start=${JSON.stringify(start)} target=${JSON.stringify(target)} dom=${JSON.stringify(domRect)}.`);
       assert.ok(board.views.find((view) => view.kind === 'graph')?.pins?.some((pin) => pin.nodeId === node.id && pin.mode === 'manual'), `Dragging ${node.label} should persist a manual layout pin.`);
     }
     report.cases.push('multi-selected-drag-persists-both-positions-and-pins');
 
+    // Refit after the drag so the nodes stay in the usable canvas area and
+    // outside the fixed MiniMap overlay before creating a visual edge.
+    await atlas.getByRole('button', { name: '全体を表示' }).click();
+    await commitAtlasUntilClean(page, atlas);
+    await graphNodeOne.scrollIntoViewIfNeeded();
     const flowMetrics = await flow.boundingBox();
     assert.ok(flowMetrics);
-    await flow.click({ position: { x: flowMetrics.width - 24, y: 70 } });
-    await graphNodeOne.hover();
+    await flow.click({ position: { x: 12, y: 12 } });
+    const nodeAfterDrag = await graphNodeOne.boundingBox();
+    const minimap = atlas.locator('.react-flow__minimap');
+    const minimapAfterDrag = await minimap.boundingBox();
+    try {
+      await graphNodeOne.hover();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not physically hover the graph node to create an edge; node=${JSON.stringify(nodeAfterDrag)} minimap=${JSON.stringify(minimapAfterDrag)} flow=${JSON.stringify(await flow.boundingBox())}: ${detail}`);
+    }
     const sourceHandle = graphNodeOne.locator('.react-flow__handle.source').first();
     const targetHandle = graphNodeTwo.locator('.react-flow__handle.target').first();
     await sourceHandle.waitFor({ state: 'visible' });
