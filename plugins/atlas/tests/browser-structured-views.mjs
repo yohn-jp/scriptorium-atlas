@@ -213,7 +213,7 @@ async function run() {
     report.cases.push('kanban-lane-rename-add-reorder-card-order-and-assign');
 
     await atlas.getByRole('tab', { name: /^タイムライン タイムライン$/u }).click();
-    const axis = atlas.getByLabel('軸');
+    const axis = atlas.locator('.atlas-timeline-controls label').filter({ hasText: /^軸/u }).locator('select');
     await axis.selectOption('story.scene-order');
     const axisConfirmation = atlas.getByRole('group', { name: 'タイムライン軸変更の確認' });
     await axisConfirmation.waitFor({ state: 'visible' });
