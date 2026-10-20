@@ -16,7 +16,9 @@ const DEFAULT_HOST_ROOT = existsSync(resolve(REPOSITORY_ROOT, "apps/standalone/s
   : resolve(REPOSITORY_ROOT, "../scriptorium-atlas-host");
 const HOST_ROOT = process.env.ATLAS_HOST_ROOT ?? DEFAULT_HOST_ROOT;
 const HOST_SERVE_SCRIPT = resolve(HOST_ROOT, "apps/standalone/scripts/serve.mjs");
-const PROFILE_ROOT = resolve(HOST_ROOT, "dist/story");
+const EXTERNAL_BASE_URL = process.env.ATLAS_E2E_URL;
+const PROFILE_NAME = process.env.ATLAS_E2E_PROFILE ?? (EXTERNAL_BASE_URL ? "combined" : "story");
+const PROFILE_ROOT = resolve(HOST_ROOT, `dist/${PROFILE_NAME}`);
 const BROWSER_PATH = process.env.ATLAS_E2E_CHROMIUM;
 const { chromium } = createRequire(resolve(HOST_ROOT, "package.json"))("@playwright/test");
 
@@ -64,7 +66,7 @@ async function waitForServer(child, baseUrl) {
 }
 
 async function stopServer(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   const exited = await Promise.race([
     new Promise((resolveExit) => child.once("exit", resolveExit)),
@@ -81,6 +83,17 @@ async function waitForValue(locator, predicate, message, timeoutMs = 12000) {
   let lastValue;
   while (Date.now() < deadline) {
     lastValue = await locator.inputValue();
+    if (predicate(lastValue)) return lastValue;
+    await delay(100);
+  }
+  assert.fail(`${message}; last value was ${JSON.stringify(lastValue)}`);
+}
+
+async function waitForText(locator, predicate, message, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue;
+  while (Date.now() < deadline) {
+    lastValue = await locator.innerText();
     if (predicate(lastValue)) return lastValue;
     await delay(100);
   }
@@ -134,11 +147,11 @@ async function submitPreview(page, story, expectedText) {
   await hostCommit(page, story);
 }
 
-async function createEntity(page, story, { type, name, volumeName, chapterName, manuscriptBody }) {
+async function createEntity(page, story, { type, name, volumeName, chapterName, manuscriptBody, fields }) {
   const form = createCard(story);
   await form.getByLabel("種類").selectOption(type);
   await form.getByLabel("表示名").fill(name);
-  await form.getByLabel("追加フィールド（JSON）").fill(JSON.stringify({ description: `Browser acceptance: ${type}` }));
+  await form.getByLabel("追加フィールド（JSON）").fill(JSON.stringify({ description: `Browser acceptance: ${type}`, ...fields }));
   if (type === "chapter") {
     const select = form.getByLabel("親の巻");
     const value = await select.locator("option").filter({ hasText: volumeName }).getAttribute("value");
@@ -180,11 +193,75 @@ async function createEntity(page, story, { type, name, volumeName, chapterName, 
   return { type, name, previewPaths: paths };
 }
 
-async function chooseEntity(story, name) {
+async function chooseEntity(story, name, type) {
   await story.getByRole("button", { name: "ライブラリ", exact: true }).click();
+  const library = story.locator('aside[aria-label="Storyエンティティ一覧"]');
+  await library.getByLabel("種類").selectOption(type ?? "all");
   const item = await waitForEntity(story, name);
   await item.click();
   return story.locator("article.card").filter({ has: story.getByRole("heading", { name: new RegExp(`: ${escapeRegExp(name)}$`, "u") }) }).first();
+}
+
+const TYPE_LABELS = { character: "人物", location: "場所", thread: "伏線", scene: "場面" };
+
+async function createRelation(page, story, { from, fromType, to, toType, kind, note }) {
+  await chooseEntity(story, from, fromType);
+  const relationCard = story.locator("article.card").filter({ has: story.getByRole("heading", { name: "関連する項目", exact: true }) });
+  const relationForm = relationCard.locator("form").filter({ has: story.getByRole("heading", { name: "関連を追加", exact: true }) });
+  const targetSelect = relationForm.getByRole("combobox").nth(0);
+  const targetOption = targetSelect.locator("option").filter({ hasText: to }).filter({ hasText: TYPE_LABELS[toType] }).first();
+  const targetValue = await targetOption.getAttribute("value");
+  assert.ok(targetValue, `Relation target '${to}' must be selectable.`);
+  await targetSelect.selectOption(targetValue);
+  await relationForm.getByRole("combobox").nth(1).selectOption(kind);
+  if (note) await relationForm.getByLabel("Note", { exact: true }).fill(note);
+  await relationForm.getByRole("button", { name: "関連追加案を作成" }).click();
+  await submitPreview(page, story, "関連を追加");
+  const row = relationCard.locator(".relation").filter({ hasText: from }).filter({ hasText: to }).filter({ hasText: kind }).first();
+  await row.waitFor({ state: "visible" });
+  const text = await row.innerText();
+  assert.ok(text.includes(`${from} → ${to}`), `Story relation must retain the source direction: ${text}`);
+  return text;
+}
+
+async function editTimelineField(page, story, entityName, field, value) {
+  const detail = await chooseEntity(story, entityName, "event");
+  const additionalFields = detail.locator("details").filter({ hasText: "Sourceのその他のフィールド" });
+  await additionalFields.locator("summary").click();
+  const fieldRow = additionalFields.locator("tbody tr").filter({ has: additionalFields.getByRole("cell", { name: field, exact: true }) });
+  await fieldRow.getByRole("button", { name: "編集", exact: true }).click();
+  await additionalFields.getByLabel("JSON値").fill(JSON.stringify(value));
+  await additionalFields.getByRole("button", { name: "Field編集案を作成" }).click();
+  await submitPreview(page, story, `「${field}」を編集`);
+}
+
+async function deleteRelation(page, story, { from, fromType, to, kind }) {
+  await chooseEntity(story, from, fromType);
+  const relationCard = story.locator("article.card").filter({ has: story.getByRole("heading", { name: "関連する項目", exact: true }) });
+  const row = relationCard.locator(".relation").filter({ hasText: from }).filter({ hasText: to }).filter({ hasText: kind }).first();
+  await row.getByRole("button", { name: "削除案" }).click();
+  await submitPreview(page, story, "関連を削除");
+  await row.waitFor({ state: "detached" });
+}
+
+async function deleteEntity(page, story, entityName, type) {
+  await chooseEntity(story, entityName, type);
+  await deleteCard(story).getByRole("button", { name: "削除案を確認" }).click();
+  const alert = story.getByRole("alert");
+  if (await alert.count()) assert.equal(await alert.count(), 0, `Unexpected delete protection for '${entityName}'.`);
+  await preview(story).waitFor({ state: "visible" });
+  await submitPreview(page, story, entityName);
+  const library = story.locator('aside[aria-label="Storyエンティティ一覧"]');
+  await library.getByRole("option").filter({ hasText: entityName }).first().waitFor({ state: "detached" });
+}
+
+async function editEntityName(page, story, entityName, nextName, type) {
+  const detail = await chooseEntity(story, entityName, type);
+  await detail.getByLabel("表示名").fill(nextName);
+  await detail.getByRole("button", { name: "編集案をプレビュー" }).click();
+  await submitPreview(page, story, "を編集");
+  await waitForEntity(story, nextName);
+  return nextName;
 }
 
 function escapeRegExp(value) {
@@ -229,6 +306,7 @@ async function runAcceptance({ browser, baseUrl }) {
     chapter: `${prefix} 第一章`,
     scene: `${prefix} 第一場面`,
     manuscript: `${prefix} 独立原稿`,
+    laterEvent: `${prefix} 後の出来事`,
   };
 
   try {
@@ -243,15 +321,40 @@ async function runAcceptance({ browser, baseUrl }) {
     await storyPanel.getByText("接続中", { exact: true }).waitFor();
     const story = page.frameLocator('section[aria-label="Story Knowledge Plugin"] iframe');
     await waitForStoryReady(story);
-    assert.equal(await page.locator('section[aria-label="Atlas Plugin"]').count(), 0, "Story-only profile must not load Atlas.");
+    const atlasPanel = page.locator('section[aria-label="Atlas Plugin"]');
+    const atlasPresent = await atlasPanel.count() > 0;
+    assert.equal(atlasPresent, PROFILE_NAME === "combined", `${PROFILE_NAME} profile plugin closure does not match its expected Atlas presence.`);
+    const atlas = atlasPresent ? page.frameLocator('section[aria-label="Atlas Plugin"] iframe') : undefined;
+    const initialSourceRevision = atlas ? await waitForText(atlas.locator("body"), (text) => /ソースリビジョン:\s*[a-f0-9]{64}/iu.test(text), "Atlas must show its initial Host source revision.").then((text) => /ソースリビジョン:\s*([a-f0-9]{64})/iu.exec(text)?.[1]) : undefined;
+    if (atlas) {
+      assert.ok(initialSourceRevision, "Combined Atlas must expose a complete initial source revision.");
+      const storyRevision = story.locator(".topline .badge").filter({ hasText: "revision" });
+      await storyRevision.waitFor({ state: "visible" });
+      assert.equal(await storyRevision.getAttribute("title"), initialSourceRevision, "Combined Story and Atlas must begin from the same Host source revision.");
+    }
     evidence.cases.push({
-      id: "empty-host-workspace-and-story-only-frame",
+      id: PROFILE_NAME === "combined" ? "empty-host-workspace-and-combined-plugin-frames" : "empty-host-workspace-and-story-only-frame",
       status: "PASS",
-      evidence: { workspaceId: evidence.workspaceId, atlasPanelPresent: false },
+      evidence: { workspaceId: evidence.workspaceId, atlasPanelPresent: atlasPresent },
     });
 
     await createEntity(page, story, { type: "character", name: names.character });
     evidence.createdTypes.push("character");
+    if (atlas && initialSourceRevision) {
+      const nextRevision = await waitForText(atlas.locator("body"), (text) => {
+        const revision = /ソースリビジョン:\s*([a-f0-9]{64})/iu.exec(text)?.[1];
+        return !!revision && revision !== initialSourceRevision;
+      }, "Atlas must observe the Host source revision after Story commits a new entity.").then((text) => /ソースリビジョン:\s*([a-f0-9]{64})/iu.exec(text)?.[1]);
+      assert.ok(nextRevision, "Atlas must expose the updated full source revision.");
+      const storyRevisionBadge = story.locator(".topline .badge").filter({ hasText: "revision" });
+      const storyRevision = await storyRevisionBadge.getAttribute("title");
+      assert.equal(storyRevision, nextRevision, "Story and Atlas must report the same post-commit Host source revision.");
+      evidence.cases.push({
+        id: "combined-story-and-atlas-observe-one-source-revision",
+        status: "PASS",
+        evidence: { previousRevision: initialSourceRevision, sourceRevision: nextRevision, storyRevision },
+      });
+    }
     const beforeReload = await (await waitForEntity(story, names.character)).innerText();
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByLabel("開く").waitFor();
@@ -276,17 +379,23 @@ async function runAcceptance({ browser, baseUrl }) {
         volumeName: names.volume,
         chapterName: names.chapter,
         manuscriptBody: `受入テスト本文: ${names.scene}\n`,
+        ...(type === "event" ? { fields: { date: "2042-05-10", time: "09:00" } } : {}),
       });
       createRows.push(item);
       evidence.createdTypes.push(type);
     }
+    const laterEvent = await createEntity(page, reloadedStory, {
+      type: "event",
+      name: names.laterEvent,
+      fields: { date: "2042-05-20", time: "14:30" },
+    });
     const target = await createEntity(page, reloadedStory, { type: "character", name: names.target });
     const normal = await createEntity(page, reloadedStory, { type: "character", name: names.normal });
-    evidence.createdTypes.push("character", "character");
+    evidence.createdTypes.push("event", "character", "character");
     evidence.cases.push({
       id: "create-all-ui-supported-story-entity-types-through-host-review",
       status: "PASS",
-      evidence: { supportedCreateTypes: [...new Set(evidence.createdTypes)], writes: createRows.map(({ type, previewPaths }) => ({ type, previewPaths })), target: target.name, normal: normal.name },
+      evidence: { supportedCreateTypes: [...new Set(evidence.createdTypes)], writes: createRows.map(({ type, previewPaths }) => ({ type, previewPaths })), target: target.name, normal: normal.name, laterEvent: laterEvent.name },
     });
 
     const characterDetail = await chooseEntity(reloadedStory, names.character);
@@ -295,12 +404,28 @@ async function runAcceptance({ browser, baseUrl }) {
     await characterDetail.getByRole("button", { name: "編集案をプレビュー" }).click();
     await submitPreview(page, reloadedStory, "を編集");
     await waitForEntity(reloadedStory, editedName);
+    names.character = editedName;
 
-    const locationDetail = await chooseEntity(reloadedStory, names.location);
+    const editedEntityNames = { character: editedName };
+    for (const type of CREATE_TYPES.filter((candidate) => candidate !== "character")) {
+      const entityName = names[type];
+      const nextName = `${entityName} 編集`;
+      editedEntityNames[type] = await editEntityName(page, reloadedStory, entityName, nextName, type);
+      names[type] = nextName;
+    }
+    evidence.cases.push({
+      id: "edit-every-ui-supported-story-entity-type-through-host-review",
+      status: "PASS",
+      evidence: { editedTypes: Object.keys(editedEntityNames), names: editedEntityNames },
+    });
+
+    await chooseEntity(reloadedStory, names.location);
     await deleteCard(reloadedStory).getByRole("button", { name: "削除案を確認" }).click();
     await preview(reloadedStory).waitFor({ state: "visible" });
     await submitPreview(page, reloadedStory, names.location);
     await reloadedStory.getByRole("option").filter({ hasText: names.location }).first().waitFor({ state: "detached" });
+    const storyLocation = await createEntity(page, reloadedStory, { type: "location", name: `${prefix} 伏線の場所` });
+    names.storyLocation = storyLocation.name;
     evidence.cases.push({
       id: "entity-edit-and-delete-through-review",
       status: "PASS",
@@ -337,7 +462,7 @@ async function runAcceptance({ browser, baseUrl }) {
     await submitPreview(page, reloadedStory, "関連を編集");
     await relationCard.locator(".relation").filter({ hasText: "appears" }).waitFor({ state: "visible" });
 
-    const targetDetail = await chooseEntity(reloadedStory, names.target);
+    await chooseEntity(reloadedStory, names.target);
     await deleteCard(reloadedStory).getByRole("button", { name: "削除案を確認" }).click();
     const incomingAlert = reloadedStory.getByRole("alert").filter({ hasText: "Incoming references must be removed explicitly" });
     await incomingAlert.waitFor({ state: "visible" });
@@ -352,6 +477,19 @@ async function runAcceptance({ browser, baseUrl }) {
       id: "directed-relation-create-edit-delete-and-incoming-delete-protection",
       status: "PASS",
       evidence: { from: editedName, to: names.target, editedKind: "appears", incomingDeleteBlocked: true, relationDeleted: true },
+    });
+
+    const sceneAppearance = await createRelation(page, reloadedStory, { from: names.scene, fromType: "scene", to: names.target, toType: "character", kind: "appears", note: "場面に人物が登場" });
+    const scenePov = await createRelation(page, reloadedStory, { from: names.scene, fromType: "scene", to: names.target, toType: "character", kind: "pov", note: "視点人物" });
+    const sceneLocation = await createRelation(page, reloadedStory, { from: names.scene, fromType: "scene", to: names.storyLocation, toType: "location", kind: "location", note: "舞台" });
+    const threadPlanted = await createRelation(page, reloadedStory, { from: names.thread, fromType: "thread", to: names.scene, toType: "scene", kind: "planted", note: "伏線提示" });
+    const threadAdvanced = await createRelation(page, reloadedStory, { from: names.thread, fromType: "thread", to: names.scene, toType: "scene", kind: "advances", note: "伏線進行" });
+    const threadPayoff = await createRelation(page, reloadedStory, { from: names.thread, fromType: "thread", to: names.scene, toType: "scene", kind: "payoff", note: "明示された回収" });
+    const scenePlantsThread = await createRelation(page, reloadedStory, { from: names.scene, fromType: "scene", to: names.thread, toType: "thread", kind: "plants", note: "Scene側の伏線記述" });
+    evidence.cases.push({
+      id: "scene-appearance-pov-location-and-directed-thread-lifecycle",
+      status: "PASS",
+      evidence: { sceneAppearance, scenePov, sceneLocation, threadPlanted, threadAdvanced, threadPayoff, scenePlantsThread },
     });
 
     await reloadedStory.getByRole("button", { name: "巻・章・場面", exact: true }).click();
@@ -374,7 +512,77 @@ async function runAcceptance({ browser, baseUrl }) {
       evidence: { volume: names.volume, chapter: names.chapter, scene: names.scene, sceneSourcePath: sceneDetail ? (await sceneDetail.innerText()).match(/plot\/volumes\/[^\s]+/)?.[0] ?? "visible" : "visible", manuscriptPath, manuscriptBytes: Buffer.byteLength(manuscriptSource) },
     });
 
+    await reloadedStory.getByRole("button", { name: "タイムライン", exact: true }).click();
+    const timeline = reloadedStory.locator('[aria-label="Storyタイムライン"]');
+    const timelineLabels = async () => (await timeline.locator("tbody tr").allInnerTexts()).join("\n");
+    const firstTimeline = await timelineLabels();
+    assert.ok(firstTimeline.indexOf(names.event) >= 0 && firstTimeline.indexOf(names.laterEvent) >= 0, "Timeline must list both explicitly dated Events.");
+    assert.ok(firstTimeline.indexOf(names.event) < firstTimeline.indexOf(names.laterEvent), "Timeline must sort explicit Event dates in ascending order.");
+    assert.match(firstTimeline, /2042-05-10.*09:00/su, "Timeline must display the explicit date and time from Source.");
+    await editTimelineField(page, reloadedStory, names.event, "date", "2042-05-30");
+    await reloadedStory.getByRole("button", { name: "タイムライン", exact: true }).click();
+    const updatedTimeline = await timelineLabels();
+    assert.ok(updatedTimeline.indexOf(names.laterEvent) < updatedTimeline.indexOf(names.event), "Editing an explicit Event date must update timeline order after Host commit.");
+    assert.match(updatedTimeline, /2042-05-30.*09:00/su, "The committed explicit date and time must be visible in Timeline.");
+    const updatedEventRow = timeline.locator("tbody tr").filter({ hasText: names.event });
+    await openHostSourcePanel(page);
+    await updatedEventRow.getByRole("button", { name: /bible\/timeline\/events\//u }).click();
+    const updatedEventSource = await waitForValue(page.getByLabel("Source"), (value) => value.includes("2042-05-30"), "Timeline Source navigation must open the committed Event YAML.");
+    evidence.cases.push({
+      id: "explicit-timeline-date-order-edit-and-reload",
+      status: "PASS",
+      evidence: { beforeOrder: [names.event, names.laterEvent], afterOrder: [names.laterEvent, names.event], updatedDate: "2042-05-30", time: "09:00", sourceOpened: /date: 2042-05-30/u.test(updatedEventSource) },
+    });
+
+    await reloadedStory.getByRole("button", { name: "ライブラリ", exact: true }).click();
+    const library = reloadedStory.locator('aside[aria-label="Storyエンティティ一覧"]');
+    const searchInput = library.getByLabel("検索");
+    const typeFilter = library.getByLabel("種類");
+    const searchableTypes = [];
+    for (const type of CREATE_TYPES) {
+      const query = type === "location" ? names.storyLocation : names[type];
+      await typeFilter.selectOption(type);
+      await searchInput.fill(query);
+      const matches = library.getByRole("option").filter({ hasText: query });
+      await matches.first().waitFor({ state: "visible" });
+      assert.equal(await library.getByRole("option").count(), 1, `Search by display name and ${type} type should return exactly one match.`);
+      searchableTypes.push(type);
+    }
+    await typeFilter.selectOption("all");
+    await searchInput.fill("");
+    evidence.cases.push({
+      id: "search-every-ui-supported-story-entity-type",
+      status: "PASS",
+      evidence: { searchedTypes: searchableTypes, displayNameSearch: true, typeFilter: true },
+    });
+
     const characterIdentity = (await (await chooseEntity(reloadedStory, editedName)).locator(".pill").innerText()).split(" · ")[0];
+    await deleteRelation(page, reloadedStory, { from: names.scene, fromType: "scene", to: names.thread, kind: "plants" });
+    const removedEntities = [];
+    for (const [type, entityName] of [
+      ["thread", names.thread],
+      ["scene", names.scene],
+      ["manuscript", names.scene],
+      ["manuscript", names.manuscript],
+      ["chapter", names.chapter],
+      ["volume", names.volume],
+      ["faction", names.faction],
+      ["item", names.item],
+      ["event", names.event],
+      ["event", names.laterEvent],
+      ["lore", names.lore],
+      ["arc", names.arc],
+      ["location", names.storyLocation],
+      ["character", names.target],
+    ]) {
+      await deleteEntity(page, reloadedStory, entityName, type);
+      removedEntities.push({ type, name: entityName });
+    }
+    evidence.cases.push({
+      id: "delete-every-ui-supported-story-entity-type-through-host-review",
+      status: "PASS",
+      evidence: { removedEntities, retainedForDiagnostics: names.character },
+    });
     await createHostSource(page, reloadedStory, "bible/characters/broken.yaml", "id: [unterminated\ntype: character\nname: broken\n");
     await createHostSource(page, reloadedStory, "bible/characters/duplicate.yaml", `id: ${characterIdentity}\ntype: character\nname: Duplicate acceptance fixture\n`);
     const diagnosticTab = reloadedStory.getByRole("button", { name: /^診断/ });
@@ -403,6 +611,36 @@ async function runAcceptance({ browser, baseUrl }) {
       evidence: { malformedPath: "bible/characters/broken.yaml", duplicateId: characterIdentity, duplicateDiagnosticRows, normalEntityEditable: names.normal },
     });
 
+    const storyMain = reloadedStory.locator("main.story-knowledge");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileSearch = reloadedStory.locator('aside[aria-label="Storyエンティティ一覧"]').getByLabel("検索");
+    await mobileSearch.fill(names.normal);
+    const mobileRow = await waitForEntity(reloadedStory, names.normal);
+    await mobileRow.click();
+    const mobileNameInput = storyMain.getByLabel("表示名");
+    await mobileNameInput.waitFor({ state: "visible" });
+    const mobileLayout = await storyMain.evaluate((element) => ({
+      viewport: document.documentElement.clientWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      mainWidth: element.clientWidth,
+      mainScrollWidth: element.scrollWidth,
+    }));
+    assert.ok(mobileLayout.documentWidth <= mobileLayout.viewport, `Story must not create horizontal overflow at 390px: ${JSON.stringify(mobileLayout)}`);
+    await mobileSearch.fill("");
+    await page.emulateMedia({ colorScheme: "light" });
+    const lightBackground = await storyMain.evaluate((element) => getComputedStyle(element).backgroundColor);
+    await page.emulateMedia({ colorScheme: "dark" });
+    const darkBackground = await storyMain.evaluate((element) => getComputedStyle(element).backgroundColor);
+    assert.notEqual(darkBackground, lightBackground, "Story must apply a distinct dark color scheme.");
+    assert.equal(darkBackground, "rgb(21, 27, 34)");
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    evidence.cases.push({
+      id: "story-mobile-layout-and-light-dark-theme",
+      status: "PASS",
+      evidence: { mobileLayout, lightBackground, darkBackground, desktopViewport: 1440 },
+    });
+
     return evidence;
   } catch (error) {
     if (error && typeof error === "object") Object.assign(error, { acceptanceEvidence: { ...evidence, browserErrors } });
@@ -412,24 +650,119 @@ async function runAcceptance({ browser, baseUrl }) {
   }
 }
 
+async function tabUntilFocused(page, locator, description, maxTabs = 220) {
+  for (let tabCount = 0; tabCount <= maxTabs; tabCount += 1) {
+    const focused = await locator.evaluate((element) => element === document.activeElement).catch(() => false);
+    if (focused) return tabCount;
+    await page.keyboard.press("Tab");
+  }
+  assert.fail(`Keyboard Tab navigation could not focus ${description} within ${maxTabs} steps.`);
+}
+
+async function runKeyboardAcceptance(browser, baseUrl) {
+  const context = await browser.newContext({ locale: "ja-JP", viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  await page.addInitScript(() => {
+    window.__storyAcceptancePointerEvents = 0;
+    for (const eventName of ["pointerdown", "mousedown", "touchstart"]) {
+      window.addEventListener(eventName, () => { window.__storyAcceptancePointerEvents += 1; }, true);
+    }
+  });
+  const prefix = `Story Keyboard ${Date.now().toString(36)}`;
+  const entityName = `${prefix} 日本語入力の人物`;
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: "Scriptorium Atlas", exact: true }).waitFor();
+    const workspaceName = page.getByLabel("Workspace名");
+    await tabUntilFocused(page, workspaceName, "Host Workspace名");
+    await page.keyboard.insertText(`${prefix} workspace`);
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    await page.getByRole("status").filter({ hasText: "Workspaceを開きました。" }).waitFor();
+
+    const story = page.frameLocator('section[aria-label="Story Knowledge Plugin"] iframe');
+    await waitForStoryReady(story);
+    const createName = createCard(story).getByLabel("表示名");
+    const tabsToName = await tabUntilFocused(page, createName, "Story create name input");
+    const focusStyle = await createName.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { focused: element === document.activeElement, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+    });
+    assert.equal(focusStyle.focused, true);
+    assert.equal(focusStyle.outlineStyle, "solid", "Keyboard focus must have a visible outline.");
+    assert.equal(focusStyle.outlineWidth, "3px");
+
+    await page.keyboard.insertText(entityName);
+    assert.equal(await createName.inputValue(), entityName, "Japanese text must enter the controlled Story field.");
+    await page.keyboard.press("Control+z");
+    assert.equal(await createName.inputValue(), "", "Keyboard Undo must revert the latest Japanese text entry.");
+    await page.keyboard.insertText(entityName);
+    const createButton = createCard(story).getByRole("button", { name: "作成案をプレビュー" });
+    const tabsToPreview = await tabUntilFocused(page, createButton, "Story create preview button");
+    await page.keyboard.press("Enter");
+    await preview(story).waitFor({ state: "visible" });
+    const submitButton = preview(story).getByRole("button", { name: "HostのReviewへ変更案を提出" });
+    const tabsToSubmit = await tabUntilFocused(page, submitButton, "Story Host Review submission button");
+    await page.keyboard.press("Enter");
+    await story.getByRole("status").filter({ hasText: "HostのReviewへ変更案を提出しました" }).waitFor({ state: "visible" });
+    const proposalButton = page.locator('section[aria-label="変更の承認"] article').last().getByRole("button", { name: "この変更を承認してCommit" });
+    const tabsToCommit = await tabUntilFocused(page, proposalButton, "Host author Commit button");
+    await page.keyboard.press("Enter");
+    await page.getByRole("status").filter({ hasText: "ローカルCommit完了:" }).waitFor({ state: "visible" });
+    await waitForEntity(story, entityName);
+    const pointerEvents = await page.evaluate(() => window.__storyAcceptancePointerEvents);
+    const framePointerEvents = await story.locator("body").evaluate(() => window.__storyAcceptancePointerEvents);
+    assert.equal(pointerEvents, 0, "The Host part of this scenario must use keyboard input only.");
+    assert.equal(framePointerEvents, 0, "The Story part of this scenario must use keyboard input only.");
+    return {
+      id: "story-keyboard-only-japanese-entry-undo-focus-and-host-commit",
+      status: "PASS",
+      evidence: {
+        viewport: 390,
+        entityName,
+        japaneseTextEntry: true,
+        ctrlZUndo: true,
+        focusStyle,
+        tabsToName,
+        tabsToPreview,
+        tabsToSubmit,
+        tabsToCommit,
+        pointerEvents: 0,
+        nativeImeComposition: "NOT_CHECKED: Chromium keyboard input does not exercise an operating-system Japanese IME.",
+      },
+    };
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   await stat(resolve(PROFILE_ROOT, "index.html"));
-  const basePort = await reserveBasePort();
-  const baseUrl = `http://127.0.0.1:${basePort}`;
-  const server = spawn(process.execPath, [HOST_SERVE_SCRIPT, "story"], {
+  const basePort = EXTERNAL_BASE_URL ? undefined : await reserveBasePort();
+  const baseUrl = EXTERNAL_BASE_URL ?? `http://127.0.0.1:${basePort}`;
+  const server = basePort === undefined ? undefined : spawn(process.execPath, [HOST_SERVE_SCRIPT, PROFILE_NAME], {
     cwd: HOST_ROOT,
     env: { ...process.env, ATLAS_HOST_PORT: String(basePort) },
     stdio: "ignore",
   });
   let browser;
   let report;
+  let evidence;
   try {
-    await waitForServer(server, baseUrl);
+    if (server) await waitForServer(server, baseUrl);
+    else {
+      const response = await fetch(baseUrl, { signal: AbortSignal.timeout(3000) });
+      await response.body?.cancel();
+      assert.equal(response.ok, true, `Combined Host at ${baseUrl} must be reachable.`);
+    }
     browser = await chromium.launch({ headless: true, ...(BROWSER_PATH ? { executablePath: BROWSER_PATH } : {}) });
-    const evidence = await runAcceptance({ browser, baseUrl });
+    evidence = await runAcceptance({ browser, baseUrl });
+    evidence.cases.push(await runKeyboardAcceptance(browser, baseUrl));
     report = {
       schemaVersion: "atlas.story-ui-browser-acceptance/v1",
-      scope: "Story-only built Host artifact; public Japanese UI and Host author/commit workflow only.",
+      profile: PROFILE_NAME,
+      scope: `${PROFILE_NAME} built Host artifact; public Japanese UI and Host author/commit workflow only.`,
       artifact: PROFILE_ROOT,
       browser: { name: "Chromium", version: browser.version(), executablePath: BROWSER_PATH ?? "Playwright-managed Chromium" },
       baseUrl,
@@ -440,9 +773,11 @@ async function main() {
   } catch (error) {
     report = {
       schemaVersion: "atlas.story-ui-browser-acceptance/v1",
-      scope: "Story-only built Host artifact; public Japanese UI and Host author/commit workflow only.",
+      profile: PROFILE_NAME,
+      scope: `${PROFILE_NAME} built Host artifact; public Japanese UI and Host author/commit workflow only.`,
       artifact: PROFILE_ROOT,
       baseUrl,
+      ...(evidence ?? {}),
       ...(error && typeof error === "object" && "acceptanceEvidence" in error ? error.acceptanceEvidence : {}),
       status: "FAIL",
       error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error),

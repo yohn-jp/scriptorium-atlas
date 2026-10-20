@@ -24,7 +24,7 @@ const RELATION_KINDS = ["related", "appears", "mentions", "pov", "location", "af
 
 type StoryDraft = { name: string; aliases: string; tags: string; description: string; body: string };
 type Preview = { change: ChangeIntent; title: string; impact: string[] };
-type Panel = "library" | "hierarchy" | "relations" | "diagnostics";
+type Panel = "library" | "hierarchy" | "timeline" | "relations" | "diagnostics";
 
 function createDraft(entity: StoryEntity): StoryDraft {
   return {
@@ -54,6 +54,27 @@ function relationLabel(index: StoryIndex, relation: StoryRelation): string {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function timelineDetails(entity: StoryEntity): string {
+  const date = entity.properties["date"];
+  const time = entity.properties["time"];
+  const order = entity.properties["order"];
+  const details = [
+    typeof date === "string" && date.trim() ? `日付: ${date}` : "",
+    typeof time === "string" && time.trim() ? `時刻: ${time}` : "",
+    typeof order === "number" && Number.isFinite(order) ? `順序: ${order}` : "",
+  ].filter(Boolean);
+  return details.length > 0 ? details.join(" · ") : "日付・時刻・順序は未設定";
+}
+
+function timelineCoordinate(entity: StoryEntity): { group: number; value: string | number } {
+  const date = entity.properties["date"];
+  const time = entity.properties["time"];
+  const order = entity.properties["order"];
+  if (typeof date === "string" && date.trim()) return { group: 0, value: `${date.trim()} ${typeof time === "string" ? time.trim() : ""}` };
+  if (typeof order === "number" && Number.isFinite(order)) return { group: 1, value: order };
+  return { group: 2, value: entity.name };
 }
 
 export function StoryKnowledge({ host }: { host: PluginHostClient }) {
@@ -143,6 +164,20 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
     const matching = searchStory(index, search, typeFilter === "all" ? undefined : new Set([typeFilter]));
     return [...matching].sort((left, right) => left.type.localeCompare(right.type, "ja") || left.name.localeCompare(right.name, "ja") || left.id.localeCompare(right.id));
   }, [index, search, typeFilter]);
+
+  const timelineEntities = useMemo(() => {
+    if (!index) return [];
+    return index.entities
+      .filter((entity) => entity.type === "event" || entity.type === "scene")
+      .sort((left, right) => {
+        const leftCoordinate = timelineCoordinate(left);
+        const rightCoordinate = timelineCoordinate(right);
+        if (leftCoordinate.group !== rightCoordinate.group) return leftCoordinate.group - rightCoordinate.group;
+        if (typeof leftCoordinate.value === "number" && typeof rightCoordinate.value === "number") return leftCoordinate.value - rightCoordinate.value;
+        return String(leftCoordinate.value).localeCompare(String(rightCoordinate.value), "ja", { numeric: true })
+          || left.name.localeCompare(right.name, "ja");
+      });
+  }, [index]);
 
   const selectedRelations = useMemo(() => index?.relations.filter((relation) => relation.fromId === selectedId || relation.toId === selectedId) ?? [], [index, selectedId]);
   const editingRelation = index?.relations.find((relation) => relation.id === editingRelationId);
@@ -313,17 +348,19 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
       .story-knowledge{font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#202a34;background:#f6f8fa;min-height:100%;padding:20px;box-sizing:border-box}
       .story-knowledge *{box-sizing:border-box}.story-knowledge h1,.story-knowledge h2,.story-knowledge h3{margin:0 0 10px}.story-knowledge h1{font-size:24px}.story-knowledge h2{font-size:18px}.story-knowledge h3{font-size:15px}
       .story-knowledge button,.story-knowledge input,.story-knowledge select,.story-knowledge textarea{font:inherit}.story-knowledge button{cursor:pointer;border:1px solid #bac5d0;border-radius:5px;background:#fff;padding:6px 10px;color:#24374a}.story-knowledge button:hover:not(:disabled){background:#edf4fa}.story-knowledge button:disabled{opacity:.5;cursor:not-allowed}
+      .story-knowledge button:focus-visible,.story-knowledge input:focus-visible,.story-knowledge select:focus-visible,.story-knowledge textarea:focus-visible,.story-knowledge summary:focus-visible{outline:3px solid #176ea8;outline-offset:2px}
       .story-knowledge input,.story-knowledge select,.story-knowledge textarea{border:1px solid #bac5d0;border-radius:4px;padding:6px 8px;background:#fff;color:#17232f;width:100%}.story-knowledge textarea{min-height:84px;resize:vertical}.story-knowledge label{display:grid;gap:4px;margin:8px 0;font-weight:600}.story-knowledge small,.story-knowledge .muted{color:#5d6b78}.story-knowledge .topline,.story-knowledge .tabs,.story-knowledge .split,.story-knowledge .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.story-knowledge .topline{justify-content:space-between;margin-bottom:14px}.story-knowledge .tabs{border-bottom:1px solid #ccd5de;margin-bottom:14px}.story-knowledge .tabs button{border:0;border-radius:4px 4px 0 0;background:transparent}.story-knowledge .tabs button[aria-current=page]{background:#dcebf7;color:#123e61;font-weight:700}
       .story-knowledge .layout{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:14px;align-items:start}.story-knowledge .card{background:#fff;border:1px solid #d5dde5;border-radius:7px;padding:14px;margin-bottom:12px}.story-knowledge .list{max-height:60vh;overflow:auto}.story-knowledge .entity-row{display:block;width:100%;text-align:left;margin:3px 0;border-color:transparent;background:transparent}.story-knowledge .entity-row[aria-current=true]{background:#e5f1fb;border-color:#9fc7e4}.story-knowledge .badge{display:inline-block;border-radius:12px;background:#e9edf1;padding:1px 8px;margin-right:5px;font-size:12px}.story-knowledge .warning{border-left:4px solid #cc8918;background:#fff9ec;padding:10px;margin:8px 0}.story-knowledge .error{border-left:4px solid #bd3843;background:#fff0f1;padding:10px;margin:8px 0}.story-knowledge .success{border-left:4px solid #24875c;background:#effaf4;padding:10px;margin:8px 0}.story-knowledge .formgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}.story-knowledge pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f7;padding:10px;border-radius:4px;max-height:300px;overflow:auto}.story-knowledge table{border-collapse:collapse;width:100%;margin:8px 0}.story-knowledge th,.story-knowledge td{text-align:left;vertical-align:top;border-bottom:1px solid #dbe2e8;padding:6px}.story-knowledge .relation{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start;padding:8px 0;border-bottom:1px solid #e1e6eb}.story-knowledge .scroll{overflow:auto}.story-knowledge .pill{font-size:12px;color:#526476}.story-knowledge details{margin:6px 0}.story-knowledge .source-link{border:0;background:transparent;text-decoration:underline;color:#175d91;padding:0}
-      @media(max-width:760px){.story-knowledge .layout{grid-template-columns:1fr}.story-knowledge .list{max-height:32vh}}
+      @media(max-width:760px){.story-knowledge .layout{grid-template-columns:1fr}.story-knowledge .list{max-height:32vh}.story-knowledge .relation{grid-template-columns:1fr}}
+      @media(prefers-color-scheme:dark){.story-knowledge{color:#e4ebf2;background:#151b22}.story-knowledge .card{background:#1d2731;border-color:#3b4a58}.story-knowledge button{background:#273542;border-color:#506170;color:#e4ebf2}.story-knowledge button:hover:not(:disabled){background:#344655}.story-knowledge input,.story-knowledge select,.story-knowledge textarea{background:#111820;border-color:#506170;color:#e4ebf2}.story-knowledge small,.story-knowledge .muted{color:#b0bdc9}.story-knowledge .tabs{border-color:#3b4a58}.story-knowledge .tabs button[aria-current=page]{background:#29445a;color:#d8efff}.story-knowledge .entity-row[aria-current=true]{background:#29445a;border-color:#527b98}.story-knowledge .badge{background:#34424e;color:#e4ebf2}.story-knowledge .pill{color:#b0bdc9}.story-knowledge .source-link{color:#8bcaff}.story-knowledge pre{background:#111820}.story-knowledge th,.story-knowledge td{border-color:#3b4a58}.story-knowledge .warning{background:#302818;border-color:#c79542}.story-knowledge .error{background:#321d22;border-color:#cf606b}.story-knowledge .success{background:#193126;border-color:#4caa78}.story-knowledge button:focus-visible,.story-knowledge input:focus-visible,.story-knowledge select:focus-visible,.story-knowledge textarea:focus-visible,.story-knowledge summary:focus-visible{outline-color:#80cfff}}
     `}</style>
-    <div className="topline"><div><h1>Story Knowledge</h1><div className="muted">YAML / Markdownを正本として、物語設定・関係・原稿を管理します。</div></div><div>{index ? <span className="badge">{index.entities.length} 件</span> : null}{index ? <span className="badge">revision {shortRevision(index.sourceRevision)}</span> : null}<button onClick={() => setRefreshVersion((value) => value + 1)} disabled={loading}>再読込</button></div></div>
+    <div className="topline"><div><h1>Story Knowledge</h1><div className="muted">YAML / Markdownを正本として、物語設定・関係・原稿を管理します。</div></div><div>{index ? <span className="badge">{index.entities.length} 件</span> : null}{index ? <span className="badge" title={index.sourceRevision} aria-label={`Source revision ${index.sourceRevision}`}>revision {shortRevision(index.sourceRevision)}</span> : null}<button onClick={() => setRefreshVersion((value) => value + 1)} disabled={loading}>再読込</button></div></div>
     {loading && <p role="status">HostのWorkspaceを読み込んでいます…</p>}
     {loadError && <div className="error" role="alert">読み込みに失敗しました: {loadError}<div><button onClick={() => setRefreshVersion((value) => value + 1)}>再試行</button></div></div>}
     {index && <>
       {!index.referencesComplete && <div className="warning" role="status">入力の一部が不完全です。削除とCascadeは安全のため制限されます。診断を確認してください。</div>}
       <nav className="tabs" aria-label="Story Knowledgeの画面">
-        {([["library", "ライブラリ"], ["hierarchy", "巻・章・場面"], ["relations", "関係"], ["diagnostics", "診断"]] as const).map(([key, label]) => <button key={key} aria-current={panel === key ? "page" : undefined} onClick={() => setPanel(key)}>{label}{key === "diagnostics" && index.diagnostics.length > 0 ? ` (${index.diagnostics.length})` : ""}</button>)}
+        {([["library", "ライブラリ"], ["hierarchy", "巻・章・場面"], ["timeline", "タイムライン"], ["relations", "関係"], ["diagnostics", "診断"]] as const).map(([key, label]) => <button key={key} aria-current={panel === key ? "page" : undefined} onClick={() => setPanel(key)}>{label}{key === "diagnostics" && index.diagnostics.length > 0 ? ` (${index.diagnostics.length})` : ""}</button>)}
       </nav>
 
       {panel === "library" && <div className="layout">
@@ -390,6 +427,8 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
         const chapter = index.entitiesById.get(item.chapterId);
         return <tr key={`${item.volumeId}:${item.chapterId}`}><td>{volume ? <button className="source-link" onClick={() => { setPanel("library"); setSelectedId(volume.id); }}>{volume.name}</button> : item.volumeId}</td><td>{chapter ? <button className="source-link" onClick={() => { setPanel("library"); setSelectedId(chapter.id); }}>{chapter.name}</button> : item.chapterId}</td><td>{item.sceneIds.map((id) => { const scene = index.entitiesById.get(id); return <div key={id}>{scene ? <button className="source-link" onClick={() => { setPanel("library"); setSelectedId(id); }}>{scene.name}</button> : id}</div>; })}</td></tr>;
       })}</tbody></table></div>}</div>}
+
+      {panel === "timeline" && <div className="card" aria-label="Storyタイムライン"><h2>タイムライン</h2><p className="muted">EventとSceneのSourceに明示された日付・時刻・順序を表示します。未設定の時間は推測しません。値を変更する場合は項目を開き、Sourceの追加フィールドから編集します。</p>{timelineEntities.length === 0 ? <p className="muted">EventとSceneはありません。</p> : <div className="scroll"><table><thead><tr><th>明示された時系列</th><th>種類</th><th>項目</th><th>Source</th></tr></thead><tbody>{timelineEntities.map((entity) => <tr key={entity.id}><td>{timelineDetails(entity)}</td><td>{TYPE_LABELS[entity.type]}</td><td><button className="source-link" onClick={() => { setPanel("library"); setSelectedId(entity.id); }}>{entity.name}</button></td><td><button className="source-link" onClick={() => void openSource(entity.path, entity.revision)}>{entity.path}</button></td></tr>)}</tbody></table></div>}</div>}
 
       {panel === "relations" && <div className="card"><h2>関係一覧</h2><p className="muted">矢印はSourceに書かれた方向です。表示上の閲覧方向でSourceを書き換えません。</p>{index.relations.length === 0 ? <p className="muted">関係はありません。</p> : <div className="scroll"><table><thead><tr><th>From → To</th><th>Kind</th><th>Provenance</th><th>操作</th></tr></thead><tbody>{index.relations.map((relation) => <tr key={relation.id}><td>{relationLabel(index, relation)}</td><td>{relation.kind}</td><td>{relation.provenance.map((item) => <div key={`${item.path}:${item.field}`}><button className="source-link" onClick={() => void openSource(item.path, item.revision)}>{item.path}</button> · {item.field}</div>)}</td><td><button onClick={() => { setSelectedId(relation.fromId); setPanel("library"); }}>Fromを見る</button> <button onClick={() => startDeleteRelation(relation)}>削除案</button></td></tr>)}</tbody></table></div>}</div>}
 
