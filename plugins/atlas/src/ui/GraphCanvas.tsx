@@ -6,6 +6,7 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   type Connection,
   type Edge,
   type Node,
@@ -214,8 +215,9 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   const selectedNode = props.board.nodes.find((node) => node.id === selectedNodeIds.at(-1));
   const selectedPreview = previewNodes.find((node) => previewNodeId(node.ref) === selectedNodeIds.at(-1));
   const selectedEdge = props.board.edges.find((edge) => edge.id === selectedEdgeIds.at(-1));
-  const selectedGraphNode = selectedNode?.ref
-    ? props.graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(selectedNode.ref))
+  const selectedNodeRef = selectedNode?.ref;
+  const selectedGraphNode = selectedNodeRef
+    ? props.graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(selectedNodeRef))
     : selectedPreview;
   const selectedRef = selectedNode?.ref ?? selectedPreview?.ref;
   const selectedNodeIdsInBoard = selectedNodeIds.filter((id) => props.board.nodes.some((node) => node.id === id));
@@ -370,13 +372,13 @@ function GraphCanvasBody(props: GraphCanvasProps) {
             deleteKeyCode={null}
             selectionOnDrag
             panOnDrag={[1, 2]}
-            selectionMode="partial"
+            selectionMode={SelectionMode.Partial}
             minZoom={0.1}
             maxZoom={3}
             proOptions={{ hideAttribution: true }}
           >
             <Background color="#ddd8d0" gap={22} />
-            <MiniMap pannable zoomable nodeColor={(node) => node.data?.origin === 'provider' ? '#83a8a2' : node.data?.origin === 'preview' ? '#b0a5bf' : '#d5a65b'} />
+            <MiniMap pannable zoomable nodeColor={(node) => node.data?.['origin'] === 'provider' ? '#83a8a2' : node.data?.['origin'] === 'preview' ? '#b0a5bf' : '#d5a65b'} />
             <Controls showInteractive={false} />
           </ReactFlow>
           {flowNodes.length === 0 && <div className="atlas-empty-graph">Search a read-only source or add a manual node to start mapping.</div>}

@@ -97,7 +97,9 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const ownedBytes = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+  ownedBytes.set(bytes);
+  const digest = await crypto.subtle.digest('SHA-256', ownedBytes.buffer);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 

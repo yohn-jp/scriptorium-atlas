@@ -25,7 +25,7 @@ export function FreeformView(props: FreeformViewProps) {
     board={props.board}
     viewport={viewport}
     assets={props.assets}
-    focusCardId={props.focusCardId}
+    {...(props.focusCardId === undefined ? {} : { focusCardId: props.focusCardId })}
     onUpdate={(id, patch) => dispatch({ type: 'card.update', id, patch })}
     onDelete={(id) => dispatch({ type: 'card.delete', id })}
     onDuplicate={props.onDuplicateCard}

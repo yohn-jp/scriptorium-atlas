@@ -324,7 +324,9 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
           const original = await readFileBytes(host, file);
           await verifyAssetBytes(asset, original);
           const displayBytes = sanitizeImageBytes(original, asset.mime);
-          urls.set(asset.path, URL.createObjectURL(new Blob([displayBytes], { type: asset.mime })));
+          const blobBytes = new Uint8Array(new ArrayBuffer(displayBytes.byteLength));
+          blobBytes.set(displayBytes);
+          urls.set(asset.path, URL.createObjectURL(new Blob([blobBytes.buffer], { type: asset.mime })));
         } catch (error) { errors.push(`${asset.path}: ${errorMessage(error)}`); }
       }
       if (cancelled) { for (const url of urls.values()) URL.revokeObjectURL(url); return; }
