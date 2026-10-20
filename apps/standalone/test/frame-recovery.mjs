@@ -29,7 +29,7 @@ try {
   await summary.click();
   await page.getByLabel('相対Path').fill('notes/frame-draft.md');
   const source = '障害注入前に耐久記録したDraft\n';
-  await page.getByLabel('Source').fill(source);
+  await page.getByLabel('Source', { exact: true }).fill(source);
   await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
   const pending = page.locator('section[aria-label="変更の承認"] article');
   await pending.getByText(source, { exact: true }).waitFor();
@@ -40,7 +40,7 @@ try {
     await frame.waitForFunction(() => !!globalThis.__atlasFaultPort);
     return frame;
   }
-  const faults = ['stale-epoch', 'malformed', 'oversized'];
+  const faults = ['stale-epoch', 'malformed', 'oversized', 'cyclic', 'bigint'];
   for (const fault of faults) {
     const frame = await connectedFrame();
     const epoch = await frame.evaluate(() => globalThis.__atlasFaultEpoch);
@@ -52,6 +52,8 @@ try {
       if (kind === 'stale-epoch') message.epoch -= 1;
       if (kind === 'malformed') message.method = 'commit';
       if (kind === 'oversized') message.params.extra = 'x'.repeat(8 * 1024 * 1024);
+      if (kind === 'cyclic') message.params.extra = message;
+      if (kind === 'bigint') message.params.extra = 1n;
       globalThis.__atlasFaultPort.postMessage(message);
     }, fault);
     await panel.getByRole('alert').filter({ hasText: 'PROTOCOL_INVALID' }).waitFor();
@@ -82,7 +84,7 @@ try {
   await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
   await page.getByText('Workspaceのファイル・Source', { exact: true }).click();
   await page.getByRole('button', { name: 'notes/frame-draft.md', exact: true }).click();
-  assert.equal(await page.getByLabel('Source').inputValue(), source);
+  assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), source);
   console.log(JSON.stringify({ status: 'PASS', profile, browser: browser.version(), baseUrl, workspaceId,
     faults, case: 'real invalid frame RPC rejects only the target; independent frame reload renews epoch; journal commits exact bytes through Host reload' }));
 } finally {

@@ -18,6 +18,7 @@ function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [current, setCurrent] = useState<WorkspaceHandle>();
   const activeWorkspaceId = useRef<string>();
+  const sourcePanel = useRef<HTMLDetailsElement>(null);
   const [files, setFiles] = useState<WorkspaceSnapshotFile[]>([]);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -114,6 +115,7 @@ function App() {
       if ('updatedAt' in full) file = full;
     }
     setSelected(file); setSourceText('content' in file ? file.content : ''); setNewPath(file.path);
+    if (sourcePanel.current) sourcePanel.current.open = true;
   }
   async function downloadSource(file:WorkspaceSnapshotFile) {
     const name = file.path.split('/').at(-1)!;
@@ -178,10 +180,10 @@ function App() {
           <button onClick={() => download(new Blob([JSON.stringify(proposal.change, null, 2)], {type:'application/json'}), `draft-${proposal.change.operationId}.json`)}>このDraftをexport</button>
         </article>)}
       </section>
-      <details open={!!selected}><summary>Workspaceのファイル・Source</summary>
+      <details ref={sourcePanel}><summary>Workspaceのファイル・Source</summary>
         <ul>{files.map(file => <li key={file.path}><button onClick={() => void selectSource(file)}>{file.path}</button><span> revision {file.revision.slice(0, 12)}</span></li>)}</ul>
         <label>相対Path<input value={newPath} onChange={event => { setNewPath(event.target.value); setSelected(undefined); }}/></label>
-        <label>Source<textarea value={sourceText} onChange={event => setSourceText(event.target.value)} readOnly={!!selected && (!('content' in selected) || selected.encoding === 'base64')} rows={12}/></label>
+        <label>Source<textarea aria-label="Source" value={sourceText} onChange={event => setSourceText(event.target.value)} readOnly={!!selected && (!('content' in selected) || selected.encoding === 'base64')} rows={12}/></label>
         {selected && !('content' in selected) && <p>{selected.contentType} / {selected.byteLength} bytes。原文のダウンロード時に分割取得します。</p>}
         <p role="status">{sourceText !== (selected && 'content' in selected ? selected.content : '') ? '未提出の編集があります。耐久記録前の内容は再読込で失われます。' : 'Sourceの編集内容に変更はありません。'}</p>
         <button disabled={!writable || busy || !newPath || !!selected && (!('content' in selected) || selected.encoding === 'base64')} onClick={() => void run(prepareFile)}>変更案を耐久記録して確認</button>

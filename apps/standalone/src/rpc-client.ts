@@ -4,7 +4,7 @@ type Method = HostRpcRequest['method'];
 type Params<M extends Method> = Extract<HostRpcRequest, { method: M }>['params'];
 type Result<M extends Method> = Extract<HostRpcResponse, { method: M; ok: true }> extends {result: infer R} ? R : never;
 const MAX_MESSAGE = 8 * 1024 * 1024;
-const encodedSize = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+import { serializedMessageBytes as encodedSize } from './message-budget.js';
 
 export function createHostClient(port: MessagePort, epoch: number): { host: PluginHostClient; close(): void } {
   const pending = new Map<string, { method: Method; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();

@@ -17,6 +17,8 @@ function fixture(providerId: string) {
   let wrongSnapshot = false;
   const connection: FrameProviderConnection = {
     epoch: 7, workspaceId: workspace.workspaceId,
+    snapshot: async value => ({workspaceId:value.workspaceId,sourceRevision:value.sourceRevision,epoch:7,providerRevision:`${providerId}:r1`}),
+    grants: [{capability:'graph.read'}],
     async call(request) {
       requests.push(request);
       let result: unknown;

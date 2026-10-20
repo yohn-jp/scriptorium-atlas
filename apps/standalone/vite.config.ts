@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { resolve, relative } from 'node:path';
+import { stat, writeFile } from 'node:fs/promises';
 import {writeBundleLicenses} from '../../scripts/verification/write-bundle-licenses.mjs';
 
 const profileValue = process.env['ATLAS_PROFILE'] ?? 'combined';
@@ -14,7 +15,7 @@ const workerChunks:ClosureChunk[]=[];
 const modulePath=(path:string)=>path.startsWith('\0')?`<virtual>${path.slice(1)}`:relative(repoRoot,path);
 
 function composition(): Plugin {
-  let closure:{chunks:Array<{file:string;modules:string[]}>}|undefined;
+  let closure:{chunks:ClosureChunk[]}|undefined;
   return {
     name: 'atlas-profile-closure',
     buildStart(){workerChunks.length=0;},
@@ -42,6 +43,8 @@ function composition(): Plugin {
     async closeBundle() {
       if (!closure) throw new Error('Bundle closure not generated');
       const outputDirectory=resolve(repoRoot,'dist',profile);
+      for (const chunk of closure.chunks) chunk.bytes=(await stat(resolve(outputDirectory,chunk.file))).size;
+      await writeFile(resolve(outputDirectory,'closure.json'),JSON.stringify({profile,...closure},null,2)+'\n');
       if (profile!=='story') {
         const {copyCanvasAssets} = await import('@scriptorium-atlas/canvas/assets');
         await copyCanvasAssets(outputDirectory);

@@ -1,9 +1,10 @@
-import { assertContract, type PluginProviderRequest, type ProviderLease, type ProviderRequest, type ProviderRpcResponse, type WorkspaceHandle } from '@scriptorium-atlas/contracts';
-import {sha256} from '@scriptorium-atlas/persistence/bytes';
+import { assertContract, type PluginProviderRequest, type ProviderGrant, type ProviderLease, type ProviderRequest, type ProviderRpcResponse, type SnapshotRef, type WorkspaceHandle } from '@scriptorium-atlas/contracts';
 
 export type FrameProviderConnection = {
   epoch: number;
   workspaceId: string;
+  snapshot(workspace: WorkspaceHandle): Promise<SnapshotRef>;
+  grants: ProviderGrant[];
   call(request: ProviderRequest, deadline: number): Promise<ProviderRpcResponse>;
 };
 const connections = new Map<string, FrameProviderConnection>();
@@ -26,11 +27,12 @@ export async function acquireProvider(owner: string, providerId: string, workspa
   const connection = connections.get(providerId);
   if (!connection || connection.workspaceId !== workspace.workspaceId) throw new Error('PROVIDER_FAILED: Provider Frameが利用できません');
   const deadline = Date.now() + 10_000;
-  const revisionHash = await sha256(new TextEncoder().encode(workspace.sourceRevision));
+  const requestedSnapshot = await connection.snapshot(workspace);
+  assertContract('snapshotRef', requestedSnapshot);
+  if (requestedSnapshot.workspaceId !== workspace.workspaceId || requestedSnapshot.sourceRevision !== workspace.sourceRevision || requestedSnapshot.epoch !== connection.epoch) throw new Error('SNAPSHOT_STALE');
   const response = await connection.call({ method: 'open', params: {
     workspaceId: workspace.workspaceId,
-    requestedSnapshot: { workspaceId: workspace.workspaceId, sourceRevision: workspace.sourceRevision, providerRevision: `story-v1:${revisionHash}`, epoch: connection.epoch },
-    grants: [{ capability:'workspace.files.metadata',paths:['bible/','plot/','manuscript/'] },{ capability: 'workspace.files.read', paths: ['bible/', 'plot/', 'manuscript/'] }, {capability: 'graph.read'}], deadline,
+    requestedSnapshot, grants: connection.grants, deadline,
   } }, deadline);
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerOpenResult', response.result);
@@ -38,7 +40,7 @@ export async function acquireProvider(owner: string, providerId: string, workspa
     await connection.call({method:'close',params:{handle:response.result.handle}},Date.now()+5000).catch(()=>{});
     throw new Error(owners.has(owner)?'OVERLOADED':'CANCELED');
   }
-  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.providerRevision !== `story-v1:${revisionHash}` || response.result.actualSnapshot.epoch !== connection.epoch) {
+  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.providerRevision !== requestedSnapshot.providerRevision || response.result.actualSnapshot.epoch !== connection.epoch) {
     await connection.call({method:'close',params:{handle:response.result.handle}},Date.now()+5000).catch(()=>{});
     throw new Error('SNAPSHOT_STALE');
   }
