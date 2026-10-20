@@ -10,7 +10,9 @@ function compactMetric(metric) {
   const keys = ['kind', 'origin', 'workerId', 'workerUrl', 'operation', 'nodeCount', 'edgeCount', 'ok', 'errorCode',
     'requestId', 'clickId', 'trusted', 'targetText', 'buttonVisible', 'buttonEnabled', 'frameNow', 'frameEpochMs', 'durationMs',
     'receivedAt', 'receivedEpochMs', 'query', 'totalMatches', 'resultCount', 'positionCount', 'finitePositionCount',
-    'fromLocalId', 'toLocalId', 'depth', 'direction', 'status', 'hops', 'cancelDispatchToTerminationMs'];
+    'fromLocalId', 'toLocalId', 'depth', 'direction', 'status', 'hops', 'cancelDispatchToTerminationMs',
+    'notificationCount', 'nativeCandidate', 'eventType', 'isTrusted', 'defaultPrevented', 'cancelable', 'message', 'filename',
+    'line', 'column', 'errorIsNull', 'errorName', 'errorMessage', 'frameUrl', 'eventNow', 'eventEpochMs'];
   return Object.fromEntries(keys.filter((key) => metric[key] !== undefined).map((key) => [key, metric[key]]));
 }
 
@@ -48,6 +50,8 @@ async function captureContextTrace(page, trace) {
     capturedAt: new Date().toISOString(),
     metricCount: metrics.length,
     metricCounts: counts,
+    nativeResizeObserverNotifications: metrics.filter((item) => item.kind === 'native-resize-observer-notification')
+      .map(compactMetric),
     recentMetrics: metrics.slice(-120).map(compactMetric),
     frames,
   });
@@ -129,12 +133,28 @@ function instrumentWorkers() {
   const frameId = crypto.randomUUID();
   let workerNumber = 0;
   const workerIds = [];
+  let resizeObserverNotificationCount = 0;
   let activeForceWorkerId = null;
   let activeForceRequestId = null;
   let activeForceStartedAt = null;
   let cancelClick = null;
   let cancelClickSequence = 0;
   const NativeWorker = window.Worker;
+  window.addEventListener('error', (event) => {
+    if (event.message !== 'ResizeObserver loop completed with undelivered notifications.') return;
+    const eventNow = performance.now();
+    const errorObject = event.error;
+    send({ kind: 'native-resize-observer-notification', origin: location.origin,
+      notificationCount: ++resizeObserverNotificationCount,
+      nativeCandidate: event.isTrusted && errorObject === null && event.filename === location.href
+        && event.lineno === 0 && event.colno === 0,
+      eventType: event.type, isTrusted: event.isTrusted, defaultPrevented: event.defaultPrevented,
+      cancelable: event.cancelable, message: event.message, filename: event.filename ?? '',
+      line: event.lineno, column: event.colno, errorIsNull: errorObject === null,
+      errorName: errorObject instanceof Error ? errorObject.name : null,
+      errorMessage: errorObject instanceof Error ? errorObject.message : null,
+      frameUrl: location.href, eventNow, eventEpochMs: performance.timeOrigin + eventNow });
+  }, true);
   window.addEventListener('click', (event) => {
     const target = event.target;
     const button = target instanceof Element ? target.closest('button') : null;
@@ -321,6 +341,83 @@ async function coldReopen(context, page, workspaceId) {
 }
 
 async function readMetrics(page) { return page.evaluate(() => window.__atlasPerfStore ?? []); }
+
+function nativeResizeObserverNotificationEvidence(metrics, origin) {
+  const notifications = metrics.filter((item) => item.kind === 'native-resize-observer-notification' && item.origin === origin);
+  const events = notifications.map((item) => ({
+    notificationCount: item.notificationCount,
+    nativeCandidate: item.nativeCandidate,
+    eventType: item.eventType,
+    isTrusted: item.isTrusted,
+    defaultPrevented: item.defaultPrevented,
+    cancelable: item.cancelable,
+    message: item.message,
+    filename: item.filename,
+    line: item.line,
+    column: item.column,
+    errorIsNull: item.errorIsNull,
+    errorName: item.errorName,
+    errorMessage: item.errorMessage,
+    frameUrl: item.frameUrl,
+    eventNow: item.eventNow,
+    eventEpochMs: item.eventEpochMs,
+    receivedAt: item.receivedAt,
+    receivedEpochMs: item.receivedEpochMs,
+  }));
+  return { count: events.length, nativeCandidateCount: events.filter((event) => event.nativeCandidate).length, events };
+}
+
+async function assertQ12GraphHostUsable(page, atlas, workspaceId) {
+  const heading = page.getByRole('heading', { name: 'Scriptorium Atlas' });
+  const workspaceSelect = page.getByLabel('開く');
+  const pluginPanel = page.locator('section[aria-label="Atlas Plugin"]');
+  const providerSearch = atlas.locator.getByLabel('Providerスナップショットを検索');
+  const graphContainer = atlas.frame.locator('.atlas-graph-flow');
+  await Promise.all([
+    heading.waitFor({ state: 'visible', timeout: 5_000 }),
+    workspaceSelect.waitFor({ state: 'visible', timeout: 5_000 }),
+    pluginPanel.waitFor({ state: 'visible', timeout: 5_000 }),
+    providerSearch.waitFor({ state: 'visible', timeout: 5_000 }),
+    graphContainer.waitFor({ state: 'visible', timeout: 5_000 }),
+  ]);
+  assert.equal(await workspaceSelect.isEnabled(), true, 'Host must remain usable while Atlas handles native ResizeObserver notifications.');
+  assert.equal(await workspaceSelect.inputValue(), workspaceId, 'Host must keep the same open Workspace after Atlas notifications.');
+  assert.equal(await providerSearch.isEnabled(), true, 'Atlas Provider search must remain usable after native ResizeObserver notifications.');
+  const viewport = await graphContainer.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const reactFlow = element.querySelector('.react-flow');
+    const viewportElement = element.querySelector('.react-flow__viewport');
+    const flowRect = reactFlow?.getBoundingClientRect();
+    const viewportRect = viewportElement?.getBoundingClientRect();
+    return {
+      graphContainer: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      reactFlow: flowRect ? { x: flowRect.x, y: flowRect.y, width: flowRect.width, height: flowRect.height } : null,
+      viewport: viewportRect ? { x: viewportRect.x, y: viewportRect.y, width: viewportRect.width, height: viewportRect.height,
+        transform: getComputedStyle(viewportElement).transform } : null,
+      frameViewport: { width: window.innerWidth, height: window.innerHeight, scrollX: window.scrollX, scrollY: window.scrollY },
+    };
+  });
+  assert.ok(viewport.reactFlow && viewport.reactFlow.width > 0 && viewport.reactFlow.height > 0
+    && viewport.viewport && viewport.viewport.width > 0 && viewport.viewport.height > 0,
+  `Atlas Graph and its current React Flow viewport must remain available: ${JSON.stringify(viewport)}.`);
+  assert.ok(Number.isFinite(viewport.frameViewport.scrollX) && Number.isFinite(viewport.frameViewport.scrollY),
+    `Atlas frame viewport must remain readable: ${JSON.stringify(viewport.frameViewport)}.`);
+  return { headingVisible: await heading.isVisible(), workspaceSelectVisible: await workspaceSelect.isVisible(),
+    pluginPanelVisible: await pluginPanel.isVisible(), providerSearchVisible: await providerSearch.isVisible(), viewport };
+}
+
+async function assertQ12HostUsableAfterAtlasDisable(page, workspaceId) {
+  const heading = page.getByRole('heading', { name: 'Scriptorium Atlas' });
+  const workspaceSelect = page.getByLabel('開く');
+  await Promise.all([
+    heading.waitFor({ state: 'visible', timeout: 5_000 }),
+    workspaceSelect.waitFor({ state: 'visible', timeout: 5_000 }),
+  ]);
+  assert.equal(await workspaceSelect.isEnabled(), true, 'Host must remain usable after Atlas is disabled.');
+  assert.equal(await workspaceSelect.inputValue(), workspaceId, 'Host must retain the same open Workspace after Atlas is disabled.');
+  return { headingVisible: await heading.isVisible(), workspaceSelectVisible: await workspaceSelect.isVisible(),
+    workspaceId: await workspaceSelect.inputValue() };
+}
 
 async function readHeap(frame) {
   return frame.evaluate(() => {
@@ -1340,22 +1437,38 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       }
       assert.ok(traversal.shortestPath.p95Ms <= 500, `10k path p95 ${traversal.shortestPath.p95Ms}ms exceeds 500ms`);
       const heap = await readHeap(atlas.frame);
+      const resizeObserverBeforeDisable = nativeResizeObserverNotificationEvidence(await readMetrics(page), atlas.origin);
+      const atlasHostUsabilityBeforeDisable = await assertQ12GraphHostUsable(page, atlas, workspaceId);
       const disabledAt = Date.now();
       await page.getByLabel('Atlasを有効化').uncheck();
       await page.locator('section[aria-label="Atlas Plugin"]').waitFor({ state: 'detached' });
+      const quietWindowStartedAt = Date.now();
       await page.waitForTimeout(5_000);
       const postDisableRequests = atlasRequests.filter((item) => item.at >= disabledAt);
       assert.deepEqual(postDisableRequests, [], 'Disabling Atlas must stop plugin-origin polling and any subsequent heavy JavaScript imports for five seconds.');
-      const afterDisable = await readMetrics(page);
-      const created = afterDisable.filter((item) => item.kind === 'created' && item.origin === atlas.origin);
-      const terminated = new Set(afterDisable.filter((item) => item.kind === 'terminated' && item.origin === atlas.origin).map((item) => item.workerId));
-      const frameClosed = new Set(afterDisable.filter((item) => item.kind === 'frame-closed' && item.origin === atlas.origin).flatMap((item) => item.workerIds));
+      const afterQuietWindow = await readMetrics(page);
+      const resizeObserverAfterQuietWindow = nativeResizeObserverNotificationEvidence(afterQuietWindow, atlas.origin);
+      const resizeObserverEventsDuringQuietWindow = resizeObserverAfterQuietWindow.events
+        .filter((event) => event.eventEpochMs >= quietWindowStartedAt);
+      const hostUsabilityAfterDisable = await assertQ12HostUsableAfterAtlasDisable(page, workspaceId);
+      const created = afterQuietWindow.filter((item) => item.kind === 'created' && item.origin === atlas.origin);
+      const terminated = new Set(afterQuietWindow.filter((item) => item.kind === 'terminated' && item.origin === atlas.origin).map((item) => item.workerId));
+      const frameClosed = new Set(afterQuietWindow.filter((item) => item.kind === 'frame-closed' && item.origin === atlas.origin).flatMap((item) => item.workerIds));
       const active = created.filter((item) => !terminated.has(item.workerId) && !frameClosed.has(item.workerId));
       assert.equal(active.length, 0, 'disabling Atlas must terminate its dedicated Workers');
       return { dataset: datasets.tenK,
         graphIndex: { durationMs: indexResult.durationMs, nodes: indexResult.nodeCount, edges: indexResult.edgeCount, limitMs: 10_000 },
         search: { ...searches, limitP95Ms: 250 }, neighbors: { ...traversal.neighbors, limitP95Ms: 500 },
         shortestPath: { ...traversal.shortestPath, limitP95Ms: 500 }, heap,
+        nativeResizeObserverNotifications: {
+          beforeDisable: resizeObserverBeforeDisable,
+          afterQuietWindow: resizeObserverAfterQuietWindow,
+          quietWindowMs: 5_000,
+          quietWindowStartedAtEpochMs: quietWindowStartedAt,
+          notificationCountDeltaDuringQuietWindow: resizeObserverEventsDuringQuietWindow.length,
+          eventsDuringQuietWindow: resizeObserverEventsDuringQuietWindow,
+        },
+        hostUsability: { beforeDisable: atlasHostUsabilityBeforeDisable, afterDisable: hostUsabilityAfterDisable },
         notCheckedReasons: heap.status === 'NOT_CHECKED' ? [heap.reason] : [],
         disabledAtlasWorkers: { created: created.length, explicitlyTerminated: terminated.size, owningFrameClosed: frameClosed.size, active: active.length },
         disabledAtlasNetwork: { observationMs: 5_000, pluginOriginRequestsAfterDisable: postDisableRequests } };
