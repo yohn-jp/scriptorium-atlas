@@ -87,6 +87,12 @@ async function waitForValue(locator, predicate, message, timeoutMs = 12000) {
   assert.fail(`${message}; last value was ${JSON.stringify(lastValue)}`);
 }
 
+async function openHostSourcePanel(page) {
+  const summary = page.getByText("Workspaceのファイル・Source", { exact: true });
+  const isOpen = await summary.evaluate((node) => node.parentElement?.hasAttribute("open"));
+  if (!isOpen) await summary.click();
+}
+
 async function waitForEntity(story, name) {
   const item = story.getByRole("option").filter({ hasText: name }).first();
   await item.waitFor({ state: "visible" });
@@ -186,7 +192,9 @@ function escapeRegExp(value) {
 }
 
 async function createHostSource(page, story, path, content) {
+  await openHostSourcePanel(page);
   await page.getByLabel("相対Path").fill(path);
+  await openHostSourcePanel(page);
   await page.getByLabel("Source").fill(content);
   await page.getByRole("button", { name: "変更案を耐久記録して確認" }).click();
   const proposal = page.locator('section[aria-label="変更の承認"] article').last();
@@ -301,13 +309,18 @@ async function runAcceptance({ browser, baseUrl }) {
 
     await chooseEntity(reloadedStory, editedName);
     const relationCard = reloadedStory.locator("article.card").filter({ has: reloadedStory.getByRole("heading", { name: "関連する項目", exact: true }) });
-    const targetSelect = relationCard.getByLabel("Target");
-    const targetValue = await targetSelect.locator("option").filter({ hasText: names.target }).getAttribute("value");
-    assert.ok(targetValue, "Relation target must be selectable.");
+    const relationForm = relationCard.locator("form").filter({ has: reloadedStory.getByRole("heading", { name: "関連を追加", exact: true }) });
+    const relationSelects = relationForm.getByRole("combobox");
+    const targetSelect = relationSelects.nth(0);
+    const targetOption = targetSelect.locator("option").filter({ hasText: names.target }).first();
+    const targetOptionCount = await targetOption.count();
+    assert.equal(targetOptionCount, 1, `Relation target must be selectable; options: ${JSON.stringify(await targetSelect.locator("option").allTextContents())}`);
+    const targetValue = await targetOption.getAttribute("value");
+    assert.ok(targetValue, "Relation target must expose its stable source ID.");
     await targetSelect.selectOption(targetValue);
-    await relationCard.getByLabel("Kind").selectOption("related");
-    await relationCard.getByLabel("Note").fill("初期関係ノート");
-    await relationCard.getByRole("button", { name: "関連追加案を作成" }).click();
+    await relationSelects.nth(1).selectOption("related");
+    await relationForm.getByLabel("Note", { exact: true }).fill("初期関係ノート");
+    await relationForm.getByRole("button", { name: "関連追加案を作成" }).click();
     await submitPreview(page, reloadedStory, "関連を追加");
     const relationRow = relationCard.locator(".relation").filter({ hasText: editedName }).filter({ hasText: names.target }).first();
     await relationRow.waitFor({ state: "visible" });
@@ -318,7 +331,9 @@ async function runAcceptance({ browser, baseUrl }) {
     await editForm.getByRole("button", { name: "関連編集案を作成" }).click();
     const relationEditPreview = preview(reloadedStory);
     await relationEditPreview.locator("details summary").first().click();
-    await relationEditPreview.getByText("編集後の関係ノート", { exact: true }).waitFor({ state: "visible" });
+    const relationEditSource = relationEditPreview.locator("pre").first();
+    await relationEditSource.waitFor({ state: "visible" });
+    assert.ok((await relationEditSource.innerText()).includes("編集後の関係ノート"), "Relation preview must show the edited note in its source YAML.");
     await submitPreview(page, reloadedStory, "関連を編集");
     await relationCard.locator(".relation").filter({ hasText: "appears" }).waitFor({ state: "visible" });
 
@@ -369,7 +384,8 @@ async function runAcceptance({ browser, baseUrl }) {
     await malformedRow.waitFor({ state: "visible" });
     assert.match(await malformedRow.innerText(), /yaml-/u, "Malformed YAML must be listed with a parser diagnostic.");
     const duplicateRows = diagnosticTable.getByRole("row").filter({ hasText: "duplicate-entity-id" });
-    assert.ok(await duplicateRows.count() >= 2, "Both duplicate ID sources must receive diagnostics.");
+    const duplicateDiagnosticRows = await duplicateRows.count();
+    assert.ok(duplicateDiagnosticRows >= 2, "Both duplicate ID sources must receive diagnostics.");
     const normalDetail = await chooseEntity(reloadedStory, names.normal);
     const normalNameInput = normalDetail.getByLabel("表示名");
     await normalNameInput.waitFor({ state: "visible" });
@@ -384,7 +400,7 @@ async function runAcceptance({ browser, baseUrl }) {
     evidence.cases.push({
       id: "malformed-yaml-and-duplicate-id-diagnostics-preserve-normal-entities",
       status: "PASS",
-      evidence: { malformedPath: "bible/characters/broken.yaml", duplicateId: characterIdentity, duplicateDiagnosticRows: await duplicateRows.count(), normalEntityEditable: names.normal },
+      evidence: { malformedPath: "bible/characters/broken.yaml", duplicateId: characterIdentity, duplicateDiagnosticRows, normalEntityEditable: names.normal },
     });
 
     return evidence;
