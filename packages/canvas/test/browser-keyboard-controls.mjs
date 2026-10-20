@@ -128,6 +128,79 @@ async function noPendingProposal(page) {
     "Selection-only changes must not prepare Host source writes.");
 }
 
+async function downloadSceneText(page, atlas) {
+  const downloadPromise = page.waitForEvent("download");
+  const exportScene = atlas.getByRole("button", { name: ".excalidrawをエクスポート" });
+  await exportScene.focus();
+  await page.keyboard.press("Enter");
+  const download = await downloadPromise;
+  const path = await download.path();
+  assert.ok(path, "The Host-owned scene export must produce a downloadable file.");
+  return (await readFile(path)).toString("utf8");
+}
+
+async function downloadBoardData(page, atlas) {
+  const downloadPromise = page.waitForEvent("download");
+  const exportBoard = atlas.getByRole("button", { name: ".atlas.jsonをエクスポート" });
+  await exportBoard.click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  assert.ok(path, "The Host-owned Board export must produce a downloadable file.");
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+async function waitForBoardViewport(page, atlas, viewId, expectedViewport) {
+  const deadline = Date.now() + 10_000;
+  let latestBoard = null;
+  while (Date.now() < deadline) {
+    latestBoard = await downloadBoardData(page, atlas);
+    const savedViewport = latestBoard.views.find((view) => view.id === viewId)?.viewport;
+    if (JSON.stringify(savedViewport) === JSON.stringify(expectedViewport)) return latestBoard;
+    await new Promise((wait) => setTimeout(wait, 50));
+  }
+  assert.fail(`The live Board export did not reach the requested viewport ${JSON.stringify(expectedViewport)}; last Board was ${JSON.stringify(latestBoard)}.`);
+}
+
+async function approveUntilStableBoard(page, atlas, boardPath, expectedBoard, expectedSceneText) {
+  const proposalSelector = 'section[aria-label="変更の承認"] article';
+  let matchingBoardProposalApproved = false;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (await page.locator(proposalSelector).count() > 0) {
+      const files = await approveProposal(page);
+      const boardFile = files.find(({ path }) => path === boardPath);
+      if (boardFile?.afterText
+        && JSON.stringify(JSON.parse(boardFile.afterText)) === JSON.stringify(expectedBoard)) {
+        matchingBoardProposalApproved = true;
+      }
+      continue;
+    }
+
+    const saveState = await atlas.locator(".atlas-save-indicator").textContent();
+    if (!saveState?.includes("Hostの基準状態")) {
+      await page.waitForTimeout(250);
+      continue;
+    }
+    const firstBoard = await downloadBoardData(page, atlas);
+    const firstScene = await downloadSceneText(page, atlas);
+    if (JSON.stringify(firstBoard) !== JSON.stringify(expectedBoard)
+      || firstScene !== expectedSceneText) {
+      await page.waitForTimeout(250);
+      continue;
+    }
+    await page.waitForTimeout(1_200);
+    if (await page.locator(proposalSelector).count() > 0) continue;
+    if (!(await atlas.locator(".atlas-save-indicator").textContent())?.includes("Hostの基準状態")) continue;
+    const stableBoard = await downloadBoardData(page, atlas);
+    const stableScene = await downloadSceneText(page, atlas);
+    if (JSON.stringify(stableBoard) !== JSON.stringify(expectedBoard)
+      || stableScene !== expectedSceneText) continue;
+    assert.equal(matchingBoardProposalApproved, true,
+      "A Host proposal whose Board bytes match the live camera state must be approved before the stable check.");
+    return { board: stableBoard, sceneText: stableScene };
+  }
+  assert.fail(`Host did not reach a stable committed Board/scene pair for the current camera; expectedBoard=${JSON.stringify(expectedBoard)}; saveState=${await atlas.locator(".atlas-save-indicator").textContent()}`);
+}
+
 async function chooseSelectOptionWithKeys(page, select, wantedValue, retainValue = true) {
   const options = await select.locator("option").evaluateAll((items) => items.map((item) => ({
     value: item.value,
@@ -246,6 +319,15 @@ try {
   const emptySceneFiles = await approveProposal(page);
   const scenePath = emptySceneFiles.find(({ path }) => path.endsWith(".excalidraw"))?.path;
   assert.ok(scenePath, "Freeform setup must prepare a separate `.excalidraw` file.");
+  const emptySceneText = emptySceneFiles.find(({ path }) => path === scenePath)?.afterText;
+  const emptyBoardFile = emptySceneFiles.find(({ path }) => path.endsWith(".atlas.json"));
+  assert.ok(emptySceneText && emptyBoardFile?.afterText,
+    "The Host must prepare both the raw scene and the Atlas Board before camera editing.");
+  const emptyBoard = JSON.parse(emptyBoardFile.afterText);
+  const freeformView = emptyBoard.views.filter((view) => view.kind === "freeform").at(-1);
+  assert.ok(freeformView?.id && freeformView.viewport,
+    "The created Freeform view must have its own persisted Atlas viewport.");
+  const originalViewport = freeformView.viewport;
 
   const canvasTab = atlas.getByRole("tab", { name: /キャンバス/u }).last();
   await canvasTab.focus();
@@ -264,8 +346,82 @@ try {
   const addKind = atlas.getByLabel("追加する要素");
   await addKind.waitFor({ state: "visible" });
   await page.keyboard.press("Tab");
+  const panX = atlas.getByLabel("Canvas表示位置X");
+  const panY = atlas.getByLabel("Canvas表示位置Y");
+  const applyPan = atlas.getByRole("button", { name: "表示位置を適用", exact: true });
+  assert.equal(await panX.evaluate((element) => document.activeElement === element), true,
+    "The first keyboard stop after the controls summary must be the viewport X input.");
+  await page.keyboard.press("Tab");
+  assert.equal(await panY.evaluate((element) => document.activeElement === element), true,
+    "The second keyboard stop must be the viewport Y input.");
+  await page.keyboard.press("Tab");
+  assert.equal(await applyPan.evaluate((element) => document.activeElement === element), true,
+    "The third keyboard stop must apply the viewport position.");
+
+  const sceneBeforeViewport = await downloadSceneText(page, atlas);
+  assert.equal(sceneBeforeViewport, emptySceneText,
+    "The initial Host scene export must match the prepared raw `.excalidraw` text byte-for-byte.");
+  const applyViewportByKeys = async (scrollX, scrollY) => {
+    await setNumberWithKeys(page, panX, scrollX);
+    await setNumberWithKeys(page, panY, scrollY);
+    await page.keyboard.press("Tab");
+    assert.equal(await applyPan.evaluate((element) => document.activeElement === element), true,
+      "Tab from viewport Y must reach the Apply control.");
+    await page.keyboard.press("Enter");
+    await atlas.getByRole("status").filter({ hasText: "表示位置を更新しました。" }).waitFor();
+  };
+
+  const assertLiveCanvasViewport = async (scrollX, scrollY) => {
+    await panelSummary.focus();
+    assert.equal(await atlas.locator(".atlas-canvas-accessibility").evaluate((element) => element.open), true);
+    await page.keyboard.press("Enter");
+    assert.equal(await atlas.locator(".atlas-canvas-accessibility").evaluate((element) => element.open), false,
+      "The Canvas accessibility panel must collapse before checking the official current camera.");
+    await panelSummary.focus();
+    await page.keyboard.press("Enter");
+    await panX.waitFor({ state: "visible" });
+    await atlasFrame.waitForFunction(({ x, y }) => {
+      const currentX = document.querySelector('[aria-label="Canvas表示位置X"]');
+      const currentY = document.querySelector('[aria-label="Canvas表示位置Y"]');
+      return currentX?.value === x && currentY?.value === y;
+    }, { x: String(scrollX), y: String(scrollY) }, { timeout: 5_000 });
+  };
+
+  const requestedViewport = { scrollX: 123, scrollY: -67 };
+  await applyViewportByKeys(requestedViewport.scrollX, requestedViewport.scrollY);
+  await page.waitForTimeout(220);
+  const expectedViewport = {
+    x: requestedViewport.scrollX * originalViewport.zoom,
+    y: requestedViewport.scrollY * originalViewport.zoom,
+    zoom: originalViewport.zoom,
+  };
+  const cameraBoard = await waitForBoardViewport(page, atlas, freeformView.id, expectedViewport);
+  await assertLiveCanvasViewport(requestedViewport.scrollX, requestedViewport.scrollY);
+  const committedCamera = await approveUntilStableBoard(page, atlas, emptyBoardFile.path, cameraBoard, sceneBeforeViewport);
+  assert.deepEqual(committedCamera.board.views.find((view) => view.id === freeformView.id)?.viewport, expectedViewport,
+    "The stable Host-committed Board must retain the keyboard camera position in the matching view.");
+  const sceneAfterViewport = await downloadSceneText(page, atlas);
+  assert.equal(sceneAfterViewport, sceneBeforeViewport,
+    "Keyboard pan must preserve the exact Host-owned raw `.excalidraw` scene text.");
+
+  await applyViewportByKeys(originalViewport.x / originalViewport.zoom, originalViewport.y / originalViewport.zoom);
+  await page.waitForTimeout(220);
+  const restoredCameraBoard = await waitForBoardViewport(page, atlas, freeformView.id, originalViewport);
+  await assertLiveCanvasViewport(originalViewport.x / originalViewport.zoom, originalViewport.y / originalViewport.zoom);
+  const committedRestoredCamera = await approveUntilStableBoard(page, atlas, emptyBoardFile.path,
+    restoredCameraBoard, sceneBeforeViewport);
+  assert.deepEqual(committedRestoredCamera.board.views.find((view) => view.id === freeformView.id)?.viewport, originalViewport,
+    "Keyboard camera controls must restore the original saved view position before drawing checks.");
+  assert.equal(committedRestoredCamera.sceneText, sceneBeforeViewport,
+    "Restoring the camera must leave raw scene bytes unchanged.");
+
+  await panelSummary.focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
   assert.equal(await addKind.evaluate((element) => document.activeElement === element), true,
-    "The accessible create control must participate in normal keyboard tab order.");
+    "The element create select must remain keyboard reachable after the viewport controls in normal tab order.");
 
   const addKindByKeys = async (value, typedText, freehandPointText) => {
     await chooseSelectOptionWithKeys(page, addKind, value);
@@ -630,9 +786,15 @@ try {
   assert.deepEqual(pageErrors, [], `Keyboard UI and Host persistence must not throw browser errors: ${pageErrors.join("; ")}`);
   console.log(JSON.stringify({
     status: "PASS",
-    case: "keyboard-only native creation, selection, grouping, geometry, undo, redo, Host commit and reload",
+    case: "keyboard-only viewport, native creation, selection, grouping, geometry, undo, redo, Host commit and reload",
     browser: browser.version(),
     scenePath,
+    viewId: freeformView.id,
+    initialViewport: originalViewport,
+    keyboardViewport: committedCamera.board.views.find((view) => view.id === freeformView.id)?.viewport,
+    restoredViewport: committedRestoredCamera.board.views.find((view) => view.id === freeformView.id)?.viewport,
+    cameraOnlySceneBytesUnchanged: sceneBeforeViewport === committedCamera.sceneText
+      && sceneBeforeViewport === committedRestoredCamera.sceneText,
     elements: baselineElements.map(({ id, type }) => ({ id, type })),
     geometryBefore: { x: originalElement.x, y: originalElement.y, width: originalElement.width, height: originalElement.height },
     geometryAfterKeyboardEdit: nextGeometry,
