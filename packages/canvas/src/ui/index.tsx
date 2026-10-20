@@ -37,6 +37,11 @@ function FontAssetError({ className, style }: { className?: string; style?: CSSP
   );
 }
 
+/**
+ * Render one logical Board view. Callers must key this component by stable
+ * document/view identity (for example, board ID plus view ID), not by scene
+ * text, so a pending viewport callback always returns to its owning view.
+ */
 export function CanvasEditor(props: CanvasEditorProps) {
   const inspection = inspectExcalidrawScene(props.sceneText);
   const [editorEpoch, setEditorEpoch] = useState(0);

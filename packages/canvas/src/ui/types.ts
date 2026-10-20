@@ -32,7 +32,7 @@ export type CanvasEditorProps = {
   readOnly?: boolean;
   /** Restore the active board view; scene files intentionally omit this transient state. */
   viewport?: CanvasViewportState;
-  /** Emits the settled official Excalidraw pan/zoom without changing scene text. */
+  /** Emits settled pan/zoom without changing scene text; flushes a pending value when this editor unmounts. */
   onViewportChange?(viewport: CanvasViewportState): void;
   /** Atlas-owned cards can render here while remaining in `.atlas.json`. */
   renderOverlay?: (viewport: CanvasViewport) => ReactNode;

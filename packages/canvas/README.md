@@ -27,7 +27,11 @@ pnpm --filter @scriptorium-atlas/canvas copy-fonts -- ../../apps/standalone/publ
 
 Since Excalidraw font URLs already include `fonts/`, use `/` as the asset base when deploying at the origin root. `configureExcalidrawAssets()` must run before the editor is mounted. It accepts a same-origin path ending in `/`; the editor does not load unless a local asset base is configured. Include the copied fonts in the deployed app so offline sessions use the self-hosted files. The font files are generated from the pinned npm dependency and are not checked into Git.
 
-`CanvasEditor` receives and returns the `.excalidraw` document text. Its optional `viewport` prop accepts `{ scrollX, scrollY, zoom }` from Excalidraw's app state, and `onViewportChange` reports a settled pan or zoom through that same value shape. Keep those values in the Host-owned `.atlas.json` Board view; they are transient editor state and do not alter `.excalidraw` scene bytes. The prop restores the active view on mount and applies changed Host values through the official Excalidraw API. The `@scriptorium-atlas/canvas/io` entry exports these Host-facing helpers:
+`CanvasEditor` receives and returns the `.excalidraw` document text. Its optional `viewport` prop accepts `{ scrollX, scrollY, zoom }` from Excalidraw's app state, and `onViewportChange` reports a settled pan or zoom through that same value shape. Keep those values in the Host-owned `.atlas.json` Board view; they are transient editor state and do not alter `.excalidraw` scene bytes. The prop restores the active view on mount and applies changed Host values through the official Excalidraw API.
+
+Render and key each `CanvasEditor` by its stable logical document/view identity, such as `${boardId}:${viewId}`. Do not key it by `sceneText`: source updates within the same view keep their identity, while changing the React key on a board or view switch ensures an unmount flush sends any pending viewport callback to the view that produced it.
+
+The `@scriptorium-atlas/canvas/io` entry exports these Host-facing helpers:
 
 - `createEmptyExcalidrawScene(): Promise<string>` creates a valid Excalidraw v2 JSON document for a new board's separate `.excalidraw` file.
 - `restoreExcalidrawScene(sceneText): Promise<RestoredExcalidrawScene>` validates and restores supported scenes with Excalidraw's official `restore` API.
