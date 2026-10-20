@@ -6,6 +6,7 @@ import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentHead, hashTree } from './artifact-evidence.mjs';
 import { bundleDependencyClosure, verifiedLicenseSupplement } from './write-bundle-licenses.mjs';
+import { computeChunkReachability, inspectLazyDependency } from './chunk-reachability.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const knownProfiles = ['atlas', 'story', 'combined'];
@@ -61,20 +62,6 @@ async function htmlEntryChunks(directory, chunkByFile) {
     check(matched > 0, `${htmlName} script source must appear in closure.json`);
   }
   return [...new Set(entries)];
-}
-
-function traverse(startFiles, chunks, edgeName) {
-  const visited = new Set();
-  const pending = [...startFiles];
-  while (pending.length) {
-    const file = pending.pop();
-    if (visited.has(file)) continue;
-    visited.add(file);
-    const chunk = chunks.get(file);
-    if (!chunk) continue;
-    for (const dependency of chunk[edgeName]) pending.push(dependency);
-  }
-  return visited;
 }
 
 async function digestFile(path) {
@@ -191,6 +178,7 @@ async function auditProfile(profile) {
     check(typeof chunk.file === 'string' && chunk.file.endsWith('.js'), `closure chunk must be a JavaScript output file`);
     check(!emittedChunks.has(chunk.file), `closure contains duplicate chunk ${chunk.file}`);
     check(Array.isArray(chunk.imports) && Array.isArray(chunk.dynamicImports) && Array.isArray(chunk.modules), `${chunk.file} must list imports, dynamic imports, and modules`);
+    check(chunk.workerImports === undefined || Array.isArray(chunk.workerImports), `${chunk.file} must list Worker entry imports as an array when present`);
     check(Number.isSafeInteger(chunk.bytes) && chunk.bytes >= 0, `${chunk.file} has an invalid byte count`);
     const outputPath = resolve(directory, chunk.file);
     check(outputPath.startsWith(`${directory}/`), `chunk path escapes ${profile} output`);
@@ -202,13 +190,12 @@ async function auditProfile(profile) {
   const chunkByFile = new Map(closure.chunks.map(chunk => [chunk.file, {
     ...chunk,
     imports: chunk.imports.map(value => localTarget(chunk.file, value, emittedChunks, 'static import')),
-    dynamicImports: chunk.dynamicImports.map(value => localTarget(chunk.file, value, emittedChunks, 'dynamic import'))
+    dynamicImports: chunk.dynamicImports.map(value => localTarget(chunk.file, value, emittedChunks, 'dynamic import')),
+    workerImports: (chunk.workerImports ?? []).map(value => localTarget(chunk.file, value, emittedChunks, 'Worker import'))
   }]));
 
   const entryFiles = await htmlEntryChunks(directory, chunkByFile);
-  const staticReachable = traverse(entryFiles, chunkByFile, 'imports');
-  const dynamicRoots = [...staticReachable].flatMap(file => chunkByFile.get(file)?.dynamicImports ?? []);
-  const dynamicReachable = traverse(dynamicRoots, chunkByFile, 'imports');
+  const { staticReachable, lazyReachable } = computeChunkReachability(entryFiles, chunkByFile);
   const modules = closure.chunks.flatMap(chunk => chunk.modules);
 
   if (expectedOwner[profile]) check(modules.some(module => expectedOwner[profile].test(module)), `${profile} closure has no ${profile} plugin modules`);
@@ -223,13 +210,11 @@ async function auditProfile(profile) {
 
   const lazyEvidence = [];
   for (const pattern of lazyDependencies[profile]) {
-    const dependencyChunks = closure.chunks.filter(chunk => chunk.modules.some(module => pattern.test(module)));
-    check(dependencyChunks.length > 0, `${profile} closure does not contain required lazy dependency ${pattern}`);
-    const eager = dependencyChunks.filter(chunk => staticReachable.has(chunk.file));
-    check(eager.length === 0, `${profile} eager entry imports heavy dependency chunks: ${eager.map(chunk => chunk.file).join(', ')}`);
-    const unreachable = dependencyChunks.filter(chunk => !dynamicReachable.has(chunk.file));
-    check(unreachable.length === 0, `${profile} heavy dependency chunks are not connected through a lazy import: ${unreachable.map(chunk => chunk.file).join(', ')}`);
-    lazyEvidence.push({ pattern: String(pattern), chunks: dependencyChunks.map(chunk => chunk.file) });
+    const dependency = inspectLazyDependency(pattern, chunkByFile, { staticReachable, lazyReachable });
+    check(dependency.chunks.length > 0, `${profile} closure does not contain required lazy dependency ${pattern}`);
+    check(dependency.eager.length === 0, `${profile} eager entry imports heavy dependency chunks: ${dependency.eager.join(', ')}`);
+    check(dependency.unreachable.length === 0, `${profile} heavy dependency chunks are not connected through a lazy import: ${dependency.unreachable.join(', ')}`);
+    lazyEvidence.push({ pattern: String(pattern), ...dependency });
   }
   const licenseEvidence = await auditLicenseInventory(profile, directory, closure);
 
@@ -239,7 +224,8 @@ async function auditProfile(profile) {
     sha256: createHash('sha256').update(await readFile(resolve(directory, chunk.file))).digest('hex'),
     moduleCount: chunk.modules.length,
     imports: chunk.imports,
-    dynamicImports: chunk.dynamicImports
+    dynamicImports: chunk.dynamicImports,
+    workerImports: chunk.workerImports ?? []
   })));
   return {
     profile,
@@ -248,6 +234,7 @@ async function auditProfile(profile) {
     closureSha256: createHash('sha256').update(closureBytes).digest('hex'),
     entryFiles,
     staticReachable: [...staticReachable].sort(),
+    lazyReachable: [...lazyReachable].sort(),
     lazyDependencies: lazyEvidence,
     licenses: licenseEvidence,
     chunks
