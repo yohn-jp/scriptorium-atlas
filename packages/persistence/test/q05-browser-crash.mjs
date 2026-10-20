@@ -224,6 +224,7 @@ let browser;
 let secondChild;
 let secondBrowser;
 let report;
+let profileCleanup;
 try {
   child = launchOwnedChromium(profileDir);
   browser = await connectOwnedChromium(child, profileDir);
@@ -323,8 +324,23 @@ try {
 } finally {
   await stopOwnedBrowser(secondBrowser, secondChild);
   await stopOwnedBrowser(browser, child);
-  await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  let removalError;
+  try {
+    await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (error) {
+    removalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+  const profileStillExists = await stat(profileDir).then(() => true, error => {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  });
+  profileCleanup = {
+    removed: !profileStillExists,
+    ...(removalError ? { removalError } : {})
+  };
 }
 
+report.profileCleanup = profileCleanup;
+if (!profileCleanup?.removed) report.status = 'FAIL';
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 if (report.status !== 'PASS') process.exitCode = 1;
