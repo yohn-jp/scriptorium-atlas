@@ -20,6 +20,7 @@ function serve(port, plugin) {
       let path = decodeURIComponent(url.pathname);
       if (path === '/') path = plugin ? '/frame.html' : '/index.html';
       if (path.includes('\0') || path.includes('\\')) throw new Error('Invalid path');
+      if (path.split('/').some(segment => segment === '.' || segment === '..')) throw new Error('Invalid path');
       const file = resolve(root, `.${path}`);
       if (!file.startsWith(root + sep) && file !== root) throw new Error('Invalid path');
       if (plugin && path === '/index.html' || !plugin && path === '/frame.html') { res.writeHead(403); res.end(); return; }

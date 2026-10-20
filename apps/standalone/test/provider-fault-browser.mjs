@@ -64,6 +64,23 @@ try {
   let story = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
   await atlas.waitForFunction(() => !!globalThis.__providerHostCall && document.body.innerText.length > 100);
   await story.waitForFunction(() => document.body.innerText.includes('ライブラリ'));
+  const fontPolicy = await atlas.evaluate(async hostOrigin => {
+    async function read(url) {
+      try { const response = await fetch(url); return { status: response.status, bytes: (await response.arrayBuffer()).byteLength }; }
+      catch { return { blocked: true }; }
+    }
+    return {
+      font: await read('/fonts/Cascadia/CascadiaCode-Regular.woff2'),
+      staticFile: await read('/closure.json'),
+      host: await read(`${hostOrigin}/closure.json`),
+      external: await read('https://fonts.invalid/font.woff2'),
+      traversal: await read('/fonts/%2e%2e%2fclosure.json'),
+    };
+  }, new URL(baseUrl).origin);
+  assert.equal(fontPolicy.font.status, 200);
+  assert.ok(fontPolicy.font.bytes > 0);
+  for (const key of ['staticFile', 'host', 'external']) assert.equal(fontPolicy[key].blocked, true);
+  assert.ok(fontPolicy.traversal.blocked || fontPolicy.traversal.status === 404);
   const snapshot = await atlas.evaluate(() => globalThis.__providerHostCall('snapshot', {}));
   assert.equal(snapshot.ok, true);
   const sourceRevision = snapshot.result.workspace.sourceRevision;
@@ -133,7 +150,16 @@ try {
   assert.equal(await proposal.getByText(draft, { exact: true }).innerText(), draft);
   await proposal.getByRole('button', { name: 'この変更を承認してCommit' }).click();
   await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
+  await page.getByRole('checkbox', { name: 'Atlasを有効化', exact: true }).uncheck();
+  await page.getByRole('checkbox', { name: 'Story Knowledgeを有効化', exact: true }).uncheck();
+  await page.waitForTimeout(100);
+  let disabledRequests = 0;
+  page.on('request', () => { disabledRequests++; });
+  await page.waitForTimeout(5000);
+  assert.equal(page.workers().length, 0);
+  assert.equal(await page.locator('iframe').count(), 0);
+  assert.equal(disabledRequests, 0, 'disabled Plugins must not fetch heavy code or poll the network');
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
-    queueDurationMs, createdWorkers, workersAfterLastLease: 0,
+    queueDurationMs, createdWorkers, workersAfterLastLease: 0, disabledObservationMs: 5000, disabledRequests, fontPolicy,
     cases: ['grant denial without Worker', 'static discovery', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }
