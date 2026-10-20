@@ -1,11 +1,48 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { unzipSync, zipSync } from 'fflate';
 
 const SOURCE_PATH = 'notes/scene.md';
 const SOURCE_V1 = '# Scene\n\n保存した本文です。\n';
 const SOURCE_V2 = '# Scene\n\n復旧後にCommitした本文です。\n';
 const MAX_BUNDLE_ARCHIVE_BYTES = 512 * 1024 * 1024;
+
+function hostileBundles(bundle) {
+  const entries = unzipSync(bundle);
+  const manifest = JSON.parse(Buffer.from(entries['manifest.json']).toString('utf8'));
+  const archive = (values, changedManifest = manifest) => zipSync({
+    ...values, 'manifest.json': Buffer.from(JSON.stringify(changedManifest)),
+  });
+  const traversal = structuredClone(manifest);
+  traversal.files[0].path = '../escape.md';
+  const wrongHash = structuredClone(manifest);
+  wrongHash.files[0].sha256 = '0'.repeat(64);
+  const duplicate = archive({ ...entries, 'workspace/notes/scenf.md': entries[`workspace/${SOURCE_PATH}`] });
+  // ZIP objects cannot express duplicate keys. Change equal-length local and central
+  // filenames after compression to exercise the actual duplicate-entry guard.
+  const duplicateBytes = Buffer.from(duplicate);
+  const oldName = Buffer.from('workspace/notes/scenf.md');
+  const newName = Buffer.from(`workspace/${SOURCE_PATH}`);
+  let offset = 0;
+  while ((offset = duplicateBytes.indexOf(oldName, offset)) !== -1) {
+    newName.copy(duplicateBytes, offset); offset += oldName.length;
+  }
+  const bomb = Buffer.from(bundle);
+  for (let index = 0; index <= bomb.length - 46; index++) {
+    if (bomb.readUInt32LE(index) === 0x02014b50) {
+      bomb.writeUInt32LE(257 * 1024 * 1024, index + 24); break;
+    }
+  }
+  return [
+    ['invalid-zip', Buffer.from('not a ZIP archive')],
+    ['unknown-version', archive(entries, { ...manifest, schema: 'atlas.bundle/v999' })],
+    ['hash-mismatch', archive(entries, wrongHash)],
+    ['path-traversal', archive({ ...entries, 'workspace/../escape.md': Buffer.from('escape') }, traversal)],
+    ['duplicate-entry', duplicateBytes],
+    ['declared-expansion-bomb', bomb],
+  ].map(([kind, bytes]) => [kind, Buffer.from(bytes)]);
+}
 
 async function newContext(browser) {
   return browser.newContext({
@@ -102,7 +139,25 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await selectSource(page, SOURCE_PATH);
       assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
       assert.equal(await revisionText(page, SOURCE_PATH), initialRevision);
-      return { workspaceId, path: SOURCE_PATH, revision: initialRevision, bytes: Buffer.byteLength(SOURCE_V1) };
+      const renamed = `Q02 ${profile} 名前変更`;
+      await page.getByLabel('Workspace名').fill(renamed);
+      await page.getByRole('button', { name: '名前を変更', exact: true }).click();
+      await page.getByLabel('開く').getByRole('option', { name: renamed, exact: true }).waitFor({ state: 'attached' });
+      await page.getByRole('button', { name: '閉じる', exact: true }).click();
+      assert.equal(await page.getByLabel('開く').inputValue(), '');
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
+      await approveSource(page, await prepareSource(page, SOURCE_PATH, SOURCE_V2));
+      const editedRevision = await revisionText(page, SOURCE_PATH);
+      assert.notEqual(editedRevision, initialRevision);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await reopenWorkspace(page, workspaceId);
+      assert.equal(await page.getByLabel('開く').getByRole('option', { selected: true }).innerText(), renamed);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V2);
+      assert.equal(await revisionText(page, SOURCE_PATH), editedRevision);
+      return { workspaceId, path: SOURCE_PATH, initialRevision, editedRevision, renamed, closedAndReopened: true, bytes: Buffer.byteLength(SOURCE_V2) };
     } finally {
       await context.close();
     }
@@ -151,15 +206,15 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       assert.equal(await revisionText(page, SOURCE_PATH), revision,
         'the source SHA-256 revision must survive the ZIP export/import roundtrip');
 
-      await page.getByLabel('Bundleをimport').setInputFiles({
-        name: 'invalid.zip',
-        mimeType: 'application/zip',
-        buffer: Buffer.from('not a ZIP archive')
-      });
-      await page.getByRole('alert').waitFor();
-      await selectSource(page, SOURCE_PATH);
-      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1,
-        'a rejected import must leave the imported Workspace readable');
+      const rejected = [];
+      for (const [kind, buffer] of hostileBundles(bundle)) {
+        await page.getByLabel('Bundleをimport').setInputFiles({ name: `${kind}.zip`, mimeType: 'application/zip', buffer });
+        await page.getByRole('alert').waitFor();
+        await selectSource(page, SOURCE_PATH);
+        assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1, `${kind} must preserve source bytes`);
+        assert.equal(await revisionText(page, SOURCE_PATH), revision, `${kind} must preserve the source revision`);
+        rejected.push({ kind, archiveBytes: buffer.byteLength, sha256: createHash('sha256').update(buffer).digest('hex') });
+      }
       await reopenWorkspace(page, workspaceId);
       await selectSource(page, 'notes/preserve.md');
       assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), '既存Workspaceを保持します。\n',
@@ -169,6 +224,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
         archiveBytes: bundle.byteLength,
         archiveSha256: createHash('sha256').update(bundle).digest('hex'),
         sourceRevision: revision,
+        rejected,
         invalidImportPreservedWorkspace: true
       };
     } finally {
