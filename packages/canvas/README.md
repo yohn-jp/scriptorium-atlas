@@ -32,11 +32,13 @@ Since Excalidraw font URLs already include `fonts/`, use `/` as the asset base w
 - `createEmptyExcalidrawScene(): Promise<string>` creates a valid Excalidraw v2 JSON document for a new board's separate `.excalidraw` file.
 - `restoreExcalidrawScene(sceneText): Promise<RestoredExcalidrawScene>` validates and restores supported scenes with Excalidraw's official `restore` API.
 - `serializeExcalidrawScene(snapshot, originalSceneText?): Promise<string>` serializes a `ExcalidrawSceneSnapshot` with Excalidraw's official `serializeAsJSON` API, retaining original bytes on a no-op and unknown JSON fields during edits.
-- `exportExcalidrawScene(sceneText, format: "png" | "svg"): Promise<Blob>` renders a PNG or SVG export.
+- `exportExcalidrawScene(sceneText, format: "png" | "svg", overlay?): Promise<Blob>` renders the scene and optional Host-owned overlays to PNG or SVG.
 - `downloadExcalidrawScene(sceneText, filename?)` downloads the original scene text as `.excalidraw`.
 
 Unsupported versions or element kinds stay read-only and offer the original source for download. The Excalidraw editor supplies shape, arrow, freehand, text, image, grouping, undo, and redo interactions.
 
 The optional `renderOverlay(viewport)` prop lets Atlas render interactive cards above the drawing. Its coordinate helpers use Excalidraw's scene/viewport conversion APIs. Card content, size, source/provider bindings, and identity remain in the Host-owned `.atlas.json` Board document; this package never writes them into Excalidraw `customData`.
 
-`exportExcalidrawScene(text, "png" | "svg")` returns an image `Blob`; `downloadExcalidrawScene(text)` preserves the input document text in a `.excalidraw` download. The Host remains responsible for routing file downloads and draft persistence.
+For PNG/SVG output, pass those Host-owned cards as a third-argument `CanvasExportOverlay`: `{ elements, files? }`. `elements` accepts official Excalidraw element skeletons in scene coordinates through `CanvasExportElementSkeleton`; image skeletons take a plain string `fileId`. Canvas converts them with Excalidraw's `convertToExcalidrawElements` API and includes them only in the export. Add image data to `files` as `{ id, mimeType, dataURL, created? }` using the same ID referenced by the image skeleton. Every overlay image ID must resolve to a scene or supplied file, and supplied file IDs must not collide with scene file IDs. This keeps card data out of the persisted `.excalidraw` text while allowing exports to include it.
+
+`exportExcalidrawScene(text, "png" | "svg", overlay?)` returns an image `Blob`; `downloadExcalidrawScene(text)` preserves the input document text in a `.excalidraw` download. The Host remains responsible for routing file downloads and draft persistence.

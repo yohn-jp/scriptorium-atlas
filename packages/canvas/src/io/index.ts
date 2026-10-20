@@ -3,7 +3,13 @@ export {
   downloadExcalidrawScene,
   exportExcalidrawScene,
 } from "./export.js";
-export type { CanvasImageFormat } from "./export.js";
+export type {
+  CanvasExportElementSkeleton,
+  CanvasExportFile,
+  CanvasExportImageMimeType,
+  CanvasExportOverlay,
+  CanvasImageFormat,
+} from "./export.js";
 export {
   createEmptyExcalidrawScene,
   restoreExcalidrawScene,
