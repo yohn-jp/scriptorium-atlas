@@ -231,9 +231,9 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
     version: '1.0.0',
     private: true,
     type: 'module',
-    dependencies: {},
-    pnpm: { overrides: {} }
+    dependencies: {}
   };
+  const overrides = {};
   const archivesByPackage = new Map(archiveRecords.map(record => [record.name, record.archiveAbsolute]));
   for (const [name, archive] of archivesByPackage) {
     packageJson.dependencies[name] = `file:${archive}`;
@@ -241,12 +241,19 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
   for (const { manifest } of records.values()) {
     for (const dependency of Object.keys(internalRuntimeDependencies(manifest))) {
       const archive = archivesByPackage.get(dependency);
-      if (archive) packageJson.pnpm.overrides[dependency] = `file:${archive}`;
+      if (archive) overrides[dependency] = `file:${archive}`;
     }
   }
   Object.assign(packageJson.dependencies, peerDependencies(records));
   await mkdir(consumerDirectory, { recursive: true });
   await writeFile(join(consumerDirectory, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
+  const workspaceConfig = [
+    'overrides:',
+    ...Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, archive]) => `  ${JSON.stringify(name)}: ${JSON.stringify(archive)}`),
+    ''
+  ].join('\n');
+  await writeFile(join(consumerDirectory, 'pnpm-workspace.yaml'), workspaceConfig);
   await writeFile(join(consumerDirectory, '.npmrc'), 'strict-peer-dependencies=true\n');
 
   const installArgs = ['install', '--ignore-scripts', '--no-frozen-lockfile', '--prefer-offline'];
@@ -255,6 +262,7 @@ async function runConsumer(records, archiveRecords, temporaryRoot) {
     status: 'NOT_CHECKED',
     directory: '<temporary external directory>',
     installCommand: ['pnpm', ...installArgs],
+    workspaceOverrideCount: Object.keys(overrides).length,
     installExitStatus: install.exitStatus,
     exportedModules: [],
     error: null
