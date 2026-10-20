@@ -8,7 +8,8 @@ let activeScenarioTrace = null;
 
 function compactMetric(metric) {
   const keys = ['kind', 'origin', 'workerId', 'workerUrl', 'operation', 'nodeCount', 'edgeCount', 'ok', 'errorCode',
-    'requestId', 'clickId', 'trusted', 'frameNow', 'durationMs', 'receivedAt', 'query', 'totalMatches', 'resultCount', 'positionCount', 'finitePositionCount',
+    'requestId', 'clickId', 'trusted', 'targetText', 'buttonVisible', 'buttonEnabled', 'frameNow', 'frameEpochMs', 'durationMs',
+    'receivedAt', 'receivedEpochMs', 'query', 'totalMatches', 'resultCount', 'positionCount', 'finitePositionCount',
     'fromLocalId', 'toLocalId', 'depth', 'direction', 'status', 'hops', 'cancelDispatchToTerminationMs'];
   return Object.fromEntries(keys.filter((key) => metric[key] !== undefined).map((key) => [key, metric[key]]));
 }
@@ -114,12 +115,14 @@ function instrumentWorkers() {
     return {};
   };
   const send = (metric) => {
-    try { window.top.postMessage({ tag: 'atlas-perf/v1', metric: { ...metric, frameNow: performance.now() } }, '*'); } catch { /* closing frame */ }
+    try { window.top.postMessage({ tag: 'atlas-perf/v1', metric: { ...metric, frameNow: performance.now(),
+      frameEpochMs: performance.timeOrigin + performance.now() } }, '*'); } catch { /* closing frame */ }
   };
   if (window === window.top) {
     window.__atlasPerfStore = [];
     window.addEventListener('message', (event) => {
-      if (event.data?.tag === 'atlas-perf/v1') window.__atlasPerfStore.push({ ...event.data.metric, receivedAt: performance.now() });
+      if (event.data?.tag === 'atlas-perf/v1') window.__atlasPerfStore.push({ ...event.data.metric,
+        receivedAt: performance.now(), receivedEpochMs: performance.timeOrigin + performance.now() });
     });
     return;
   }
@@ -140,7 +143,11 @@ function instrumentWorkers() {
     cancelClick = { id: ++cancelClickSequence, at, workerId: activeForceWorkerId,
       requestId: activeForceRequestId, requestStartedAt: activeForceStartedAt };
     send({ kind: 'cancel-click-dispatched', clickId: cancelClick.id, workerId: cancelClick.workerId,
-      requestId: cancelClick.requestId, trusted: event.isTrusted, origin: location.origin });
+      requestId: cancelClick.requestId, trusted: event.isTrusted,
+      targetText: button.textContent?.trim() ?? '',
+      buttonVisible: button.getClientRects().length > 0 && getComputedStyle(button).visibility !== 'hidden'
+        && getComputedStyle(button).display !== 'none',
+      buttonEnabled: !button.disabled && button.getAttribute('aria-disabled') !== 'true', origin: location.origin });
   }, true);
   window.Worker = class MeasuredWorker extends NativeWorker {
     constructor(url, options) {
@@ -700,6 +707,7 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const atlas = await atlasFrame(page);
       const before = await readMetrics(page);
       const priorRequests = before.filter((item) => item.kind === 'request' && item.origin === atlas.origin && item.operation === 'layout-force').length;
+      const cancelClickCount = before.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).length;
       const cancelButton = atlas.locator.getByRole('button', { name: 'レイアウトを中止', exact: true });
       await cancelButton.scrollIntoViewIfNeeded();
       assert.equal(await cancelButton.isVisible(), true, 'The real Cancel button must be visible before starting Force.');
@@ -713,32 +721,33 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         `The actual Cancel button must be inside the browser viewport: ${JSON.stringify({ bounds, viewport })}.`);
         return bounds;
       };
-      await assertCancelButtonInViewport();
+      const cancelBounds = await assertCancelButtonInViewport();
       await atlas.locator.getByRole('button', { name: '力学レイアウト', exact: true }).click();
-      await page.waitForFunction(({ origin, count }) => (window.__atlasPerfStore ?? [])
-        .filter((item) => item.kind === 'request' && item.origin === origin && item.operation === 'layout-force').length > count,
+      const requestHandle = await page.waitForFunction(({ origin, count }) => (window.__atlasPerfStore ?? [])
+        .filter((item) => item.kind === 'request' && item.origin === origin && item.operation === 'layout-force').length > count
+        ? (window.__atlasPerfStore ?? []).filter((item) => item.kind === 'request' && item.origin === origin && item.operation === 'layout-force').at(-1)
+        : false,
       { origin: atlas.origin, count: priorRequests }, { timeout: 30_000, polling: 5 });
-      const requested = (await readMetrics(page)).filter((item) => item.kind === 'request' && item.origin === atlas.origin && item.operation === 'layout-force').at(-1);
+      const requested = await requestHandle.jsonValue();
+      await requestHandle.dispose();
       assert.ok(requested?.workerId, 'The real Layout Worker must start the in-flight Force calculation.');
       assert.equal(requested.nodeCount, 1_000, 'Cancellation must be measured on the deterministic 1k-node Force workload.');
       assert.equal(requested.edgeCount, 2_000, 'Cancellation must use the same 2k-edge Force workload.');
-      const beforeCancel = await readMetrics(page);
-      assert.equal(beforeCancel.some((item) => item.kind === 'response' && item.workerId === requested.workerId), false,
-        'Force calculation must still be in flight when cancellation is requested.');
-      const cancelClickCount = beforeCancel.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).length;
-      assert.equal(await cancelButton.isVisible(), true, 'The real Cancel button must remain visible during Force.');
-      assert.equal(await cancelButton.isEnabled(), true, 'The real Cancel button must remain enabled during Force.');
-      const cancelBounds = await assertCancelButtonInViewport();
-      const automationClickStartedAt = await page.evaluate(() => performance.now());
+      const automationClickStartedAt = Date.now();
       await page.mouse.click(cancelBounds.x + cancelBounds.width / 2, cancelBounds.y + cancelBounds.height / 2);
-      await page.waitForFunction(({ origin, count }) => (window.__atlasPerfStore ?? [])
-        .filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === origin).length > count,
-      { origin: atlas.origin, count: cancelClickCount }, { timeout: 5_000, polling: 5 });
-      const afterClickDispatch = await readMetrics(page);
-      const cancelClick = afterClickDispatch.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).at(-1);
+      const clickHandle = await page.waitForFunction(({ origin, count }) => {
+        const clicks = (window.__atlasPerfStore ?? []).filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === origin);
+        return clicks.length > count ? clicks.at(-1) : false;
+      }, { origin: atlas.origin, count: cancelClickCount }, { timeout: 5_000, polling: 5 });
+      const cancelClick = await clickHandle.jsonValue();
+      await clickHandle.dispose();
       assert.equal(cancelClick?.trusted, true, 'Cancel must be delivered as a trusted physical browser click.');
+      assert.equal(cancelClick?.targetText, 'レイアウトを中止', 'The trusted click must hit the actual Cancel button.');
+      assert.equal(cancelClick?.buttonVisible, true, 'The actual Cancel button must be visible at pointer dispatch.');
+      assert.equal(cancelClick?.buttonEnabled, true, 'The actual Cancel button must be enabled at pointer dispatch.');
       assert.equal(cancelClick?.workerId, requested.workerId, 'The physical Cancel click must target the in-flight Force Worker.');
       assert.equal(cancelClick?.requestId, requested.requestId, 'The physical Cancel click must target the still-active Force request.');
+      const afterClickDispatch = await readMetrics(page);
       const forceResponseBeforeDispatch = afterClickDispatch.find((item) => item.kind === 'response'
         && item.workerId === requested.workerId && item.requestId === requested.requestId
         && (!Number.isFinite(item.frameNow) || item.frameNow <= cancelClick.frameNow));
@@ -761,15 +770,18 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.ok(Number.isFinite(termination.cancelDispatchToTerminationMs), 'Force termination must be timed from the real frame click event to Worker.terminate().');
       assert.ok(termination.cancelDispatchToTerminationMs >= 0 && termination.cancelDispatchToTerminationMs <= 500,
         `Production Force cancellation took ${termination.cancelDispatchToTerminationMs}ms from the dispatched click to Worker.terminate(); limit is 500ms.`);
-      const automationClickStartToDispatchMs = cancelClick.receivedAt - automationClickStartedAt;
-      const clickDispatchToTerminationObservedMs = termination.receivedAt - cancelClick.receivedAt;
-      const automationClickStartToTerminationMs = termination.receivedAt - automationClickStartedAt;
-      assert.equal(afterCancel.some((item) => item.kind === 'response' && item.workerId === requested.workerId), false,
+      const automationClickStartToDispatchMs = cancelClick.frameEpochMs - automationClickStartedAt;
+      const clickDispatchToTerminationObservedMs = termination.frameNow - cancelClick.frameNow;
+      const automationClickStartToTerminationMs = termination.frameEpochMs - automationClickStartedAt;
+      assert.equal(afterCancel.some((item) => item.kind === 'response'
+        && item.workerId === requested.workerId && item.requestId === requested.requestId), false,
         'The cancelled Force Worker must not return a stale layout result.');
       await atlas.locator.getByText('レイアウト計算を中止しました。', { exact: true }).waitFor();
       return { dataset: datasets.oneK, nodes: requested.nodeCount, edges: requested.edgeCount,
         cancelDispatchToTerminationMs: termination.cancelDispatchToTerminationMs, cancelDispatchToTerminationLimitMs: 500,
         clickDispatchToTerminationObservedMs, automationClickStartToDispatchMs, automationClickStartToTerminationMs,
+        cancelClickVisible: cancelClick.buttonVisible, cancelClickEnabled: cancelClick.buttonEnabled,
+        cancelClickTrusted: cancelClick.trusted, cancelClickTarget: cancelClick.targetText,
         workerTerminated: true, staleResponseReceived: false };
     } catch (error) {
       markScenarioFailure(page, error);
