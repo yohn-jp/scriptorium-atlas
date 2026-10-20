@@ -152,6 +152,10 @@ describe("Story graph projection and provider queries", () => {
       { path: "bible/characters/b.yaml", revision: "broken", content: "id: char-b\nid: duplicate\ntype: character\n" },
     ]);
     expect(projection.complete).toBe(false);
-    expect(listStoryNodes(projection, "handle", {}).complete).toBe(false);
+    const finalPage = listStoryNodes(projection, "handle", {});
+    expect(finalPage.items.map((item) => item.ref.localId)).toContain("char-a");
+    expect(finalPage.nextCursor).toBeNull();
+    expect(finalPage.complete).toBe(false);
+    // A source-incomplete final page is valid and must remain usable by Atlas.
   });
 });
