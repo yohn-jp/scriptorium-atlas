@@ -16,7 +16,7 @@ const csp = [
 ].join('; ');
 
 test('SVG content type is inline only for inert, local-reference SVG in Chromium under product CSP', async ({ page }) => {
-  const moduleSource = await readFile(new URL('../dist/svg.js', import.meta.url), 'utf8');
+  const moduleSource = await readFile(process.env.ATLAS_SVG_MODULE ?? new URL('../dist/svg.js', import.meta.url), 'utf8');
   const samples = [
     { name: 'plain SVG', source: `<svg xmlns="${svgNamespace}"><rect width="10" height="10"/></svg>`, expected: 'image/svg+xml' },
     { name: 'local fragment reference', source: `<svg xmlns="${svgNamespace}"><defs><linearGradient id="paint"/></defs><rect fill="url(#paint)"/></svg>`, expected: 'image/svg+xml' },
@@ -27,6 +27,7 @@ test('SVG content type is inline only for inert, local-reference SVG in Chromium
     { name: 'aliased XLink external reference', source: `<svg xmlns="${svgNamespace}" xmlns:q="http://www.w3.org/1999/xlink"><image q:href="https://evil.invalid/p.png"/></svg>`, expected: 'application/octet-stream' },
     { name: 'external namespace href', source: `<svg xmlns="${svgNamespace}" xmlns:q="https://evil.invalid/ns"><image q:href="https://evil.invalid/p.png"/></svg>`, expected: 'application/octet-stream' },
     { name: 'SMIL href mutation', source: `<svg xmlns="${svgNamespace}"><image id="i"/><set href="#i" attributeName="href" to="https://evil.invalid/p.png"/></svg>`, expected: 'application/octet-stream' },
+    { name: 'script element', source: `<svg xmlns="${svgNamespace}"><script>alert(1)</script><rect/></svg>`, expected: 'application/octet-stream' },
     { name: 'event handler', source: `<svg xmlns="${svgNamespace}" onload="alert(1)"><rect/></svg>`, expected: 'application/octet-stream' },
     { name: 'external XML base', source: `<svg xmlns="${svgNamespace}" xml:base="https://evil.invalid/"><use href="#shape"/></svg>`, expected: 'application/octet-stream' },
     { name: 'XML stylesheet processing instruction', source: `<?xml-stylesheet href="https://evil.invalid/x.css"?><svg xmlns="${svgNamespace}"/>`, expected: 'application/octet-stream' },

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertBundleWorkspaceCapacity, createBundle, MAX_BUNDLE_ARCHIVE_BYTES, MAX_BUNDLE_EXPANDED_BYTES, MAX_WORKSPACE_FILES, MAX_WORKSPACE_PAYLOAD_FILES, parseBundle, serializedManifestBytes, workspaceRevision } from '../src/bundle.js';
+import { assertBundleWorkspaceCapacity, createBundle, MAX_BUNDLE_ARCHIVE_BYTES, MAX_BUNDLE_EXPANDED_BYTES, MAX_IMAGE_BYTES, MAX_WORKSPACE_FILES, MAX_WORKSPACE_PAYLOAD_FILES, parseBundle, serializedManifestBytes, workspaceRevision } from '../src/bundle.js';
 import { openDatabase } from '../src/database.js';
 import { openIndexedDbHost } from '../src/host.js';
 import { sha256, utf8Bytes } from '../src/bytes.js';
@@ -115,6 +115,82 @@ describe('V1 workspace bundle limits and byte fidelity', () => {
     });
     expect(await host.listWorkspaces()).toHaveLength(1);
     expect((await host.getWorkspaceHandle(existing.workspace.workspaceId)).sourceRevision).toBe(existing.workspace.sourceRevision);
+  });
+
+  it('preserves an existing workspace when rejecting oversized images, duplicate asset IDs, bad ZIP metadata, and corrupted member bytes', async () => {
+    const host = await openIndexedDbHost({ databaseName: `atlas-import-failures-${++databaseCounter}` });
+    hosts.push(host);
+    const existing = await host.createWorkspace({ name: 'Preserved source' });
+    const keepContent = 'existing bytes stay here\n';
+    const seed = await host.prepare(existing.workspace, {
+      operationId: 'op-preserve-existing',
+      workspaceId: existing.workspace.workspaceId,
+      baseWorkspaceRevision: existing.workspace.sourceRevision,
+      reads: [{ path: 'notes/keep.txt', revision: null }],
+      writes: [{ path: 'notes/keep.txt', content: keepContent, encoding: 'utf8' }],
+      message: 'Seed the existing workspace',
+      kind: 'document'
+    });
+    await host.commit(existing.workspace, seed.preparedId, true);
+    const sourceRevision = (await host.getWorkspaceHandle(existing.workspace.workspaceId)).sourceRevision;
+
+    const expectExistingUntouched = async () => {
+      const workspaces = await host.listWorkspaces();
+      expect(workspaces).toHaveLength(1);
+      expect(workspaces[0]).toMatchObject({ workspace: { workspaceId: existing.workspace.workspaceId, sourceRevision } });
+      const current = await host.getWorkspaceHandle(existing.workspace.workspaceId);
+      expect(current.sourceRevision).toBe(sourceRevision);
+      await expect(host.read(current, { path: 'notes/keep.txt' })).resolves.toMatchObject({
+        content: keepContent,
+        revision: await sha256(utf8Bytes(keepContent))
+      });
+    };
+
+    const oversizedImage = new Uint8Array(MAX_IMAGE_BYTES + 1);
+    const oversizedBundle = await makeBundleArchive('oversized-image', 'Oversized image', [
+      { path: 'assets/oversized.png', bytes: oversizedImage }
+    ]);
+    await expect(host.importBundle(new Blob([oversizedBundle]), { workspaceId: 'oversized-image-destination' }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('Image file exceeds 10 MiB') });
+    await expectExistingUntouched();
+
+    const duplicateAsset = {
+      id: 'asset-duplicate',
+      path: 'assets/image.png',
+      sha256: 'c'.repeat(64),
+      bytes: 1,
+      mime: 'image/png'
+    };
+    const duplicateBoard = utf8Bytes(JSON.stringify({
+      schema: 'atlas.board/v1',
+      boardId: 'duplicate-asset-board',
+      name: 'Duplicate asset keys',
+      revision: 0,
+      views: [],
+      nodes: [],
+      edges: [],
+      cards: [],
+      assets: [duplicateAsset, { ...duplicateAsset }]
+    }));
+    const duplicateAssetBundle = await makeBundleArchive('duplicate-asset-source', 'Duplicate asset keys', [
+      { path: 'boards/duplicate.atlas.json', bytes: duplicateBoard }
+    ]);
+    await expect(host.importBundle(new Blob([duplicateAssetBundle]), { workspaceId: 'duplicate-asset-destination' }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expectExistingUntouched();
+
+    await expect(host.importBundle(new Blob([makeMalformedZipMetadata()]), { workspaceId: 'bad-metadata-destination' }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expectExistingUntouched();
+
+    const body = utf8Bytes('ZIP payload bytes must match the manifest');
+    const validArchive = await makeBundleArchive('corrupted-source', 'Corrupted payload', [
+      { path: 'notes/body.txt', bytes: body }
+    ], 0);
+    const corruptedArchive = corruptStoredZipMember(validArchive, 'workspace/notes/body.txt');
+    await expect(host.importBundle(new Blob([corruptedArchive]), { workspaceId: 'corrupted-destination' }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expectExistingUntouched();
   });
 
   it('keeps a legacy 100,000-file workspace readable when bundle export is over the reserved-manifest limit', async () => {
@@ -246,4 +322,59 @@ function makeMalformedZipMetadata(): Uint8Array {
   view.setUint32(0, 0x06054b50, true);
   view.setUint32(12, 1, true);
   return archive;
+}
+
+async function makeBundleArchive(
+  workspaceId: string,
+  name: string,
+  files: Array<{ path: string; bytes: Uint8Array }>,
+  level = 6
+): Promise<Uint8Array> {
+  const revisions = await Promise.all(files.map(async file => ({ path: file.path, revision: await sha256(file.bytes) })));
+  const sourceRevision = await workspaceRevision(revisions);
+  const zipEntries = Object.create(null) as Record<string, Uint8Array>;
+  zipEntries['manifest.json'] = serializedManifestBytes(workspaceId, name, sourceRevision, files.map((file, index) => ({
+    path: file.path,
+    revision: revisions[index]!.revision,
+    byteLength: file.bytes.byteLength
+  })));
+  for (const file of files) zipEntries[`workspace/${file.path}`] = file.bytes;
+  return zipSync(zipEntries, { level });
+}
+
+function corruptStoredZipMember(archive: Uint8Array, memberName: string): Uint8Array {
+  const corrupted = archive.slice();
+  const view = new DataView(corrupted.buffer, corrupted.byteOffset, corrupted.byteLength);
+  let endOffset = -1;
+  for (let offset = corrupted.byteLength - 22; offset >= Math.max(0, corrupted.byteLength - 65_557); offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endOffset = offset;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new Error('ZIP end record was not found.');
+
+  const entryCount = view.getUint16(endOffset + 10, true);
+  let centralOffset = view.getUint32(endOffset + 16, true);
+  const decoder = new TextDecoder();
+  for (let index = 0; index < entryCount; index += 1) {
+    if (view.getUint32(centralOffset, true) !== 0x02014b50) throw new Error('ZIP central entry was malformed.');
+    const nameLength = view.getUint16(centralOffset + 28, true);
+    const extraLength = view.getUint16(centralOffset + 30, true);
+    const commentLength = view.getUint16(centralOffset + 32, true);
+    const name = decoder.decode(corrupted.subarray(centralOffset + 46, centralOffset + 46 + nameLength));
+    if (name === memberName) {
+      const localOffset = view.getUint32(centralOffset + 42, true);
+      const localNameLength = view.getUint16(localOffset + 26, true);
+      const localExtraLength = view.getUint16(localOffset + 28, true);
+      const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+      if (view.getUint16(centralOffset + 10, true) !== 0 || dataOffset >= corrupted.byteLength) {
+        throw new Error('Target ZIP member is not a nonempty stored member.');
+      }
+      corrupted[dataOffset] = corrupted[dataOffset]! ^ 0xff;
+      return corrupted;
+    }
+    centralOffset += 46 + nameLength + extraLength + commentLength;
+  }
+  throw new Error(`ZIP member ${memberName} was not found.`);
 }

@@ -223,4 +223,85 @@ describe('IndexedDB Host persistence', () => {
     await expect(reopened.listPendingAssets(workspace.workspace.workspaceId)).resolves.toEqual([upload]);
     await expect(reopened.recover(workspace.workspace.workspaceId)).resolves.toMatchObject({ pendingOperationIds: ['op-upload-recovery'] });
   });
+
+  it('rejects oversized and colliding staged asset proposals while preserving the original upload', async () => {
+    const host = await open();
+    const workspace = await host.createWorkspace({ name: 'Asset collision' });
+    const tooLarge = {
+      operationId: 'op-too-large-image',
+      workspaceId: workspace.workspace.workspaceId,
+      baseWorkspaceRevision: workspace.workspace.sourceRevision,
+      path: 'assets/too-large.png',
+      sha256: 'a'.repeat(64),
+      totalBytes: 10 * 1024 * 1024 + 1,
+      contentType: 'image/png'
+    };
+    await expect(host.beginAsset(workspace.workspace, tooLarge)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(host.listPendingAssets(workspace.workspace.workspaceId)).resolves.toEqual([]);
+
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+    const uploadStart = {
+      operationId: 'op-asset-collision',
+      workspaceId: workspace.workspace.workspaceId,
+      baseWorkspaceRevision: workspace.workspace.sourceRevision,
+      path: 'assets/image.png',
+      sha256: await sha256(bytes),
+      totalBytes: bytes.byteLength,
+      contentType: 'image/png'
+    };
+    const upload = await host.beginAsset(workspace.workspace, uploadStart);
+    await expect(host.beginAsset(workspace.workspace, uploadStart)).resolves.toEqual(upload);
+    await expect(host.beginAsset(workspace.workspace, { ...uploadStart, path: 'assets/other.png' }))
+      .rejects.toMatchObject({ code: 'OPERATION_ID_REUSED' });
+
+    await host.appendAsset(workspace.workspace, {
+      uploadId: upload.uploadId,
+      offset: 0,
+      content: bytesToBase64(bytes)
+    });
+    await expect(host.prepareAsset(workspace.workspace, upload.uploadId, {
+      operationId: uploadStart.operationId,
+      workspaceId: uploadStart.workspaceId,
+      baseWorkspaceRevision: uploadStart.baseWorkspaceRevision,
+      reads: [{ path: uploadStart.path, revision: null }],
+      writes: [{ path: uploadStart.path, content: 'replacement', encoding: 'utf8' }],
+      message: 'Reject a write that duplicates the staged asset path',
+      kind: 'asset'
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+    await expect(host.listPendingAssets(workspace.workspace.workspaceId)).resolves.toMatchObject([{
+      uploadId: upload.uploadId,
+      path: uploadStart.path,
+      nextOffset: bytes.byteLength,
+      totalBytes: bytes.byteLength
+    }]);
+    await expect(host.list(workspace.workspace)).resolves.toMatchObject({ files: [] });
+  });
+
+  it('rejects duplicate Board asset IDs before journaling the document', async () => {
+    const host = await open();
+    const workspace = await host.createWorkspace({ name: 'Duplicate Board asset' });
+    const asset = { id: 'asset-duplicate', path: 'assets/image.png', sha256: 'b'.repeat(64), bytes: 1, mime: 'image/png' };
+    const board = {
+      schema: 'atlas.board/v1',
+      boardId: 'board-duplicate-asset',
+      name: 'Duplicate asset IDs',
+      revision: 0,
+      views: [],
+      nodes: [],
+      edges: [],
+      cards: [],
+      assets: [asset, { ...asset }]
+    };
+    await expect(host.prepare(workspace.workspace, change(
+      workspace.workspace.workspaceId,
+      workspace.workspace.sourceRevision,
+      'op-duplicate-board-asset',
+      'boards/duplicate.atlas.json',
+      JSON.stringify(board),
+      null
+    ))).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(host.recover(workspace.workspace.workspaceId)).resolves.toMatchObject({ pendingOperationIds: [] });
+    await expect(host.list(workspace.workspace)).resolves.toMatchObject({ files: [] });
+  });
 });
