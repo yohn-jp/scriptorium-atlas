@@ -193,7 +193,7 @@ function hasErrorForPath(diagnostics: readonly StoryDiagnostic[], path: string):
 
 function parseEntity(source: StorySourceDocument, inferredType: StoryEntityType, diagnostics: StoryDiagnostic[]): StoryEntity | undefined {
   const { file, raw, markdown } = source;
-  const explicitType = raw.type;
+  const explicitType = raw["type"];
   let type = inferredType;
   if (explicitType !== undefined) {
     if (typeof explicitType !== "string" || !STORY_ENTITY_TYPES.includes(explicitType as StoryEntityType)) {
@@ -207,8 +207,8 @@ function parseEntity(source: StorySourceDocument, inferredType: StoryEntityType,
   }
 
   let id: string;
-  if (typeof raw.id === "string" && raw.id.length > 0) {
-    id = raw.id;
+  if (typeof raw["id"] === "string" && raw["id"].length > 0) {
+    id = raw["id"];
   } else if (type === "manuscript") {
     id = sourcePathToManuscriptId(file.path);
   } else {
@@ -219,15 +219,15 @@ function parseEntity(source: StorySourceDocument, inferredType: StoryEntityType,
     diagnostics.push(diagnostic(file.path, "entity-id-invalid", "Entity ID must be 1–256 UTF-8 bytes without control characters.", "error", "id"));
   }
 
-  const candidateName = raw.name ?? raw.title;
+  const candidateName = raw["name"] ?? raw["title"];
   const name = typeof candidateName === "string" && candidateName.length > 0 ? candidateName : id;
-  const aliases = typedStringArray(raw.aliases, file.path, "aliases", diagnostics);
-  const tags = typedStringArray(raw.tags, file.path, "tags", diagnostics);
+  const aliases = typedStringArray(raw["aliases"], file.path, "aliases", diagnostics);
+  const tags = typedStringArray(raw["tags"], file.path, "tags", diagnostics);
   const parents = hierarchyParents(file.path);
-  if (parents.volumePathId && typeof raw.volume === "string" && raw.volume !== parents.volumePathId) {
+  if (parents.volumePathId && typeof raw["volume"] === "string" && raw["volume"] !== parents.volumePathId) {
     diagnostics.push(diagnostic(file.path, "hierarchy-volume-path-mismatch", "Scene or chapter volume reference differs from its path.", "error", "volume"));
   }
-  if (parents.chapterPathId && typeof raw.chapter === "string" && raw.chapter !== parents.chapterPathId) {
+  if (parents.chapterPathId && typeof raw["chapter"] === "string" && raw["chapter"] !== parents.chapterPathId) {
     diagnostics.push(diagnostic(file.path, "hierarchy-chapter-path-mismatch", "Scene chapter reference differs from its path.", "error", "chapter"));
   }
 
@@ -240,7 +240,7 @@ function parseEntity(source: StorySourceDocument, inferredType: StoryEntityType,
     aliases,
     tags,
     properties: raw,
-    ...(markdown ? { body: markdown.body } : typeof raw.body === "string" ? { body: raw.body } : {}),
+    ...(markdown ? { body: markdown.body } : typeof raw["body"] === "string" ? { body: raw["body"] } : {}),
     editable: type !== "dialogue_sketch" && !hasErrorForPath(diagnostics, file.path),
   };
 }

@@ -78,7 +78,7 @@ export function defaultStoryPath(type: Exclude<StoryEntityType, "dialogue_sketch
 export function hierarchyParents(path: string): { volumePathId?: string; chapterPathId?: string } {
   const match = /^plot\/volumes\/([^/]+)\/chapters\/([^/]+)\/(?:chapter\.ya?ml|scenes\/[^/]+\.ya?ml)$/i.exec(path);
   if (!match) return {};
-  return { volumePathId: match[1], ...(path.toLowerCase().includes("/scenes/") ? { chapterPathId: match[2] } : {}) };
+  return { ...(match[1] ? { volumePathId: match[1] } : {}), ...(path.toLowerCase().includes("/scenes/") && match[2] ? { chapterPathId: match[2] } : {}) };
 }
 
 export function sourcePathToManuscriptId(path: string): string {

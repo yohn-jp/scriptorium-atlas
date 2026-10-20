@@ -75,11 +75,11 @@ function pointerField(pointer: readonly (string | number)[]): string {
 function refParts(value: unknown): { target?: string; note?: string; relationId?: string } {
   if (typeof value === "string") return { target: value };
   if (!isRecord(value)) return {};
-  const target = [value.target, value.scene, value.id].find((item): item is string => typeof item === "string" && item.length > 0);
+  const target = [value["target"], value["scene"], value["id"]].find((item): item is string => typeof item === "string" && item.length > 0);
   return {
     ...(target ? { target } : {}),
-    ...(typeof value.note === "string" ? { note: value.note } : {}),
-    ...(typeof value.id === "string" && typeof value.target === "string" ? { relationId: value.id } : {}),
+    ...(typeof value["note"] === "string" ? { note: value["note"] } : {}),
+    ...(typeof value["id"] === "string" && typeof value["target"] === "string" ? { relationId: value["id"] } : {}),
   };
 }
 
@@ -127,7 +127,7 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
     if (Object.hasOwn(raw, field)) collectValue(entity, raw[field], [field], field, drafts, diagnostics, publishable);
   }
 
-  const relations = raw.relations;
+  const relations = raw["relations"];
   if (Array.isArray(relations)) {
     relations.forEach((value, index) => {
       if (!isRecord(value)) {
@@ -141,8 +141,8 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
         });
         return;
       }
-      const target = value.target;
-      const kind = typeof value.kind === "string" ? value.kind : "related";
+      const target = value["target"];
+      const kind = typeof value["kind"] === "string" ? value["kind"] : "related";
       if (typeof target !== "string" || target.length === 0) {
         diagnostics.push({
           code: "relation-reference-invalid",
@@ -155,8 +155,8 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
         return;
       }
       const field = "relations";
-      const invalidKind = Object.hasOwn(value, "kind") && typeof value.kind !== "string";
-      const invalidId = Object.hasOwn(value, "id") && typeof value.id !== "string";
+      const invalidKind = Object.hasOwn(value, "kind") && typeof value["kind"] !== "string";
+      const invalidId = Object.hasOwn(value, "id") && typeof value["id"] !== "string";
       if (invalidKind || invalidId) {
         diagnostics.push({
           code: invalidKind ? "relation-kind-invalid" : "relation-id-invalid",
@@ -172,8 +172,8 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
         targetId: target,
         field,
         kind,
-        ...(typeof value.note === "string" ? { note: value.note } : {}),
-        ...(Object.hasOwn(value, "id") && typeof value.id === "string" ? { sourceRelationId: value.id } : {}),
+        ...(typeof value["note"] === "string" ? { note: value["note"] } : {}),
+        ...(Object.hasOwn(value, "id") && typeof value["id"] === "string" ? { sourceRelationId: value["id"] } : {}),
         publishable: publishable && !invalidKind && !invalidId,
         provenance: { path: entity.path, revision: entity.revision, field, pointer: ["relations", index] },
       });
@@ -189,11 +189,11 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
     });
   }
 
-  if (isRecord(raw.entities)) {
-    for (const [field, targets] of Object.entries(raw.entities)) {
+  if (isRecord(raw["entities"])) {
+    for (const [field, targets] of Object.entries(raw["entities"])) {
       collectValue(entity, targets, ["entities", field], field, drafts, diagnostics, publishable);
     }
-  } else if (raw.entities !== undefined) {
+  } else if (raw["entities"] !== undefined) {
     diagnostics.push({
       code: "relation-shape-invalid",
       severity: "warning",
@@ -204,13 +204,13 @@ function collectRelations(entity: StoryEntity, diagnostics: StoryDiagnostic[], p
     });
   }
 
-  if (isRecord(raw.threads)) {
+  if (isRecord(raw["threads"])) {
     for (const field of ["plants", "advances"] as const) {
-      if (Object.hasOwn(raw.threads, field)) {
-        collectValue(entity, raw.threads[field], ["threads", field], field, drafts, diagnostics, publishable);
+      if (Object.hasOwn(raw["threads"], field)) {
+        collectValue(entity, raw["threads"][field], ["threads", field], field, drafts, diagnostics, publishable);
       }
     }
-  } else if (raw.threads !== undefined) {
+  } else if (raw["threads"] !== undefined) {
     diagnostics.push({
       code: "relation-shape-invalid",
       severity: "warning",
@@ -260,7 +260,7 @@ function addHierarchyDiagnostics(entities: readonly StoryEntity[], diagnostics: 
 
   for (const chapter of chapters) {
     const pathParents = hierarchyParents(chapter.path);
-    const volumeId = typeof chapter.properties.volume === "string" ? chapter.properties.volume : pathParents.volumePathId;
+    const volumeId = typeof chapter.properties["volume"] === "string" ? chapter.properties["volume"] : pathParents.volumePathId;
     const volume = volumeId ? byId.get(volumeId) : undefined;
     if (!volume || volume.type !== "volume") {
       diagnostics.push({ code: "hierarchy-volume-missing", severity: "warning", path: chapter.path, entityId: chapter.id, field: "volume", message: "Chapter references a volume that is not present in this Story snapshot." });
@@ -276,7 +276,7 @@ function addHierarchyDiagnostics(entities: readonly StoryEntity[], diagnostics: 
 
   for (const scene of scenes) {
     const pathParents = hierarchyParents(scene.path);
-    const chapterId = typeof scene.properties.chapter === "string" ? scene.properties.chapter : pathParents.chapterPathId;
+    const chapterId = typeof scene.properties["chapter"] === "string" ? scene.properties["chapter"] : pathParents.chapterPathId;
     const chapter = chapterId ? byId.get(chapterId) : undefined;
     if (!chapter || chapter.type !== "chapter") {
       diagnostics.push({ code: "hierarchy-chapter-missing", severity: "warning", path: scene.path, entityId: scene.id, field: "chapter", message: "Scene references a chapter that is not present in this Story snapshot." });
@@ -287,17 +287,17 @@ function addHierarchyDiagnostics(entities: readonly StoryEntity[], diagnostics: 
     }
     const volumePathId = pathParents.volumePathId;
     const chapterPathParents = hierarchyParents(chapter.path);
-    const expectedVolume = typeof chapter.properties.volume === "string" ? chapter.properties.volume : chapterPathParents.volumePathId;
+    const expectedVolume = typeof chapter.properties["volume"] === "string" ? chapter.properties["volume"] : chapterPathParents.volumePathId;
     if (volumePathId && expectedVolume && volumePathId !== expectedVolume) {
       diagnostics.push({ code: "hierarchy-volume-mismatch", severity: "error", path: scene.path, entityId: scene.id, field: "volume", message: "Scene and chapter belong to different volume IDs." });
     }
-    if (typeof scene.properties.manuscript !== "string" || !scene.properties.manuscript) {
+    if (typeof scene.properties["manuscript"] !== "string" || !scene.properties["manuscript"]) {
       diagnostics.push({ code: "scene-manuscript-missing", severity: "warning", path: scene.path, entityId: scene.id, field: "manuscript", message: "Scene has no manuscript source path." });
-    } else if (!byId.has(scene.properties.manuscript) && !manuscriptIdsByPath.has(scene.properties.manuscript)) {
+    } else if (!byId.has(scene.properties["manuscript"]) && !manuscriptIdsByPath.has(scene.properties["manuscript"])) {
       diagnostics.push({ code: "scene-manuscript-unresolved", severity: "warning", path: scene.path, entityId: scene.id, field: "manuscript", message: "Scene manuscript reference is not present in this Story snapshot." });
     }
 
-    const volumeId = typeof scene.properties.volume === "string" ? scene.properties.volume : volumePathId ?? expectedVolume;
+    const volumeId = typeof scene.properties["volume"] === "string" ? scene.properties["volume"] : volumePathId ?? expectedVolume;
     if (!volumeId) continue;
     const existing = hierarchy.find((item) => item.volumeId === volumeId && item.chapterId === chapter.id);
     if (existing) existing.sceneIds.push(scene.id);
@@ -320,7 +320,7 @@ function addHierarchyDiagnostics(entities: readonly StoryEntity[], diagnostics: 
     .map((item) => ({ ...item, sceneIds: item.sceneIds.sort((left, right) => {
       const leftEntity = byId.get(left);
       const rightEntity = byId.get(right);
-      return Number(leftEntity?.properties.order ?? 0) - Number(rightEntity?.properties.order ?? 0) || left.localeCompare(right);
+      return Number(leftEntity?.properties["order"] ?? 0) - Number(rightEntity?.properties["order"] ?? 0) || left.localeCompare(right);
     }) }))
     .sort((left, right) => left.volumeId.localeCompare(right.volumeId) || left.chapterId.localeCompare(right.chapterId));
 }
@@ -567,7 +567,7 @@ export function getSceneAppearances(index: StoryIndex, entityId: string): readon
   }
   return [...byScene.values()]
     .map(({ scene, kinds }) => ({ scene, kinds: [...kinds].sort() }))
-    .sort((left, right) => Number(left.scene.properties.order ?? 0) - Number(right.scene.properties.order ?? 0) || left.scene.id.localeCompare(right.scene.id));
+    .sort((left, right) => Number(left.scene.properties["order"] ?? 0) - Number(right.scene.properties["order"] ?? 0) || left.scene.id.localeCompare(right.scene.id));
 }
 
 export function storyNodeId(index: StoryIndex, localId: string): string {

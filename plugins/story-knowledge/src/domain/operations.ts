@@ -150,9 +150,9 @@ function parentEntity(index: StoryIndex, id: string, type: "volume" | "chapter")
 
 function nextOrder(index: StoryIndex, type: "chapter" | "scene", parentId: string): number {
   const children = index.entities.filter((entity) => entity.type === type &&
-    (type === "chapter" ? entity.properties.volume === parentId || hierarchyParents(entity.path).volumePathId === parentId
-      : entity.properties.chapter === parentId || hierarchyParents(entity.path).chapterPathId === parentId));
-  const values = children.map((entity) => entity.properties.order).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    (type === "chapter" ? entity.properties["volume"] === parentId || hierarchyParents(entity.path).volumePathId === parentId
+      : entity.properties["chapter"] === parentId || hierarchyParents(entity.path).chapterPathId === parentId));
+  const values = children.map((entity) => entity.properties["order"]).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return values.length > 0 ? Math.max(...values) + 1 : children.length;
 }
 
@@ -187,8 +187,8 @@ export function planCreateStoryEntity(index: StoryIndex, input: CreateStoryInput
     const volume = parentEntity(index, input.volumeId, "volume");
     const path = defaultStoryPath("chapter", id, { volumeId: volume.id });
     if (index.files.has(path)) throw new StoryEditError("SOURCE_PATH_EXISTS", `Source path '${path}' already exists.`, [path]);
-    sourceRecord.volume = volume.id;
-    sourceRecord.order = nextOrder(index, "chapter", volume.id);
+    sourceRecord["volume"] = volume.id;
+    sourceRecord["order"] = nextOrder(index, "chapter", volume.id);
     reads.set(volume.path, volume.revision);
     reads.set(path, null);
     writes.set(path, serializeYamlRecord(sourceRecord));
@@ -196,7 +196,7 @@ export function planCreateStoryEntity(index: StoryIndex, input: CreateStoryInput
     if (!input.chapterId) throw new StoryEditError("HIERARCHY_PARENT_REQUIRED", "A scene requires a chapter.");
     const chapter = parentEntity(index, input.chapterId, "chapter");
     const pathParents = hierarchyParents(chapter.path);
-    const volumeId = typeof chapter.properties.volume === "string" ? chapter.properties.volume : pathParents.volumePathId;
+    const volumeId = typeof chapter.properties["volume"] === "string" ? chapter.properties["volume"] : pathParents.volumePathId;
     if (!volumeId) throw new StoryEditError("HIERARCHY_VOLUME_REQUIRED", "The chapter has no resolvable volume parent.", [chapter.path]);
     const volume = parentEntity(index, volumeId, "volume");
     const path = defaultStoryPath("scene", id, { volumeId: volume.id, chapterId: chapter.id });
@@ -205,10 +205,10 @@ export function planCreateStoryEntity(index: StoryIndex, input: CreateStoryInput
     if (index.files.has(path) || index.files.has(manuscriptPath)) {
       throw new StoryEditError("SOURCE_PATH_EXISTS", "A source file for this scene already exists.", [path, manuscriptPath]);
     }
-    sourceRecord.volume = volume.id;
-    sourceRecord.chapter = chapter.id;
-    sourceRecord.manuscript = manuscriptPath;
-    sourceRecord.order = nextOrder(index, "scene", chapter.id);
+    sourceRecord["volume"] = volume.id;
+    sourceRecord["chapter"] = chapter.id;
+    sourceRecord["manuscript"] = manuscriptPath;
+    sourceRecord["order"] = nextOrder(index, "scene", chapter.id);
     reads.set(volume.path, volume.revision);
     reads.set(chapter.path, chapter.revision);
     reads.set(path, null);
@@ -263,8 +263,8 @@ function relationDocumentValue(source: StorySourceDocument, relation: StoryRelat
   if (provenance.field === "relations") {
     if (!isRecord(current)) throw new StoryEditError("RELATION_SOURCE_INVALID", `Relation '${relation.id}' has an unsupported source form.`, [source.file.path]);
     const replacement: Record<string, unknown> = { ...current, target: next.targetId, kind: next.kind };
-    if (next.note !== undefined) replacement.note = next.note;
-    else delete replacement.note;
+    if (next.note !== undefined) replacement["note"] = next.note;
+    else delete replacement["note"];
     return { pointer: provenance.pointer, value: replacement };
   }
   const value = current;
@@ -278,9 +278,9 @@ function relationDocumentValue(source: StorySourceDocument, relation: StoryRelat
     const targetKey = ["target", "scene", "id"].find((key) => typeof value[key] === "string");
     const replacement: Record<string, unknown> = { ...value };
     replacement[targetKey ?? "target"] = next.targetId;
-    if (targetKey === undefined || targetKey === "target") replacement.kind = next.kind;
-    if (next.note !== undefined) replacement.note = next.note;
-    else delete replacement.note;
+    if (targetKey === undefined || targetKey === "target") replacement["kind"] = next.kind;
+    if (next.note !== undefined) replacement["note"] = next.note;
+    else delete replacement["note"];
     return { pointer: provenance.pointer, value: replacement };
   }
   throw new StoryEditError("RELATION_SOURCE_INVALID", `Relation '${relation.id}' has an unsupported source form.`, [source.file.path]);
@@ -313,7 +313,7 @@ export function planCreateStoryRelation(index: StoryIndex, sourceId: string, tar
   if (!target) throw new StoryEditError("RELATION_TARGET_UNAVAILABLE", `Target '${targetId}' is missing or duplicated.`);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(kind)) throw new StoryEditError("RELATION_KIND_INVALID", "Relation kind must be a valid Graph kind.");
   const source = assertSource(index, sourceEntity);
-  const existing = source.raw.relations;
+  const existing = source.raw["relations"];
   if (existing !== undefined && !Array.isArray(existing)) throw new StoryEditError("RELATION_LIST_INVALID", "The source relations field is not an array.", [source.file.path]);
   const id = `relation-${operationId()}`;
   const relation = { id, target: targetId, kind, ...(note !== undefined ? { note } : {}) };
@@ -385,8 +385,8 @@ export function planDeleteStoryEntity(index: StoryIndex, id: string, options: { 
   const incoming = incomingStoryReferences(index, id);
   const childType = entity.type === "volume" ? "chapter" : entity.type === "chapter" ? "scene" : undefined;
   const children = childType ? index.entities.filter((candidate) => candidate.type === childType && (
-    (entity.type === "volume" && (candidate.properties.volume === id || hierarchyParents(candidate.path).volumePathId === id))
-    || (entity.type === "chapter" && (candidate.properties.chapter === id || hierarchyParents(candidate.path).chapterPathId === id))
+    (entity.type === "volume" && (candidate.properties["volume"] === id || hierarchyParents(candidate.path).volumePathId === id))
+    || (entity.type === "chapter" && (candidate.properties["chapter"] === id || hierarchyParents(candidate.path).chapterPathId === id))
   )) : [];
   if (children.length > 0) {
     return { allowed: false, incoming, children, code: "HIERARCHY_CHILDREN", reason: `Delete or move the ${childType} entities before deleting this ${entity.type}.` };
