@@ -166,6 +166,52 @@ async function downloadScene(page, atlas) {
   return { name: download.suggestedFilename(), bytes, text: bytes.toString("utf8"), data: JSON.parse(bytes.toString("utf8")) };
 }
 
+async function downloadBoard(page, atlas) {
+  const downloadPromise = page.waitForEvent("download");
+  await atlas.getByRole("button", { name: ".atlas.jsonをエクスポート" }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  assert.ok(path, `Board download ${download.suggestedFilename()} must have a readable temporary path.`);
+  const bytes = await readFile(path);
+  return { name: download.suggestedFilename(), bytes, text: bytes.toString("utf8"), data: JSON.parse(bytes.toString("utf8")) };
+}
+
+async function downloadHostSource(page, path, expectedBytes) {
+  const sourcePanel = page.locator("details").filter({ has: page.getByText("Workspaceのファイル・Source", { exact: true }) });
+  if (!(await sourcePanel.evaluate((details) => details.open))) await sourcePanel.locator("summary").click();
+  await page.getByRole("button", { name: path, exact: true }).click();
+  const pathInput = page.getByLabel("相対Path");
+  const selectionDeadline = Date.now() + 15_000;
+  while (Date.now() < selectionDeadline && await pathInput.inputValue() !== path) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  assert.equal(await pathInput.inputValue(), path, `Host must select the exact source path ${path}.`);
+  const sourceText = await page.getByLabel("Source").inputValue();
+  const sourceBytes = Buffer.from(sourceText, "utf8");
+  if (expectedBytes) {
+    assert.deepEqual(sourceBytes, expectedBytes, `Host source ${path} must match the expected exact UTF-8 bytes.`);
+  }
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "原文をダウンロード", exact: true }).click();
+  const download = await downloadPromise;
+  const downloadedPath = await download.path();
+  assert.ok(downloadedPath, `Host source ${path} must have a readable temporary path.`);
+  const bytes = await readFile(downloadedPath);
+  assert.deepEqual(bytes, sourceBytes, `Host source download ${path} must preserve the displayed exact UTF-8 bytes.`);
+  return { path, name: download.suggestedFilename(), bytes };
+}
+
+async function exportHostBundle(page) {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Bundleをexport", exact: true }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  assert.ok(path, "The Host bundle export must have a readable temporary path.");
+  const bytes = await readFile(path);
+  assert.ok(bytes.byteLength > 0, "The Host bundle export must not be empty.");
+  return bytes;
+}
+
 async function chooseTool(page, editor, name) {
   const radio = editor.getByRole("radio", { name, exact: true });
   // Excalidraw visually renders its accessible radio inside a label; clicking
@@ -211,6 +257,7 @@ const server = spawn(process.execPath, [serverScript, "atlas"], {
 
 let browser;
 let context;
+let bundleContext;
 try {
   await waitForServer(server, baseUrl);
   browser = await chromium.launch({
@@ -270,8 +317,8 @@ try {
   await boardNameInput.waitFor({ state: "visible" });
   const boardName = await boardNameInput.inputValue();
   const boardCommit = await commitPending(page, atlas);
-  assert.ok(boardCommit.proposedFiles.some(({ path }) => path.endsWith(".atlas.json")),
-    "The initial board must be prepared through Host review.");
+  const boardPath = boardCommit.proposedFiles.find(({ path }) => path.endsWith(".atlas.json"))?.path;
+  assert.ok(boardPath, "The initial board must be prepared through Host review.");
 
   await atlas.getByLabel("ビューを追加").selectOption("freeform");
   await atlas.getByText("Canvasの図形はExcalidrawシーンに、カードはAtlasボードに保存されます。", { exact: true }).waitFor();
@@ -391,16 +438,8 @@ try {
   await page.getByLabel("開く").waitFor({ state: "visible" });
   await page.getByLabel("開く").selectOption(workspaceId);
   await page.getByRole("status").filter({ hasText: "Workspaceを開きました。" }).waitFor();
-  await page.locator('details').filter({ has: page.getByText("Workspaceのファイル・Source", { exact: true }) }).locator("summary").click();
-  await page.getByRole("button", { name: drawingScenePath, exact: true }).click();
-  const sourceDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: "原文をダウンロード", exact: true }).click();
-  const sourceFile = await sourceDownload;
-  const sourceFilePath = await sourceFile.path();
-  assert.ok(sourceFilePath, `Host stored scene ${drawingScenePath} must be downloadable.`);
-  const storedSceneBytes = await readFile(sourceFilePath);
-  assert.deepEqual(storedSceneBytes, proposedSceneBytes,
-    `Host stored bytes at ${drawingScenePath} must equal the approved scene proposal.`);
+  const hostSceneSource = await downloadHostSource(page, drawingScenePath, proposedSceneBytes);
+  const storedSceneBytes = hostSceneSource.bytes;
   const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
   await reloadedAtlas.locator(".atlas-board-tab-title").filter({ hasText: boardName }).waitFor({ state: "visible" });
   await reloadedAtlas.getByRole("tab", { name: /キャンバス/u }).last().click();
@@ -416,6 +455,107 @@ try {
   const reloadedElements = reloadedScene.data.elements.filter((element) => !element.isDeleted);
   assert.deepEqual(geometry(reloadedElements), geometry(initialElements),
     "Host reload must preserve scene element IDs, positions, and group membership.");
+
+  const hostBoardSource = await downloadHostSource(page, boardPath);
+  const originalBoardExport = await downloadBoard(page, reloadedAtlas);
+  assert.deepEqual(originalBoardExport.bytes, hostBoardSource.bytes,
+    "Atlas board export must match the exact Host source bytes before bundle transfer.");
+
+  const unsupportedSceneVersion = Buffer.from(JSON.stringify({
+    type: "excalidraw",
+    version: 3,
+    source: "https://excalidraw.com",
+    elements: [],
+    appState: {},
+    files: {},
+  }));
+  await reloadedAtlas.locator('input[type="file"][accept=".excalidraw,application/json"]').setInputFiles({
+    name: "unsupported-version.excalidraw",
+    mimeType: "application/json",
+    buffer: unsupportedSceneVersion,
+  });
+  await reloadedAtlas.getByText(/Excalidraw version 3 .*編集できません/u).waitFor();
+  assert.deepEqual((await downloadScene(page, reloadedAtlas)).bytes, reloadedScene.bytes,
+    "Rejecting an unsupported scene version must leave the active scene bytes untouched.");
+
+  const unsupportedSceneElement = Buffer.from(JSON.stringify({
+    type: "excalidraw",
+    version: 2,
+    source: "https://excalidraw.com",
+    elements: [{ id: "future-element", type: "future-shape", x: 1, y: 2, width: 30, height: 40 }],
+    appState: {},
+    files: {},
+  }));
+  await reloadedAtlas.locator('input[type="file"][accept=".excalidraw,application/json"]').setInputFiles({
+    name: "unsupported-element.excalidraw",
+    mimeType: "application/json",
+    buffer: unsupportedSceneElement,
+  });
+  await reloadedAtlas.getByText(/Excalidraw要素 \(future-shape\) が未対応/u).waitFor();
+  assert.deepEqual((await downloadScene(page, reloadedAtlas)).bytes, reloadedScene.bytes,
+    "Rejecting an unsupported scene element must leave the active scene bytes untouched.");
+
+  const unsupportedBoard = Buffer.from(JSON.stringify({ format: "scriptorium-atlas-board", schemaVersion: 999 }));
+  await reloadedAtlas.locator('input[type="file"][accept=".atlas.json,application/json"]').setInputFiles({
+    name: "unsupported-board.atlas.json",
+    mimeType: "application/json",
+    buffer: unsupportedBoard,
+  });
+  await reloadedAtlas.getByText(/Atlasボードをインポートできませんでした:/u).waitFor();
+  assert.deepEqual((await downloadBoard(page, reloadedAtlas)).bytes, originalBoardExport.bytes,
+    "Rejecting an unsupported Atlas board must leave the active board bytes untouched.");
+  assert.deepEqual((await downloadHostSource(page, drawingScenePath, hostSceneSource.bytes)).bytes, hostSceneSource.bytes,
+    "Rejected imports must not alter the committed Host scene source.");
+  assert.deepEqual((await downloadHostSource(page, boardPath, hostBoardSource.bytes)).bytes, hostBoardSource.bytes,
+    "Rejected imports must not alter the committed Host board source.");
+  await page.getByText("承認待ちの変更はありません。", { exact: true }).waitFor();
+
+  const bundleBytes = await exportHostBundle(page);
+  bundleContext = await browser.newContext({
+    acceptDownloads: true,
+    locale: "ja-JP",
+    viewport: { width: 1600, height: 1200 },
+  });
+  const bundlePage = await bundleContext.newPage();
+  bundlePage.setDefaultTimeout(20_000);
+  const bundlePageErrors = [];
+  bundlePage.on("pageerror", (error) => bundlePageErrors.push(error.message));
+  await bundlePage.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await bundlePage.getByLabel("Bundleをimport").setInputFiles({
+    name: "canvas-roundtrip.zip",
+    mimeType: "application/zip",
+    buffer: bundleBytes,
+  });
+  await bundlePage.getByRole("status").filter({ hasText: "Workspaceを開きました。" }).waitFor();
+  const importedWorkspaceId = await bundlePage.getByLabel("開く").inputValue();
+  assert.ok(importedWorkspaceId, "Bundle import must open its imported Workspace in a fresh browser context.");
+  await bundlePage.reload({ waitUntil: "domcontentloaded" });
+  await bundlePage.getByLabel("開く").waitFor({ state: "visible" });
+  await bundlePage.getByLabel("開く").selectOption(importedWorkspaceId);
+  await bundlePage.getByRole("status").filter({ hasText: "Workspaceを開きました。" }).waitFor();
+
+  const importedHostBoard = await downloadHostSource(bundlePage, boardPath, hostBoardSource.bytes);
+  const importedHostScene = await downloadHostSource(bundlePage, drawingScenePath, hostSceneSource.bytes);
+  const importedAtlas = bundlePage.frameLocator('iframe[title="Atlas"]');
+  await importedAtlas.locator(".atlas-board-tab-title").filter({ hasText: boardName }).waitFor({ state: "visible" });
+  await importedAtlas.getByRole("tab", { name: /キャンバス/u }).last().click();
+  const importedEditor = importedAtlas.locator(".excalidraw");
+  await importedEditor.waitFor({ state: "visible" });
+  const importedScene = await downloadScene(bundlePage, importedAtlas);
+  assert.deepEqual(importedScene.bytes, importedHostScene.bytes,
+    "A Host bundle round trip must restore the exact scene source bytes into Atlas.");
+  assert.deepEqual(geometry(importedScene.data.elements.filter((element) => !element.isDeleted)), geometry(initialElements),
+    "A Host bundle round trip must preserve Excalidraw element IDs, positions, and group membership.");
+  const importedImage = importedScene.data.elements.find((element) => !element.isDeleted && element.type === "image");
+  assert.ok(importedImage, "The bundle-restored scene must retain the embedded PNG image element.");
+  assert.equal(importedImage.id, image.id, "The bundle-restored PNG element must retain its element ID.");
+  assert.equal(importedImage.fileId, image.fileId, "The bundle-restored PNG element must retain its file ID.");
+  assert.deepEqual(importedScene.data.files?.[importedImage.fileId], imageFile,
+    "The bundle round trip must preserve the embedded PNG file ID, MIME type, and data URL bytes.");
+  const importedBoardExport = await downloadBoard(bundlePage, importedAtlas);
+  assert.deepEqual(importedBoardExport.bytes, importedHostBoard.bytes,
+    "A Host bundle round trip must preserve the exact .atlas.json source bytes.");
+  assert.deepEqual(bundlePageErrors, [], `Bundle import and reload must not throw browser errors: ${bundlePageErrors.join("; ")}`);
 
   const reloadedFrame = await page.locator('iframe[title="Atlas"]').elementHandle().then((handle) => handle.contentFrame());
   assert.ok(reloadedFrame);
@@ -454,7 +594,7 @@ try {
   assert.deepEqual(pageErrors, [], `The Host or Canvas frame must not throw browser errors: ${pageErrors.join("; ")}`);
   console.log(JSON.stringify({
     status: "PASS",
-    case: "real Excalidraw drawing, grouping, image embed, undo/redo, scene roundtrip, Host commit and reload",
+    case: "real Excalidraw gestures, rejected imports, exact Host bundle roundtrip, scene and board reload",
     browser: browser.version(),
     artifact: atlasArtifact,
     workspaceId,
@@ -475,8 +615,20 @@ try {
     drawingProposalsApproved: drawingChanges.committed.length,
     hostScenePath: drawingScenePath,
     sceneSha256: createHash("sha256").update(reloadedScene.bytes).digest("hex"),
+    hostBoardPath: boardPath,
+    boardSha256: createHash("sha256").update(hostBoardSource.bytes).digest("hex"),
+    bundleBytes: bundleBytes.byteLength,
+    unsupportedSceneImportsRejected: 2,
+    unsupportedBoardImportsRejected: 1,
+    bundleRoundtrip: {
+      workspaceId: importedWorkspaceId,
+      sceneBytes: importedScene.bytes.byteLength,
+      boardBytes: importedBoardExport.bytes.byteLength,
+      embeddedImageFileId: importedImage.fileId,
+    },
   }, null, 2));
 } finally {
+  await bundleContext?.close();
   await context?.close();
   await browser?.close();
   await stopServer(server);
