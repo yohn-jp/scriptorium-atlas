@@ -399,14 +399,21 @@ async function positionCanvasWithinHostViewport(page, frame, editor) {
 }
 
 async function canvasViewportEvidence(page, frame, editor) {
+  const atlasFrame = page.locator('iframe[title="Atlas"]');
   const interactiveCanvas = frame.locator('canvas.excalidraw__canvas.interactive');
   await interactiveCanvas.waitFor({ state: 'visible' });
-  const [editorBounds, canvasBounds, canvasFrameRect, hostScroll] = await Promise.all([
+  const [editorBounds, canvasBounds, canvasFrameRect, iframeBounds, iframeClip, hostScroll] = await Promise.all([
     editor.boundingBox(),
     interactiveCanvas.boundingBox(),
     interactiveCanvas.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    }),
+    atlasFrame.boundingBox(),
+    atlasFrame.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x + element.clientLeft, y: rect.y + element.clientTop,
+        width: element.clientWidth, height: element.clientHeight };
     }),
     page.evaluate(() => ({ scrollX: window.scrollX, scrollY: window.scrollY,
       documentScrollWidth: document.documentElement.scrollWidth, documentScrollHeight: document.documentElement.scrollHeight })),
@@ -417,7 +424,10 @@ async function canvasViewportEvidence(page, frame, editor) {
     `Freeform editor must have a usable viewport: ${JSON.stringify(editorBounds)}.`);
   assert.ok(canvasBounds && canvasBounds.width >= 300 && canvasBounds.height >= 300,
     `Freeform interactive canvas must have a usable viewport: ${JSON.stringify(canvasBounds)}.`);
-  return { hostViewport, hostScroll, editorRoot: editorBounds, interactiveCanvas: canvasBounds, interactiveCanvasFrameRect: canvasFrameRect };
+  assert.ok(iframeBounds && iframeClip && iframeClip.width >= 300 && iframeClip.height >= 300,
+    `Atlas iframe must expose a usable clipped viewport: ${JSON.stringify({ iframeBounds, iframeClip })}.`);
+  return { hostViewport, hostScroll, editorRoot: editorBounds, interactiveCanvas: canvasBounds,
+    interactiveCanvasFrameRect: canvasFrameRect, atlasIframe: iframeBounds, atlasIframeContentClip: iframeClip };
 }
 
 async function runSampledGesture(page, frame, editor, start, end, { pan = false } = {}) {
@@ -433,6 +443,10 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
   for (const [label, point] of [['start', startPoint], ['end', endPoint]]) {
     assert.ok(point.x >= 0 && point.x < viewport.hostViewport.width && point.y >= 0 && point.y < viewport.hostViewport.height,
       `Freeform ${pan ? 'pan' : 'object drag'} ${label} must be inside the top-level Host viewport: ${JSON.stringify({ point, viewport })}.`);
+    const frameClip = viewport.atlasIframeContentClip;
+    assert.ok(point.x >= frameClip.x && point.x < frameClip.x + frameClip.width
+      && point.y >= frameClip.y && point.y < frameClip.y + frameClip.height,
+    `Freeform ${pan ? 'pan' : 'object drag'} ${label} must be inside the Atlas iframe clipping rectangle: ${JSON.stringify({ point, frameClip, viewport })}.`);
     assert.ok(point.x >= bounds.x && point.x <= bounds.x + bounds.width
       && point.y >= bounds.y && point.y <= bounds.y + bounds.height,
     `Freeform ${pan ? 'pan' : 'object drag'} ${label} must target the visible interactive canvas: ${JSON.stringify({ point, bounds })}.`);
