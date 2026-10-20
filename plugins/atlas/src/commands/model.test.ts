@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardNode } from '@scriptorium-atlas/contracts';
+import type { BoardDocument, BoardNode } from '@scriptorium-atlas/contracts';
 import { assertBoardIntegrity } from '@scriptorium-atlas/contracts';
-import { applyAtlasCommand, AtlasCommandError, AtlasCommandHistory, createEmptyAtlasBoard, orderedBoardLanes } from './model.js';
+import { applyAtlasCommand, AtlasCommandError, AtlasCommandHistory, createEmptyAtlasBoard, isBoardKanbanView, orderedBoardLanes } from './model.js';
 
 const manualNode = (id: string, label: string): BoardNode => ({
   id,
@@ -10,6 +10,8 @@ const manualNode = (id: string, label: string): BoardNode => ({
   label,
   position: { x: 10, y: 20 },
 });
+
+type BoardKanbanView = BoardDocument['views'][number] & { kind: 'board' };
 
 describe('Atlas document commands', () => {
   it('keeps Board, Kanban, storyboard and unknown timeline data valid through edits', () => {
@@ -50,7 +52,7 @@ describe('Atlas document commands', () => {
       type: 'card.create',
       card: { id: orderedCardId, kind: 'text', position: { x: 0, y: 0 }, width: 180, height: 120, text: 'Ordered' },
     });
-    const boardView = board.views.find((view) => view.kind === 'board')!;
+    const boardView = board.views.find(isBoardKanbanView)!;
     const expectedLaneIds = [...boardView.laneIds!];
     board = {
       ...board,
@@ -58,7 +60,7 @@ describe('Atlas document commands', () => {
         ? { ...view, lanes: [...view.lanes!].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0) }
         : view),
     };
-    const reloadedView = board.views.find((view) => view.id === boardView.id && view.kind === 'board')!;
+    const reloadedView = board.views.find((view): view is BoardKanbanView => view.id === boardView.id && view.kind === 'board')!;
     expect(orderedBoardLanes(reloadedView).map((lane) => lane.id)).toEqual(expectedLaneIds);
 
     board = applyAtlasCommand(board, {
@@ -67,7 +69,7 @@ describe('Atlas document commands', () => {
       laneId: 'lane-doing',
       cardId: orderedCardId,
     });
-    const afterAssignment = board.views.find((view) => view.id === boardView.id && view.kind === 'board')!;
+    const afterAssignment = board.views.find((view): view is BoardKanbanView => view.id === boardView.id && view.kind === 'board')!;
     expect(afterAssignment.laneIds).toEqual(expectedLaneIds);
     expect(orderedBoardLanes(afterAssignment).map((lane) => lane.id)).toEqual(expectedLaneIds);
 
@@ -76,7 +78,7 @@ describe('Atlas document commands', () => {
       viewId: boardView.id,
       lanes: [...orderedBoardLanes(afterAssignment)].reverse(),
     });
-    const reordered = board.views.find((view) => view.id === boardView.id && view.kind === 'board')!;
+    const reordered = board.views.find((view): view is BoardKanbanView => view.id === boardView.id && view.kind === 'board')!;
     expect(reordered.laneIds).toEqual([...expectedLaneIds].reverse());
 
     board = {
@@ -85,13 +87,13 @@ describe('Atlas document commands', () => {
         ? { ...view, lanes: [...view.lanes!].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0) }
         : view),
     };
-    const afterReload = board.views.find((view) => view.id === boardView.id && view.kind === 'board')!;
+    const afterReload = board.views.find((view): view is BoardKanbanView => view.id === boardView.id && view.kind === 'board')!;
     const cardId = 'card-after-reload';
     board = applyAtlasCommand(board, {
       type: 'card.create',
       card: { id: cardId, kind: 'text', position: { x: 0, y: 0 }, width: 180, height: 120, text: 'After reload' },
     });
-    const afterCreate = board.views.find((view) => view.id === boardView.id && view.kind === 'board')!;
+    const afterCreate = board.views.find((view): view is BoardKanbanView => view.id === boardView.id && view.kind === 'board')!;
     expect(afterCreate.laneIds).toEqual(afterReload.laneIds);
     expect(orderedBoardLanes(afterCreate).map((lane) => lane.id)).toEqual(afterReload.laneIds);
     expect(afterCreate.lanes?.find((lane) => lane.id === 'lane-unassigned')?.cardIds).toContain(cardId);

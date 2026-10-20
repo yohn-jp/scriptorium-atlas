@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { BoardDocument, BoardView, TimelineAxis } from '@scriptorium-atlas/contracts';
-import { applyAtlasCommand, createAtlasId, orderedBoardLanes } from '../commands/model.js';
+import { applyAtlasCommand, createAtlasId, isBoardKanbanView, orderedBoardLanes } from '../commands/model.js';
 
 export type StructuredViewsProps = {
   board: BoardDocument;
@@ -11,7 +11,7 @@ export type StructuredViewsProps = {
 
 export function StructuredViews({ board, view, onBoardChange, onOpenCard }: StructuredViewsProps) {
   const dispatch = (command: Parameters<typeof applyAtlasCommand>[1]) => onBoardChange(applyAtlasCommand(board, command));
-  if (view.kind === 'board') return <KanbanView {...{ board, view, dispatch, onOpenCard }} />;
+  if (isBoardKanbanView(view)) return <KanbanView {...{ board, view, dispatch, onOpenCard }} />;
   if (view.kind === 'timeline') return <TimelineView {...{ board, view, dispatch, onOpenCard }} />;
   if (view.kind === 'storyboard') return <StoryboardView {...{ board, view, dispatch, onOpenCard }} />;
   return null;
@@ -24,7 +24,7 @@ type InnerProps = {
   onOpenCard(cardId: string): void;
 };
 
-type KanbanProps = Omit<InnerProps, 'view'> & { view: Extract<BoardView, { kind: 'board' }> };
+type KanbanProps = Omit<InnerProps, 'view'> & { view: BoardView & { kind: 'board' } };
 
 function cardKindLabel(kind: BoardDocument['cards'][number]['kind']): string {
   switch (kind) {
