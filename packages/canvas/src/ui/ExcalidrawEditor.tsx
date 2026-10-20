@@ -164,7 +164,10 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
             },
           }}
           autoFocus={false}
-          detectScroll={false}
+          // Canvas can scroll inside the Host-owned iframe; Excalidraw needs
+          // to refresh its coordinate offset so pointer hit-testing stays
+          // aligned with the visible scene after that document scrolls.
+          detectScroll
           handleKeyboardGlobally={false}
         />
       </div>
