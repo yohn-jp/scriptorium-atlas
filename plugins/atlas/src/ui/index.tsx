@@ -571,24 +571,28 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   };
 
   const connectProvider = async () => {
-    if (!workspace || !providerId) return;
+    const currentWorkspace = workspace;
+    const previousEntries = providerEntriesRef.current;
+    const generation = refreshSequenceRef.current;
+    if (!currentWorkspace || !providerId) return;
     const descriptor = providers.find((item) => item.id === providerId);
     if (!descriptor) { setProviderError(`Provider ${providerId}がHostから検出されませんでした。`); return; }
     if (!descriptor.features.includes('listNodes') || !descriptor.features.includes('listEdges')) {
       setProviderError(`${providerId}はページ単位のノード一覧とエッジ一覧の両方を提供していません。`);
       return;
     }
-    if (providerEntriesRef.current.has(providerId)) {
+    if (previousEntries.has(providerId)) {
       setProviderError(`${providerId}はすでに接続されています。`);
       return;
     }
     setProviderError('');
     setProviderStatus(`${providerId}に接続しています…`);
     let acquiredLeaseId: string | null = null;
+    let candidateWorker: GraphWorkerClient | null = null;
     try {
-      const lease = await host.acquireProvider(providerId, workspace.sourceRevision);
+      const lease = await host.acquireProvider(providerId, currentWorkspace.sourceRevision);
       acquiredLeaseId = lease.leaseId;
-      if (lease.providerId !== providerId || lease.snapshot.workspaceId !== workspace.workspaceId || lease.snapshot.sourceRevision !== workspace.sourceRevision) {
+      if (lease.providerId !== providerId || lease.snapshot.workspaceId !== currentWorkspace.workspaceId || lease.snapshot.sourceRevision !== currentWorkspace.sourceRevision) {
         await host.releaseProvider(lease.leaseId).catch(() => undefined);
         acquiredLeaseId = null;
         throw new Error('ProviderリースのProvider ID、ワークスペース、またはソースリビジョンが一致しません。');
@@ -596,19 +600,31 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       const nodePages = await collectProviderPages<ProviderPage>(host, lease.leaseId, 'listNodes', lease.snapshot);
       const edgePages = await collectProviderPages<GraphEdgePage>(host, lease.leaseId, 'listEdges', lease.snapshot);
       const entry: ConnectedProvider = { providerId, leaseId: lease.leaseId, snapshot: lease.snapshot, nodes: nodePages.flatMap((page) => page.items), edges: edgePages.flatMap((page) => page.items) };
-      const candidateEntries = new Map(providerEntriesRef.current);
+      const candidateEntries = new Map(previousEntries);
       candidateEntries.set(providerId, entry);
       const combined = await assembleProviderSnapshot(candidateEntries);
-      const candidateWorker = createGraphWorkerClient();
-      try { await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges); }
-      catch (error) { candidateWorker.close(); throw error; }
+      candidateWorker = createGraphWorkerClient();
+      await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges);
+      const entriesAtSwap = providerEntriesRef.current;
+      const workspaceAtSwap = workspaceRef.current;
+      if (refreshSequenceRef.current !== generation
+        || entriesAtSwap !== previousEntries
+        || entriesAtSwap.size !== previousEntries.size
+        || [...previousEntries].some(([id, previous]) => entriesAtSwap.get(id) !== previous)
+        || !workspaceAtSwap
+        || workspaceAtSwap.workspaceId !== currentWorkspace.workspaceId
+        || workspaceAtSwap.sourceRevision !== currentWorkspace.sourceRevision) {
+        throw new Error('ワークスペースまたは接続中Providerが変わりました。現在のGraphを保ったまま接続を破棄しました。');
+      }
       graphWorkerRef.current?.close();
       graphWorkerRef.current = candidateWorker;
+      candidateWorker = null;
       providerEntriesRef.current = candidateEntries;
       acquiredLeaseId = null;
       publishGraph(combined);
       setProviderStatus(`${combined.providerIds.join(' + ')}: ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件を共通ソースリビジョンから読み込みました。`);
     } catch (error) {
+      candidateWorker?.close();
       if (acquiredLeaseId) await host.releaseProvider(acquiredLeaseId).catch(() => undefined);
       setProviderError(`${providerErrorKind(error)}: ${errorMessage(error)}`);
       setProviderStatus('Providerを追加できませんでした。既存のスナップショットとボードデータは変更されていません。');
@@ -618,6 +634,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const refreshProviders = async () => {
     const currentWorkspace = workspace;
     const previousEntries = providerEntriesRef.current;
+    const refreshGeneration = refreshSequenceRef.current;
     if (!currentWorkspace || previousEntries.size === 0 || refreshingProvidersRef.current) return;
     refreshingProvidersRef.current = true;
     setRefreshingProviders(true);
@@ -676,7 +693,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         });
       }
 
-      if (providerEntriesRef.current !== previousEntries) throw new Error('更新中に接続Providerが変更されました。もう一度更新してください。');
+      const currentEntries = providerEntriesRef.current;
+      if (currentEntries !== previousEntries || currentEntries.size !== previousEntries.size
+        || [...previousEntries].some(([id, entry]) => currentEntries.get(id) !== entry)) {
+        throw new Error('更新中に接続Providerが変更されました。もう一度更新してください。');
+      }
       const latestWorkspace = workspaceRef.current;
       if (!latestWorkspace || latestWorkspace.workspaceId !== currentWorkspace.workspaceId || latestWorkspace.sourceRevision !== currentWorkspace.sourceRevision) {
         throw new Error('更新中にワークスペースのソースリビジョンが変わりました。もう一度更新してください。');
@@ -711,6 +732,18 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges);
       }
 
+      const entriesAtSwap = providerEntriesRef.current;
+      const workspaceAtSwap = workspaceRef.current;
+      if (refreshSequenceRef.current !== refreshGeneration
+        || entriesAtSwap !== previousEntries
+        || entriesAtSwap.size !== previousEntries.size
+        || [...previousEntries].some(([id, entry]) => entriesAtSwap.get(id) !== entry)
+        || !workspaceAtSwap
+        || workspaceAtSwap.workspaceId !== currentWorkspace.workspaceId
+        || workspaceAtSwap.sourceRevision !== currentWorkspace.sourceRevision) {
+        throw new Error('更新中にワークスペースまたはProvider状態が変わりました。現在のGraphを保ったまま更新を破棄しました。');
+      }
+
       const oldWorker = graphWorkerRef.current;
       graphWorkerRef.current = candidateWorker;
       candidateWorker = null;
@@ -733,30 +766,46 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   };
 
   const disconnectProvider = async (disconnectedId: string) => {
-    const removed = providerEntriesRef.current.get(disconnectedId);
-    if (!removed) return;
-    const candidateEntries = new Map(providerEntriesRef.current);
+    const previousEntries = providerEntriesRef.current;
+    const currentWorkspace = workspaceRef.current;
+    const generation = refreshSequenceRef.current;
+    const removed = previousEntries.get(disconnectedId);
+    if (!removed || !currentWorkspace) return;
+    const candidateEntries = new Map(previousEntries);
     candidateEntries.delete(disconnectedId);
+    let candidateWorker: GraphWorkerClient | null = null;
     try {
-      if (candidateEntries.size === 0) {
-        graphWorkerRef.current?.close();
-        graphWorkerRef.current = null;
-        providerEntriesRef.current = candidateEntries;
-        publishGraph(null);
-        setSearchResult(null);
-      } else {
-        const combined = await assembleProviderSnapshot(candidateEntries);
-        const candidateWorker = createGraphWorkerClient();
-        try { await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges); }
-        catch (error) { candidateWorker.close(); throw error; }
-        graphWorkerRef.current?.close();
-        graphWorkerRef.current = candidateWorker;
-        providerEntriesRef.current = candidateEntries;
-        publishGraph(combined);
+      let combined: ProviderSnapshot | null = null;
+      if (candidateEntries.size > 0) {
+        combined = await assembleProviderSnapshot(candidateEntries);
+        candidateWorker = createGraphWorkerClient();
+        await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges);
       }
+
+      const entriesAtSwap = providerEntriesRef.current;
+      const workspaceAtSwap = workspaceRef.current;
+      if (refreshSequenceRef.current !== generation
+        || entriesAtSwap !== previousEntries
+        || entriesAtSwap.size !== previousEntries.size
+        || [...previousEntries].some(([id, previous]) => entriesAtSwap.get(id) !== previous)
+        || !workspaceAtSwap
+        || workspaceAtSwap.workspaceId !== currentWorkspace.workspaceId
+        || workspaceAtSwap.sourceRevision !== currentWorkspace.sourceRevision) {
+        throw new Error('ワークスペースまたは接続中Providerが変わりました。現在のGraphを保ったまま切断を破棄しました。');
+      }
+
+      graphWorkerRef.current?.close();
+      graphWorkerRef.current = candidateWorker;
+      candidateWorker = null;
+      providerEntriesRef.current = candidateEntries;
+      publishGraph(combined);
+      if (!combined) setSearchResult(null);
       await host.releaseProvider(removed.leaseId);
       setProviderStatus(candidateEntries.size ? `接続中: ${[...candidateEntries.keys()].join(' + ')}。` : 'Providerを切断しました。保存済みボード参照は未解決項目として残ります。');
-    } catch (error) { setProviderError(`Providerの切断に失敗しました: ${errorMessage(error)}`); }
+    } catch (error) {
+      candidateWorker?.close();
+      setProviderError(`Providerの切断に失敗しました: ${errorMessage(error)}`);
+    }
   };
 
   const runLayout = async (kind: 'force' | 'layered' | 'timeline' | 'manual') => {
