@@ -120,7 +120,8 @@ async function run() {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('dialog', async (dialog) => { dialogs.push(dialog.type()); await dialog.dismiss(); });
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-    await page.getByLabel('Workspace名').fill(`Atlas graph ${randomUUID()}`);
+    const workspaceName = `Atlas graph ${randomUUID()}`;
+    await page.getByLabel('Workspace名').fill(workspaceName);
     await page.getByRole('button', { name: '空のWorkspaceを作成' }).click();
 
     const atlas = page.frameLocator('iframe[title="Atlas"]');
@@ -173,21 +174,25 @@ async function run() {
     const savedBoard = await downloadBoard(page, atlas);
     const savedManualNodes = savedBoard.nodes.filter((node) => node.origin === 'manual');
     assert.equal(savedManualNodes.length, 2, 'Committed board must contain both manual nodes.');
-    assert.ok(savedManualNodes.every((node) => node.label === '手動ノードA改名'), 'Both saved nodes should retain the edited label.');
+    assert.ok(savedManualNodes.some((node) => node.label === '手動ノードA改名'), 'The original node should retain its edited label.');
+    assert.ok(savedManualNodes.some((node) => node.label === '手動ノードA改名 copy'), 'The duplicate should have the product-defined copy suffix.');
     assert.equal(new Set(savedManualNodes.map((node) => node.id)).size, 2, 'Duplicate must have a new stable ID.');
     report.cases.push('committed-board-contains-renamed-duplicate');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByLabel('開く').selectOption({ label: workspaceName });
     const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
     await reloadedAtlas.getByRole('tab', { name: /グラフ/u }).waitFor({ state: 'visible' });
+    const reloadedBoard = await downloadBoard(page, reloadedAtlas);
+    const reloadedManualNodesData = reloadedBoard.nodes.filter((node) => node.origin === 'manual');
+    assert.equal(reloadedManualNodesData.length, 2, `Host reload should restore both committed manual nodes; got ${JSON.stringify(reloadedManualNodesData)}.`);
     const reloadedNodes = reloadedAtlas.locator('.react-flow__node.atlas-flow-manual');
     await reloadedNodes.first().waitFor({ state: 'visible' });
     await reloadedNodes.nth(1).waitFor({ state: 'visible' });
     assert.equal(await reloadedNodes.count(), 2, 'Reloaded graph should restore both committed nodes.');
     assert.equal(await reloadedAtlas.getByLabel('ボード名').inputValue(), savedBoard.name);
-    const reloadedBoard = await downloadBoard(page, reloadedAtlas);
     assert.deepEqual(
-      reloadedBoard.nodes.filter((node) => node.origin === 'manual').map((node) => ({ id: node.id, label: node.label })).sort((a, b) => a.id.localeCompare(b.id)),
+      reloadedManualNodesData.map((node) => ({ id: node.id, label: node.label })).sort((a, b) => a.id.localeCompare(b.id)),
       savedManualNodes.map((node) => ({ id: node.id, label: node.label })).sort((a, b) => a.id.localeCompare(b.id)),
       'Host reload should restore the exact committed manual node IDs and labels.',
     );
