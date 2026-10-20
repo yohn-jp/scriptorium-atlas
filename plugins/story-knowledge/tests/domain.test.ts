@@ -104,6 +104,29 @@ describe("Story source parsing and fidelity", () => {
 });
 
 describe("Story index and source-safe operations", () => {
+  it("incrementally reparses changed Story sources, reuses unchanged parses, and drops deleted paths", async () => {
+    const firstFiles = [
+      file("bible/characters/a.yaml", yamlEntity("char-a", "character"), "a-rev-1"),
+      file("bible/characters/b.yaml", yamlEntity("char-b", "character"), "b-rev-1"),
+      file("plot/threads/old.yaml", yamlEntity("thread-old", "thread"), "old-rev-1"),
+    ];
+    const first = await buildStoryIndex({ ...snapshot(firstFiles), sourceRevision: "source-1" });
+    const nextFiles = [
+      firstFiles[0]!,
+      file("bible/characters/b.yaml", yamlEntity("char-b", "character", "tags: [updated]\n"), "b-rev-2"),
+    ];
+    const second = await buildStoryIndex({ ...snapshot(nextFiles), sourceRevision: "source-2" }, first);
+
+    expect(second.parsedFilesByPath.get("bible/characters/a.yaml")).toBe(first.parsedFilesByPath.get("bible/characters/a.yaml"));
+    expect(second.parsedFilesByPath.get("bible/characters/b.yaml")).not.toBe(first.parsedFilesByPath.get("bible/characters/b.yaml"));
+    expect(second.relationExtractionsByPath.get("bible/characters/a.yaml")).toBe(first.relationExtractionsByPath.get("bible/characters/a.yaml"));
+    expect(second.relationExtractionsByPath.get("bible/characters/b.yaml")).not.toBe(first.relationExtractionsByPath.get("bible/characters/b.yaml"));
+    expect(second.files.has("plot/threads/old.yaml")).toBe(false);
+    expect(second.entitiesById.has("thread-old")).toBe(false);
+    expect(second.relationExtractionsByPath.has("plot/threads/old.yaml")).toBe(false);
+    expect(second.entitiesById.get("char-b")?.tags).toEqual(["updated"]);
+  });
+
   it("keeps relation direction and full field provenance for appearance, POV, location and thread arcs", async () => {
     const index = await buildStoryIndex(snapshot(hierarchyFiles()));
     const bySourceField = (fromId: string, field: string) => index.relations.find((relation) =>

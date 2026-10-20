@@ -92,6 +92,24 @@ export interface StoryReference {
   publishable: boolean;
 }
 
+/** @internal Cached source-local relation extraction reused by incremental Story indexes. */
+export interface StoryRelationDraft {
+  sourceId: string;
+  targetId: string;
+  field: string;
+  kind: string;
+  note?: string;
+  sourceRelationId?: string;
+  publishable: boolean;
+  provenance: StoryProvenance;
+}
+
+/** @internal Source-local parse result; cross-file resolution is rebuilt per snapshot. */
+export interface StoryRelationExtraction {
+  drafts: readonly StoryRelationDraft[];
+  diagnostics: readonly StoryDiagnostic[];
+}
+
 export interface StoryHierarchy {
   volumeId: string;
   chapterId: string;
@@ -106,6 +124,10 @@ export interface StoryIndex {
   /** False when malformed or duplicate input prevents complete incoming-reference analysis. */
   referencesComplete: boolean;
   files: ReadonlyMap<string, StorySourceFile>;
+  /** Internal parse cache used for bounded incremental snapshots in the Story Worker. */
+  parsedFilesByPath: ReadonlyMap<string, import("./source.js").ParsedStoryFile>;
+  /** Internal source-local relation cache; removed paths are dropped on each snapshot. */
+  relationExtractionsByPath: ReadonlyMap<string, StoryRelationExtraction>;
   entities: readonly StoryEntity[];
   entitiesById: ReadonlyMap<string, StoryEntity>;
   duplicateEntityIds: ReadonlyMap<string, readonly string[]>;

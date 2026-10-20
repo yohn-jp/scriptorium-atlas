@@ -102,16 +102,16 @@ export class StoryIndexWorkerClient {
     });
   }
 
-  async begin(expectation: StorySnapshotExpectation, signal?: AbortSignal): Promise<void> {
-    await this.request<null>({ method: "begin", params: expectation }, signal);
+  async begin(handle: string, expectation: StorySnapshotExpectation, signal?: AbortSignal): Promise<void> {
+    await this.request<null>({ method: "begin", handle, params: expectation }, signal);
   }
 
   async append(contents: StorySnapshotPageContents, signal?: AbortSignal): Promise<void> {
     await this.request<null>({ method: "append", params: contents }, signal);
   }
 
-  finish(signal?: AbortSignal): Promise<SnapshotRef> {
-    return this.request<SnapshotRef>({ method: "finish" }, signal);
+  finish(handle: string, signal?: AbortSignal): Promise<SnapshotRef> {
+    return this.request<SnapshotRef>({ method: "finish", handle }, signal);
   }
 
   listNodes(handle: string, params: Omit<Extract<StoryIndexWorkerRequest, { method: "listNodes" }>['params'], never>, signal?: AbortSignal): Promise<ProviderPage> {
@@ -122,8 +122,8 @@ export class StoryIndexWorkerClient {
     return this.request<GraphEdgePage>({ method: "listEdges", handle, params }, signal);
   }
 
-  getNodes(params: Extract<StoryIndexWorkerRequest, { method: "getNodes" }>['params'], signal?: AbortSignal): Promise<ProviderPage> {
-    return this.request<ProviderPage>({ method: "getNodes", params }, signal);
+  getNodes(handle: string, params: Extract<StoryIndexWorkerRequest, { method: "getNodes" }>['params'], signal?: AbortSignal): Promise<ProviderPage> {
+    return this.request<ProviderPage>({ method: "getNodes", handle, params }, signal);
   }
 
   neighbors(handle: string, params: Extract<StoryIndexWorkerRequest, { method: "neighbors" }>['params'], signal?: AbortSignal): Promise<NeighborPage> {
@@ -132,6 +132,10 @@ export class StoryIndexWorkerClient {
 
   diff(handle: string, params: Extract<StoryIndexWorkerRequest, { method: "diff" }>['params'], signal?: AbortSignal): Promise<GraphDeltaPage> {
     return this.request<GraphDeltaPage>({ method: "diff", handle, params }, signal);
+  }
+
+  release(handle: string): Promise<null> {
+    return this.request<null>({ method: "close", handle });
   }
 
   close(): void {

@@ -11,6 +11,7 @@ import type {
   WorkspaceHandle,
   WorkspaceSnapshotPage,
 } from "@scriptorium-atlas/contracts";
+import type { StoryIndex } from "../src/domain/types.js";
 import { getStoryNodes, listStoryEdges, listStoryNodes, projectStoryGraph, storyDiff, storyNeighbors } from "../src/domain/graph.js";
 import { buildStoryIndex } from "../src/domain/index.js";
 import { createStoryProvider } from "../src/provider.js";
@@ -26,16 +27,16 @@ function providerRevision(sourceRevision: string): Promise<string> {
   );
 }
 
-function openedRequest(providerRevisionValue: string): Extract<ProviderRequest, { method: "open" }> {
+function openedRequest(providerRevisionValue: string, workspace: WorkspaceHandle = WORKSPACE): Extract<ProviderRequest, { method: "open" }> {
   return {
     method: "open",
     params: {
-      workspaceId: WORKSPACE.workspaceId,
+      workspaceId: workspace.workspaceId,
       requestedSnapshot: {
-        workspaceId: WORKSPACE.workspaceId,
-        sourceRevision: WORKSPACE.sourceRevision,
+        workspaceId: workspace.workspaceId,
+        sourceRevision: workspace.sourceRevision,
         providerRevision: providerRevisionValue,
-        epoch: WORKSPACE.epoch,
+        epoch: workspace.epoch,
       },
       grants: [
         { capability: "workspace.files.metadata", paths: ["bible/", "plot/", "manuscript/"] },
@@ -52,10 +53,10 @@ class FakeStoryWorker implements StoryWorkerLike {
   terminated = false;
   private messageListeners = new Set<(event: MessageEvent<StoryIndexWorkerResponse>) => void>();
   private errorListeners = new Set<(event: Event) => void>();
-  private expected?: { workspaceId: string; sourceRevision: string; epoch: number };
-  private files: Array<{ path: string; revision: string; content: string }> = [];
-  private unavailableFiles: Array<{ path: string; revision: string; byteLength: number; contentType: string }> = [];
-  private projection?: ReturnType<typeof projectStoryGraph>;
+  private staging?: { handle: string; expected: { workspaceId: string; sourceRevision: string; epoch: number }; files: Array<{ path: string; revision: string; content: string }>; unavailableFiles: Array<{ path: string; revision: string; byteLength: number; contentType: string }> };
+  private snapshots = new Map<string, { index: StoryIndex; projection: ReturnType<typeof projectStoryGraph> }>();
+  private leases = new Map<string, string>();
+  private latestIndex?: StoryIndex;
 
   addEventListener(type: "message", listener: (event: MessageEvent<StoryIndexWorkerResponse>) => void): void;
   addEventListener(type: "error" | "messageerror", listener: (event: Event) => void): void;
@@ -88,27 +89,38 @@ class FakeStoryWorker implements StoryWorkerLike {
       let result: unknown = null;
       switch (request.method) {
         case "begin":
-          this.expected = request.params;
-          this.files = [];
-          this.unavailableFiles = [];
+          this.staging = { handle: request.handle, expected: request.params, files: [], unavailableFiles: [] };
           break;
         case "append":
-          this.files.push(...request.params.files);
-          this.unavailableFiles.push(...request.params.unavailableFiles);
+          if (!this.staging) throw new Error("Missing snapshot staging");
+          this.staging.files.push(...request.params.files);
+          this.staging.unavailableFiles.push(...request.params.unavailableFiles);
           break;
         case "finish": {
-          if (!this.expected) throw new Error("Missing expected snapshot");
-          const index = await buildStoryIndex({ ...this.expected, files: this.files, unavailableFiles: this.unavailableFiles });
-          this.projection = projectStoryGraph(index);
-          result = this.projection.snapshot;
+          if (!this.staging || this.staging.handle !== request.handle) throw new Error("Missing expected snapshot");
+          const staging = this.staging;
+          this.staging = undefined;
+          const index = await buildStoryIndex({ ...staging.expected, files: staging.files, unavailableFiles: staging.unavailableFiles }, this.latestIndex);
+          const projection = projectStoryGraph(index);
+          const key = JSON.stringify(projection.snapshot);
+          this.snapshots.set(key, { index, projection });
+          this.leases.set(request.handle, key);
+          this.latestIndex = index;
+          result = projection.snapshot;
           break;
         }
-        case "listNodes": result = listStoryNodes(this.requireProjection(), request.handle, request.params); break;
-        case "listEdges": result = listStoryEdges(this.requireProjection(), request.handle, request.params); break;
-        case "getNodes": result = getStoryNodes(this.requireProjection(), request.params.refs); break;
-        case "neighbors": result = storyNeighbors(this.requireProjection(), request.handle, request.params); break;
-        case "diff": result = storyDiff(this.requireProjection(), request.handle, request.params); break;
-        case "close": this.terminate(); break;
+        case "listNodes": result = listStoryNodes(this.requireProjection(request.handle), request.handle, request.params); break;
+        case "listEdges": result = listStoryEdges(this.requireProjection(request.handle), request.handle, request.params); break;
+        case "getNodes": result = getStoryNodes(this.requireProjection(request.handle), request.params.refs); break;
+        case "neighbors": result = storyNeighbors(this.requireProjection(request.handle), request.handle, request.params); break;
+        case "diff": {
+          const current = this.requireProjection(request.handle);
+          const previous = this.snapshots.get(JSON.stringify(request.params.previousSnapshot))?.projection;
+          if (!previous) throw Object.assign(new Error("resync required"), { code: "RESYNC_REQUIRED" });
+          result = storyDiff(current, previous, request.handle, request.params);
+          break;
+        }
+        case "close": this.leases.delete(request.handle); break;
       }
       return { id: request.id, ok: true, result };
     } catch (error) {
@@ -117,9 +129,11 @@ class FakeStoryWorker implements StoryWorkerLike {
     }
   }
 
-  private requireProjection(): ReturnType<typeof projectStoryGraph> {
-    if (!this.projection) throw new Error("Story graph is not open");
-    return this.projection;
+  private requireProjection(handle: string): ReturnType<typeof projectStoryGraph> {
+    const key = this.leases.get(handle);
+    const snapshot = key ? this.snapshots.get(key) : undefined;
+    if (!snapshot) throw new Error("Story graph is not open");
+    return snapshot.projection;
   }
 }
 
@@ -133,8 +147,8 @@ function createHost(pages: WorkspaceSnapshotPage[], readFile?: VersionedFile) {
   return { host, snapshot, read };
 }
 
-function page(files: WorkspaceSnapshotPage["files"], nextCursor: string | null, complete: boolean): WorkspaceSnapshotPage {
-  return { workspace: WORKSPACE, files, nextCursor, complete };
+function page(files: WorkspaceSnapshotPage["files"], nextCursor: string | null, complete: boolean, workspace: WorkspaceHandle = WORKSPACE): WorkspaceSnapshotPage {
+  return { workspace, files, nextCursor, complete };
 }
 
 describe("Story Graph Provider host boundary", () => {
@@ -208,6 +222,51 @@ describe("Story Graph Provider host boundary", () => {
     const opened = await provider.dispatch(openedRequest(await providerRevision(WORKSPACE.sourceRevision))) as ProviderOpenResult;
     expect(read).toHaveBeenCalledWith(expect.objectContaining({ path: sourceFile.path, expectedRevision: revision, maxBytes: 2 * 1024 * 1024 }));
     expect((await provider.dispatch({ method: "listNodes", params: { handle: opened.handle } }) as ProviderPage).items[0]?.label).toBe("青木");
+    provider.dispose();
+  });
+
+  it("reuses one Worker across leases, pins old snapshots, and diffs from a retained prior snapshot", async () => {
+    const beforeWorkspace: WorkspaceHandle = { ...WORKSPACE, sourceRevision: "source-before" };
+    const afterWorkspace: WorkspaceHandle = { ...WORKSPACE, sourceRevision: "source-after" };
+    const beforeA: VersionedFile = {
+      workspaceId: WORKSPACE.workspaceId,
+      path: "bible/characters/a.yaml",
+      revision: "a-rev-1",
+      content: "id: char-a\ntype: character\nname: 青木\n",
+      encoding: "utf8",
+      contentType: "text/yaml",
+      updatedAt: "2026-10-21T00:00:00.000Z",
+    };
+    const beforeDeleted: VersionedFile = {
+      ...beforeA,
+      path: "bible/characters/deleted.yaml",
+      revision: "deleted-rev-1",
+      content: "id: char-deleted\ntype: character\nname: 削除対象\n",
+    };
+    const afterA: VersionedFile = { ...beforeA, revision: "a-rev-2", content: "id: char-a\ntype: character\nname: 青木・改\n" };
+    const pages = [page([beforeA, beforeDeleted], null, true, beforeWorkspace)];
+    const { host } = createHost(pages);
+    const worker = new FakeStoryWorker();
+    let workerCreations = 0;
+    const provider = createStoryProvider(host, { createWorker: () => { workerCreations += 1; return worker; } });
+
+    const before = await provider.dispatch(openedRequest(await providerRevision(beforeWorkspace.sourceRevision), beforeWorkspace)) as ProviderOpenResult;
+    pages[0] = page([afterA], null, true, afterWorkspace);
+    const after = await provider.dispatch(openedRequest(await providerRevision(afterWorkspace.sourceRevision), afterWorkspace)) as ProviderOpenResult;
+    expect(workerCreations).toBe(1);
+    expect(worker.sent.filter((request) => request.method === "begin")).toHaveLength(2);
+
+    const pinned = await provider.dispatch({ method: "listNodes", params: { handle: before.handle } }) as ProviderPage;
+    expect(pinned.items.find((node) => node.ref.localId === "char-a")?.label).toBe("青木");
+    expect(pinned.items.map((node) => node.ref.localId)).toContain("char-deleted");
+    await provider.dispatch({ method: "close", params: { handle: before.handle } });
+
+    const delta = await provider.dispatch({ method: "diff", params: { handle: after.handle, previousSnapshot: before.actualSnapshot } }) as GraphDeltaPage;
+    expect(delta.items.flatMap((item) => item.changedNodes ?? []).map((node) => node.ref.localId)).toContain("char-a");
+    expect(delta.items.flatMap((item) => item.removedNodes ?? []).map((node) => node.localId)).toEqual(["char-deleted"]);
+    expect(delta.snapshot).toEqual(after.actualSnapshot);
+    await provider.dispatch({ method: "close", params: { handle: after.handle } });
+    expect(worker.terminated).toBe(true);
     provider.dispose();
   });
 

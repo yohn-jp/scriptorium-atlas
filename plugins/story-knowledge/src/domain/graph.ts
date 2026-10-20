@@ -1,4 +1,5 @@
 import type {
+  GraphDelta,
   GraphEdge,
   GraphEdgePage,
   GraphNode,
@@ -349,12 +350,80 @@ export function storyNeighbors(
   };
 }
 
-export function storyDiff(projection: StoryGraphProjection, handle: string, query: DiffQuery): GraphDeltaPage {
-  if (!snapshotEqual(query.previousSnapshot, projection.snapshot)) {
+const DELTA_CHUNK_ITEMS = 32;
+const DELTA_PAGE_BYTES = 6 * 1024 * 1024;
+
+function stableValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort(codePointCompare).map((key) => `${JSON.stringify(key)}:${stableValue(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function deltaItems(previous: StoryGraphProjection, current: StoryGraphProjection): GraphDelta[] {
+  const base = { previousSnapshot: previous.snapshot, snapshot: current.snapshot };
+  const changedNodes = current.nodes.filter((node) => {
+    const old = previous.nodesById.get(node.ref.localId);
+    return !old || stableValue(old) !== stableValue(node);
+  });
+  const removedNodes = previous.nodes
+    .filter((node) => !current.nodesById.has(node.ref.localId))
+    .map((node) => node.ref);
+  const changedEdges = current.edges.filter((edge) => {
+    const old = previous.edgesById.get(edge.ref.localId);
+    return !old || stableValue(old) !== stableValue(edge);
+  });
+  const removedEdges = previous.edges
+    .filter((edge) => !current.edgesById.has(edge.ref.localId))
+    .map((edge) => edge.ref);
+
+  const result: GraphDelta[] = [];
+  for (let offset = 0; offset < changedNodes.length; offset += DELTA_CHUNK_ITEMS) {
+    result.push({ ...base, changedNodes: changedNodes.slice(offset, offset + DELTA_CHUNK_ITEMS) });
+  }
+  for (let offset = 0; offset < removedNodes.length; offset += DELTA_CHUNK_ITEMS) {
+    result.push({ ...base, removedNodes: removedNodes.slice(offset, offset + DELTA_CHUNK_ITEMS) });
+  }
+  for (let offset = 0; offset < changedEdges.length; offset += DELTA_CHUNK_ITEMS) {
+    result.push({ ...base, changedEdges: changedEdges.slice(offset, offset + DELTA_CHUNK_ITEMS) });
+  }
+  for (let offset = 0; offset < removedEdges.length; offset += DELTA_CHUNK_ITEMS) {
+    result.push({ ...base, removedEdges: removedEdges.slice(offset, offset + DELTA_CHUNK_ITEMS) });
+  }
+  return result.length > 0 ? result : [base];
+}
+
+export function storyDiff(
+  projection: StoryGraphProjection,
+  previous: StoryGraphProjection,
+  handle: string,
+  query: DiffQuery,
+): GraphDeltaPage {
+  if (!snapshotEqual(query.previousSnapshot, previous.snapshot)
+    || previous.snapshot.workspaceId !== projection.snapshot.workspaceId
+    || previous.snapshot.epoch !== projection.snapshot.epoch) {
     throw Object.assign(new Error("The previous Story index is not available; request a full provider resync."), { code: "RESYNC_REQUIRED" });
   }
   const queryKey = stableQuery(["diff", query.previousSnapshot]);
-  const items = [] as GraphDeltaPage["items"];
-  const pageResult = page(projection, handle, queryKey, items, query.cursor, query.limit);
-  return { snapshot: projection.snapshot, ...pageResult };
+  const values = deltaItems(previous, projection);
+  const limit = query.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error("Page limit must be between 1 and 500."), { code: "INVALID_INPUT" });
+  const offset = decodeCursor(query.cursor, handle, projection.snapshot, queryKey);
+  if (offset > values.length) throw Object.assign(new Error("Provider cursor offset is outside the current result."), { code: "INVALID_INPUT" });
+  let end = offset;
+  let pageBytes = 0;
+  while (end < values.length && end - offset < limit) {
+    const itemBytes = new TextEncoder().encode(JSON.stringify(values[end])).byteLength;
+    if (end > offset && pageBytes + itemBytes > DELTA_PAGE_BYTES) break;
+    pageBytes += itemBytes;
+    end += 1;
+  }
+  return {
+    snapshot: projection.snapshot,
+    items: values.slice(offset, end),
+    nextCursor: end < values.length ? pageCursor(handle, projection.snapshot, queryKey, end) : null,
+    complete: projection.complete && previous.complete,
+  };
 }

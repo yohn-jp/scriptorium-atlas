@@ -10,23 +10,15 @@ import {
   type StoryDiagnostic,
   type StoryEntity,
   type StoryIndex,
-  type StoryProvenance,
   type StoryReference,
+  type StoryRelationDraft,
+  type StoryRelationExtraction,
   type StoryRelation,
   type StorySnapshotInput,
   type StorySourceFile,
 } from "./types.js";
 
-interface RelationDraft {
-  sourceId: string;
-  targetId: string;
-  field: string;
-  kind: string;
-  note?: string;
-  sourceRelationId?: string;
-  publishable: boolean;
-  provenance: StoryProvenance;
-}
+type RelationDraft = StoryRelationDraft;
 
 const SIMPLE_RELATION_FIELDS = [
   "appears",
@@ -235,7 +227,7 @@ function sortDiagnostics(diagnostics: StoryDiagnostic[]): StoryDiagnostic[] {
   );
 }
 
-function sourceFiles(input: StorySnapshotInput): { files: Map<string, StorySourceFile>; duplicates: string[] } {
+function sourceFiles(input: StorySnapshotInput, previous?: StoryIndex): { files: Map<string, StorySourceFile>; duplicates: string[] } {
   const files = new Map<string, StorySourceFile>();
   const duplicates = new Set<string>();
   for (const file of input.files) {
@@ -244,7 +236,8 @@ function sourceFiles(input: StorySnapshotInput): { files: Map<string, StorySourc
       duplicates.add(file.path);
       continue;
     }
-    files.set(file.path, file);
+    const oldFile = previous?.files.get(file.path);
+    files.set(file.path, oldFile?.revision === file.revision && oldFile.content === file.content ? oldFile : file);
   }
   return { files: new Map([...files].sort(([left], [right]) => left.localeCompare(right))), duplicates: [...duplicates].sort() };
 }
@@ -326,10 +319,23 @@ function addHierarchyDiagnostics(entities: readonly StoryEntity[], diagnostics: 
 }
 
 /** Parse one complete, Host-pinned workspace snapshot without mutating Source. */
-export async function buildStoryIndex(input: StorySnapshotInput): Promise<StoryIndex> {
-  const sourceInventory = sourceFiles(input);
+export async function buildStoryIndex(input: StorySnapshotInput, priorIndex?: StoryIndex): Promise<StoryIndex> {
+  const previous = priorIndex?.workspaceId === input.workspaceId && priorIndex.epoch === input.epoch
+    ? priorIndex
+    : undefined;
+  const sourceInventory = sourceFiles(input, previous);
   const files = sourceInventory.files;
-  const parsed: ParsedStoryFile[] = [...files.values()].map(parseStorySourceFile);
+  const parsedFilesByPath = new Map<string, ParsedStoryFile>();
+  const parsed: ParsedStoryFile[] = [];
+  for (const file of files.values()) {
+    const oldFile = previous?.files.get(file.path);
+    const oldParsed = previous?.parsedFilesByPath.get(file.path);
+    const parsedFile = oldFile?.revision === file.revision && oldFile.content === file.content && oldParsed
+      ? oldParsed
+      : parseStorySourceFile(file);
+    parsedFilesByPath.set(file.path, parsedFile);
+    parsed.push(parsedFile);
+  }
   const diagnostics = parsed.flatMap((item) => item.diagnostics);
   const unavailableStorySources = (input.unavailableFiles ?? []).filter((file) => isStorySourcePath(file.path));
   for (const file of unavailableStorySources) {
@@ -377,11 +383,23 @@ export async function buildStoryIndex(input: StorySnapshotInput): Promise<StoryI
   const pathToManuscriptId = new Map(uniqueEntities.filter((entity) => entity.type === "manuscript").map((entity) => [entity.path, entity.id]));
 
   const drafts: RelationDraft[] = [];
+  const relationExtractionsByPath = new Map<string, StoryRelationExtraction>();
   for (const entity of uniqueEntities) {
     const usableSource = !duplicateIds.has(entity.id) && sourceById.has(entity.id) && entity.editable;
-    for (const relation of collectRelations(entity, diagnostics, usableSource)) {
+    const cachedExtraction = previous && previous.files.get(entity.path) === files.get(entity.path)
+      ? previous.relationExtractionsByPath.get(entity.path)
+      : undefined;
+    let extraction = cachedExtraction;
+    if (!extraction) {
+      const localDiagnostics: StoryDiagnostic[] = [];
+      extraction = { drafts: collectRelations(entity, localDiagnostics, true), diagnostics: localDiagnostics };
+    }
+    relationExtractionsByPath.set(entity.path, extraction);
+    diagnostics.push(...extraction.diagnostics);
+    for (const extracted of extraction.drafts) {
+      let relation = !usableSource && extracted.publishable ? { ...extracted, publishable: false } : extracted;
       const manuscriptId = pathToManuscriptId.get(relation.targetId);
-      if (manuscriptId) relation.targetId = manuscriptId;
+      if (manuscriptId) relation = { ...relation, targetId: manuscriptId };
       if (!isValidLocalId(relation.targetId)) {
         diagnostics.push({
           code: "relation-target-invalid",
@@ -391,7 +409,7 @@ export async function buildStoryIndex(input: StorySnapshotInput): Promise<StoryI
           field: relation.field,
           message: `Relation target '${relation.targetId}' is not a valid Graph local ID.`,
         });
-        relation.publishable = false;
+        relation = { ...relation, publishable: false };
       }
       drafts.push(relation);
     }
@@ -514,6 +532,8 @@ export async function buildStoryIndex(input: StorySnapshotInput): Promise<StoryI
     providerRevision,
     referencesComplete,
     files,
+    parsedFilesByPath,
+    relationExtractionsByPath,
     entities: uniqueEntities,
     entitiesById,
     duplicateEntityIds,

@@ -20,10 +20,10 @@ function source(path: string, id: string, name: string, extra = "") {
   };
 }
 
-async function graph(files: StorySnapshotInput["files"]) {
+async function graph(files: StorySnapshotInput["files"], sourceRevision = SOURCE_REVISION) {
   return projectStoryGraph(await buildStoryIndex({
     workspaceId: "workspace-graph-test",
-    sourceRevision: SOURCE_REVISION,
+    sourceRevision,
     epoch: 3,
     files,
   }));
@@ -97,8 +97,53 @@ describe("Story graph projection and provider queries", () => {
     expect(incoming.items.map((item) => item.node.ref.localId)).toEqual(["char-a", "char-c"]);
     expect(getStoryNodes(projection, [{ providerId: STORY_PROVIDER_ID, localId: "char-a" }]).items).toHaveLength(1);
     expect(() => getStoryNodes(projection, [{ providerId: "other.provider", localId: "char-a" }])).toThrow(/Story provider/u);
-    expect(storyDiff(projection, "handle", { previousSnapshot: projection.snapshot }).items).toEqual([]);
-    expect(() => storyDiff(projection, "handle", { previousSnapshot: { ...projection.snapshot, sourceRevision: "older" } })).toThrow(/resync/u);
+    expect(storyDiff(projection, projection, "handle", { previousSnapshot: projection.snapshot }).items).toMatchObject([
+      { previousSnapshot: projection.snapshot, snapshot: projection.snapshot },
+    ]);
+    expect(() => storyDiff(projection, projection, "handle", { previousSnapshot: { ...projection.snapshot, sourceRevision: "older" } })).toThrow(/resync/u);
+  });
+
+  it("returns paged changed and removed nodes and edges for a retained prior snapshot", async () => {
+    const previous = await graph([
+      source("bible/characters/a.yaml", "char-a", "青木", [
+        "relations:",
+        "  - id: edge-a-b",
+        "    target: char-b",
+        "    kind: mentor",
+        "  - id: edge-a-c",
+        "    target: char-c",
+        "    kind: appears",
+        "",
+      ].join("\n")),
+      source("bible/characters/b.yaml", "char-b", "花子"),
+      source("bible/characters/c.yaml", "char-c", "真琴"),
+    ], "source-revision-before");
+    const current = await graph([
+      { ...source("bible/characters/a.yaml", "char-a", "青木", [
+        "relations:",
+        "  - id: edge-a-b",
+        "    target: char-b",
+        "    kind: friend",
+        "",
+      ].join("\n")), revision: "revision-char-a-updated" },
+      source("bible/characters/b.yaml", "char-b", "花子・改"),
+    ], "source-revision-after");
+
+    const first = storyDiff(current, previous, "current-handle", { previousSnapshot: previous.snapshot, limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.nextCursor).toBeTruthy();
+    expect(first.complete).toBe(true);
+    const all = [...first.items];
+    let cursor = first.nextCursor;
+    while (cursor) {
+      const next = storyDiff(current, previous, "current-handle", { previousSnapshot: previous.snapshot, limit: 1, cursor });
+      all.push(...next.items);
+      cursor = next.nextCursor;
+    }
+    expect(all.flatMap((item) => item.changedNodes ?? []).map((node) => node.ref.localId)).toEqual(["char-a", "char-b"]);
+    expect(all.flatMap((item) => item.removedNodes ?? []).map((node) => node.localId)).toEqual(["char-c"]);
+    expect(all.flatMap((item) => item.changedEdges ?? []).map((edge) => edge.ref.localId)).toEqual(["edge-a-b"]);
+    expect(all.flatMap((item) => item.removedEdges ?? []).map((edge) => edge.localId)).toEqual(["edge-a-c"]);
   });
 
   it("marks the listed graph incomplete when malformed inputs make the source inventory partial", async () => {
