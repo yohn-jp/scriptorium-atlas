@@ -87,18 +87,26 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   }, [focusRefs, props.graph, props.board.nodes]);
 
   const flowNodes = useMemo<FlowNode[]>(() => {
-    const boardFlowNodes = boardNodes.map((item) => ({
-      id: item.id,
-      position: positions[item.id] ?? item.position,
-      width: FLOW_NODE_WIDTH,
-      height: FLOW_NODE_HEIGHT,
-      selected: selectedNodeIds.includes(item.id),
-      draggable: true,
-      connectable: true,
-      data: { label: item.label, kind: item.kind, origin: item.origin, ...(item.groupId ? { groupId: item.groupId } : {}) },
-      className: [item.origin === 'provider' ? 'atlas-flow-provider' : 'atlas-flow-manual', item.groupId ? 'atlas-flow-grouped' : ''].filter(Boolean).join(' '),
-      ...(selectedNodeIds.includes(item.id) ? { style: { borderColor: 'var(--atlas-accent)' } } : {}),
-    }));
+    const boardFlowNodes = boardNodes.map((item) => {
+      const currentProviderNode = item.ref ? graphNodeByKey.get(nodeKey(item.ref)) : undefined;
+      return {
+        id: item.id,
+        position: positions[item.id] ?? item.position,
+        width: FLOW_NODE_WIDTH,
+        height: FLOW_NODE_HEIGHT,
+        selected: selectedNodeIds.includes(item.id),
+        draggable: true,
+        connectable: true,
+        data: {
+          label: currentProviderNode?.label ?? (item.ref ? `${item.label}（未解決）` : item.label),
+          kind: currentProviderNode?.kind ?? item.kind,
+          origin: item.origin,
+          ...(item.groupId ? { groupId: item.groupId } : {}),
+        },
+        className: [item.origin === 'provider' ? 'atlas-flow-provider' : 'atlas-flow-manual', item.ref && !currentProviderNode ? 'atlas-flow-unresolved' : '', item.groupId ? 'atlas-flow-grouped' : ''].filter(Boolean).join(' '),
+        ...(selectedNodeIds.includes(item.id) ? { style: { borderColor: 'var(--atlas-accent)' } } : {}),
+      };
+    });
     const anchor = props.board.nodes.find((node) => node.ref && focusRefs?.has(nodeKey(node.ref)))?.position ?? { x: 0, y: 0 };
     const providerFlowNodes = previewNodes.map((item, index) => {
       const id = previewNodeId(item.ref);
@@ -116,7 +124,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       };
     });
     return [...boardFlowNodes, ...providerFlowNodes];
-  }, [boardNodes, previewNodes, props.board.nodes, focusRefs, positions, selectedNodeIds]);
+  }, [boardNodes, previewNodes, props.board.nodes, focusRefs, positions, selectedNodeIds, graphNodeByKey]);
 
   const edges = useMemo<Edge[]>(() => {
     const nodeIdByRef = new Map(props.board.nodes.filter((node) => node.ref).map((node) => [nodeKey(node.ref!), node.id]));

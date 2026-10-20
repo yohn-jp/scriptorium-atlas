@@ -175,7 +175,7 @@ async function run() {
     const firstFocus = await tabUntil(page, reloadedAtlas, (state) => state?.index === 0 && state.isCardRoot, 'the first existing card');
     assert.equal(firstFocus.selected, true, 'Tab focus should select the first existing card after reload.');
     await page.keyboard.press('ArrowRight');
-    await reloadedAtlas.locator('.atlas-save-indicator').filter({ hasText: '未保存の変更' }).waitFor({ state: 'visible' });
+    await reloadedAtlas.locator('.atlas-save-indicator').filter({ hasText: 'ローカル下書きに変更あり' }).waitFor({ state: 'visible' });
     const secondFocus = await tabUntil(page, reloadedAtlas, (state) => state?.index === 1 && state.isCardRoot, 'the second existing card');
     assert.equal(secondFocus.selected, true, 'Tab focus should select the second existing card after reload.');
     const resizeFocus = await tabUntil(page, reloadedAtlas, (state) => state?.index === 1 && state.controlLabel === 'カードのサイズを変更', 'the second card resize control');

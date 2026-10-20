@@ -8,6 +8,8 @@ import type {
   BoardDocument,
   BoardView,
   ChangeIntent,
+  GraphDelta,
+  GraphDeltaPage,
   GraphEdgePage,
   GraphEdge,
   GraphNode,
@@ -21,13 +23,15 @@ import type {
 } from '@scriptorium-atlas/contracts';
 import { assertBoardIntegrity } from '@scriptorium-atlas/contracts';
 import { createEmptyExcalidrawScene, exportExcalidrawScene, inspectExcalidrawScene } from '@scriptorium-atlas/canvas/io';
-import { nodeKey, sameSnapshot } from '@scriptorium-atlas/graph';
+import { applyGraphDeltaPages, combineGraphDeltaPages, createGraphIndex, nodeKey, sameSnapshot } from '@scriptorium-atlas/graph';
 import { createGraphWorkerClient } from '@scriptorium-atlas/graph/worker';
 import type { GraphWorkerClient } from '@scriptorium-atlas/graph/worker';
 import { createLayoutWorkerClient } from '@scriptorium-atlas/layout/worker';
 import type { LayoutWorkerClient } from '@scriptorium-atlas/layout/worker';
 import type { LayoutInput } from '@scriptorium-atlas/layout';
 import { serializeBoard } from '@scriptorium-atlas/persistence/board';
+import { assembleProviderSnapshot } from './provider-snapshot.js';
+import type { ConnectedProvider, ProviderSnapshot } from './provider-snapshot.js';
 import { AtlasCommandHistory, applyAtlasCommand, createAtlasId, createEmptyAtlasBoard } from '../commands/model.js';
 import { IMAGE_MIME_TYPES, assetExtension, sanitizeImageBytes, verifyAssetBytes } from './asset-media.js';
 import {
@@ -57,22 +61,6 @@ import {
 } from './workspace.js';
 
 export type AtlasPluginProps = { host: PluginHostClient };
-
-type ProviderSnapshot = {
-  providerId: string;
-  providerIds: string[];
-  snapshot: SnapshotRef;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-};
-
-type ConnectedProvider = {
-  providerId: string;
-  leaseId: string;
-  snapshot: SnapshotRef;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-};
 
 type StagedAsset = {
   boardId: string;
@@ -115,6 +103,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const activeBoardIdRef = useRef<string | null>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceSnapshotPage['workspace'] | null>(null);
+  const workspaceRef = useRef(workspace);
   const [files, setFiles] = useState<Map<string, WorkspaceFile>>(() => new Map());
   const filesRef = useRef(files);
   const [invalidFiles, setInvalidFiles] = useState<InvalidBoardFile[]>([]);
@@ -133,6 +122,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const [providerId, setProviderId] = useState('');
   const [providerStatus, setProviderStatus] = useState('');
   const [providerError, setProviderError] = useState('');
+  const [refreshingProviders, setRefreshingProviders] = useState(false);
+  const refreshingProvidersRef = useRef(false);
   const [graph, setGraph] = useState<ProviderSnapshot | null>(null);
   const graphRef = useRef<ProviderSnapshot | null>(graph);
   const graphWorkerRef = useRef<GraphWorkerClient | null>(null);
@@ -189,7 +180,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     try {
       const inventory = await loadAtlasInventory(host);
       if (sequence !== refreshSequenceRef.current) return inventory;
+      workspaceRef.current = inventory.workspace;
       setWorkspace(inventory.workspace);
+      if ([...providerEntriesRef.current.values()].some((provider) => provider.snapshot.sourceRevision !== inventory.workspace.sourceRevision)) {
+        setProviderStatus('ワークスペースのソースリビジョンが変わりました。接続中Providerを更新してください。');
+      }
       publishFiles(inventory.files);
       setInvalidFiles(inventory.invalid);
 
@@ -620,6 +615,123 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     }
   };
 
+  const refreshProviders = async () => {
+    const currentWorkspace = workspace;
+    const previousEntries = providerEntriesRef.current;
+    if (!currentWorkspace || previousEntries.size === 0 || refreshingProvidersRef.current) return;
+    refreshingProvidersRef.current = true;
+    setRefreshingProviders(true);
+    setProviderError('');
+    setProviderStatus('新しいProviderスナップショットを取得しています…');
+
+    const acquiredLeases: string[] = [];
+    const stagedEntries = new Map<string, ConnectedProvider>();
+    const providerDeltas: GraphDelta[] = [];
+    let fullResyncUsed = false;
+    let candidateWorker: GraphWorkerClient | null = null;
+    try {
+      const ordered = [...previousEntries.values()].sort((left, right) => left.providerId.localeCompare(right.providerId));
+      for (const previous of ordered) {
+        const lease = await host.acquireProvider(previous.providerId, currentWorkspace.sourceRevision);
+        acquiredLeases.push(lease.leaseId);
+        if (lease.providerId !== previous.providerId
+          || lease.snapshot.workspaceId !== currentWorkspace.workspaceId
+          || lease.snapshot.sourceRevision !== currentWorkspace.sourceRevision) {
+          throw new Error(`Provider ${previous.providerId}の新しいリースが現在のワークスペースリビジョンに一致しません。`);
+        }
+
+        const descriptor = providers.find((item) => item.id === previous.providerId);
+        let nextNodes: GraphNode[];
+        let nextEdges: GraphEdge[];
+        if (descriptor?.features.includes('diff')) {
+          try {
+            const pages = await collectProviderDeltaPages(host, lease.leaseId, previous.snapshot, lease.snapshot);
+            const previousIndex = createGraphIndex({ snapshot: previous.snapshot, nodes: previous.nodes, edges: previous.edges });
+            const nextIndex = applyGraphDeltaPages(previousIndex, pages);
+            if (!sameSnapshot(nextIndex.snapshot, lease.snapshot)) throw new Error(`Provider ${previous.providerId}の差分先が新しいリースと一致しません。`);
+            const delta = combineGraphDeltaPages(previous.snapshot, pages);
+            providerDeltas.push(delta);
+            nextNodes = [...nextIndex.nodes];
+            nextEdges = [...nextIndex.edges];
+          } catch (error) {
+            if (hostErrorCode(error) !== 'RESYNC_REQUIRED') throw error;
+            fullResyncUsed = true;
+            const full = await fetchProviderSnapshot(host, lease.leaseId, lease.snapshot);
+            nextNodes = full.nodes;
+            nextEdges = full.edges;
+          }
+        } else {
+          fullResyncUsed = true;
+          const full = await fetchProviderSnapshot(host, lease.leaseId, lease.snapshot);
+          nextNodes = full.nodes;
+          nextEdges = full.edges;
+        }
+
+        stagedEntries.set(previous.providerId, {
+          providerId: previous.providerId,
+          leaseId: lease.leaseId,
+          snapshot: lease.snapshot,
+          nodes: nextNodes,
+          edges: nextEdges,
+        });
+      }
+
+      if (providerEntriesRef.current !== previousEntries) throw new Error('更新中に接続Providerが変更されました。もう一度更新してください。');
+      const latestWorkspace = workspaceRef.current;
+      if (!latestWorkspace || latestWorkspace.workspaceId !== currentWorkspace.workspaceId || latestWorkspace.sourceRevision !== currentWorkspace.sourceRevision) {
+        throw new Error('更新中にワークスペースのソースリビジョンが変わりました。もう一度更新してください。');
+      }
+      const combined = await assembleProviderSnapshot(stagedEntries);
+      const previousCombined = await assembleProviderSnapshot(previousEntries);
+      if (!graphRef.current || !sameSnapshot(graphRef.current.snapshot, previousCombined.snapshot)) {
+        throw new Error('更新前のGraphスナップショットが接続Provider一覧と一致しません。再接続してください。');
+      }
+
+      candidateWorker = createGraphWorkerClient();
+      if (!fullResyncUsed) {
+        const combinedDelta: GraphDelta = {
+          previousSnapshot: previousCombined.snapshot,
+          snapshot: combined.snapshot,
+          changedNodes: providerDeltas.flatMap((delta) => delta.changedNodes ?? []),
+          removedNodes: providerDeltas.flatMap((delta) => delta.removedNodes ?? []),
+          changedEdges: providerDeltas.flatMap((delta) => delta.changedEdges ?? []),
+          removedEdges: providerDeltas.flatMap((delta) => delta.removedEdges ?? []),
+        };
+        await candidateWorker.replaceSnapshot(previousCombined.snapshot, previousCombined.nodes, previousCombined.edges);
+        try {
+          await candidateWorker.applyDelta(combinedDelta);
+        } catch (error) {
+          if (hostErrorCode(error) !== 'RESYNC_REQUIRED') throw error;
+          candidateWorker.close();
+          candidateWorker = createGraphWorkerClient();
+          fullResyncUsed = true;
+          await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges);
+        }
+      } else {
+        await candidateWorker.replaceSnapshot(combined.snapshot, combined.nodes, combined.edges);
+      }
+
+      const oldWorker = graphWorkerRef.current;
+      graphWorkerRef.current = candidateWorker;
+      candidateWorker = null;
+      providerEntriesRef.current = stagedEntries;
+      publishGraph(combined);
+      oldWorker?.close();
+
+      const released = await Promise.allSettled(ordered.map((entry) => host.releaseProvider(entry.leaseId)));
+      const releaseFailures = released.filter((result) => result.status === 'rejected').length;
+      setProviderStatus(`${combined.providerIds.join(' + ')}を更新しました。ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件${fullResyncUsed ? '（全件再同期）' : '（差分適用）'}。${releaseFailures ? `古いリース ${releaseFailures} 件を解放できませんでした。` : ''}`);
+    } catch (error) {
+      candidateWorker?.close();
+      await Promise.allSettled(acquiredLeases.map((leaseId) => host.releaseProvider(leaseId)));
+      setProviderError(`${providerErrorKind(error)}: ${errorMessage(error)}`);
+      setProviderStatus('Providerを更新できませんでした。現在のGraphスナップショット、ボード、ピンは変更されていません。');
+    } finally {
+      refreshingProvidersRef.current = false;
+      setRefreshingProviders(false);
+    }
+  };
+
   const disconnectProvider = async (disconnectedId: string) => {
     const removed = providerEntriesRef.current.get(disconnectedId);
     if (!removed) return;
@@ -701,6 +813,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     setNotice('Hostの最新リビジョンを確認しています…');
     try {
       const latest = await loadAtlasInventory(host);
+      workspaceRef.current = latest.workspace;
       setWorkspace(latest.workspace);
       publishFiles(latest.files);
       const currentBoardFile = latest.files.get(activeSession.path);
@@ -1088,8 +1201,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
               <label>Providerを選択<select value={providerId} onChange={(event) => setProviderId(event.currentTarget.value)} disabled={providers.length === 0}>
                 <option value="">Providerを選択</option>{providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.id} · {provider.version}</option>)}
               </select></label>
-              <button type="button" onClick={() => void connectProvider()} disabled={!canConnect || !workspace || Boolean(graph?.providerIds.includes(providerId))}>選択したProviderを接続</button>
-              {graph?.providerIds.map((connectedId) => <button type="button" key={connectedId} onClick={() => void disconnectProvider(connectedId)}>{connectedId}を切断</button>)}
+              <button type="button" onClick={() => void connectProvider()} disabled={!canConnect || !workspace || refreshingProviders || Boolean(graph?.providerIds.includes(providerId))}>選択したProviderを接続</button>
+              {graph?.providerIds.length ? <button type="button" onClick={() => void refreshProviders()} disabled={!workspace || refreshingProviders} aria-label="接続中Providerを更新">
+                {refreshingProviders ? 'Providerを更新中…' : '接続中Providerを更新'}
+              </button> : null}
+              {graph?.providerIds.map((connectedId) => <button type="button" key={connectedId} onClick={() => void disconnectProvider(connectedId)} disabled={refreshingProviders}>{connectedId}を切断</button>)}
               {providerStatus && <small className="atlas-status-inline">{providerStatus}</small>}
               {providerError && <small className="atlas-error-inline" role="alert">{providerError}</small>}
             </>}
@@ -1195,31 +1311,46 @@ async function collectProviderPages<T extends { snapshot: SnapshotRef; items: un
   throw new Error(`Providerの${method}ページ数が上限を超えました。`);
 }
 
-async function assembleProviderSnapshot(entries: Map<string, ConnectedProvider>): Promise<ProviderSnapshot> {
-  const ordered = [...entries.values()].sort((left, right) => left.providerId.localeCompare(right.providerId));
-  const first = ordered[0];
-  if (!first) throw new Error('Providerスナップショットが1つ以上必要です。');
-  for (const entry of ordered.slice(1)) {
-    if (entry.snapshot.workspaceId !== first.snapshot.workspaceId
-      || entry.snapshot.sourceRevision !== first.snapshot.sourceRevision
-      || entry.snapshot.epoch !== first.snapshot.epoch) {
-      throw new Error('Providerから異なるワークスペースのソースリビジョンまたはHostエポックのスナップショットが返されました。');
+async function collectProviderDeltaPages(
+  host: PluginHostClient,
+  leaseId: string,
+  previousSnapshot: SnapshotRef,
+  targetSnapshot: SnapshotRef,
+): Promise<GraphDeltaPage[]> {
+  const pages: GraphDeltaPage[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let count = 0; count < 100_000; count += 1) {
+    const result = await host.providerCall(leaseId, {
+      method: 'diff',
+      params: { previousSnapshot, ...(cursor ? { cursor } : {}), limit: 500 },
+    });
+    if (!result || !Array.isArray(result.items) || !('snapshot' in result) || !('complete' in result) || !('nextCursor' in result)) {
+      throw new Error('Providerのdiff応答ページが不正です。');
     }
+    const page = result as GraphDeltaPage;
+    if (!sameSnapshot(page.snapshot, targetSnapshot)) throw new Error('Providerのdiffページが新しいリースのスナップショットと一致しません。');
+    if (page.complete !== (page.nextCursor === null)) throw new Error('Providerのdiffページ完了状態とカーソルが一致しません。');
+    pages.push(page);
+    if (page.complete) return pages;
+    const nextCursor = page.nextCursor;
+    if (!nextCursor || cursors.has(nextCursor)) throw new Error('Providerのdiffページでカーソルが欠落または重複しています。');
+    cursors.add(nextCursor);
+    cursor = nextCursor;
   }
-  const snapshot: SnapshotRef = ordered.length === 1
-    ? first.snapshot
-    : {
-        workspaceId: first.snapshot.workspaceId,
-        sourceRevision: first.snapshot.sourceRevision,
-        providerRevision: `atlas-composite-v1:${await sha256Hex(new TextEncoder().encode(JSON.stringify(ordered.map((item) => [item.providerId, item.snapshot.providerRevision]))))}`,
-        epoch: first.snapshot.epoch,
-      };
+  throw new Error('Providerのdiffページ数が上限を超えました。');
+}
+
+async function fetchProviderSnapshot(
+  host: PluginHostClient,
+  leaseId: string,
+  snapshot: SnapshotRef,
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const nodePages = await collectProviderPages<ProviderPage>(host, leaseId, 'listNodes', snapshot);
+  const edgePages = await collectProviderPages<GraphEdgePage>(host, leaseId, 'listEdges', snapshot);
   return {
-    providerId: ordered.map((item) => item.providerId).join(' + '),
-    providerIds: ordered.map((item) => item.providerId),
-    snapshot,
-    nodes: ordered.flatMap((item) => item.nodes),
-    edges: ordered.flatMap((item) => item.edges),
+    nodes: nodePages.flatMap((page) => page.items),
+    edges: edgePages.flatMap((page) => page.items),
   };
 }
 
