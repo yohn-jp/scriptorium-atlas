@@ -382,6 +382,8 @@ try {
   const svgPath = await svgDownload.path();
   assert.ok(svgPath);
   const svgText = (await readFile(svgPath)).toString("utf8");
+  const embeddedFontCount = (svgText.match(/data:font\/woff2;base64,/gu) ?? []).length;
+  const externalFontCount = (svgText.match(/https:\/\/esm\.sh\/@excalidraw\/excalidraw@0\.18\.1\/dist\/prod\/fonts\//gu) ?? []).length;
   const svgInfo = await atlasFrame.evaluate((markup) => {
     const document = new DOMParser().parseFromString(markup, "image/svg+xml");
     const svg = document.documentElement;
@@ -392,6 +394,8 @@ try {
     };
   }, svgText);
   assert.equal(svgInfo.valid, true, "Excalidraw's official SVG export must produce a valid SVG document.");
+  assert.ok(embeddedFontCount > 0, "CSP-safe SVG export must embed the self-hosted font as data instead of using a remote font URL.");
+  assert.equal(externalFontCount, 0, "SVG export must not refer to the external Excalidraw font CDN.");
   assert.match(svgInfo.text, /Keyboard created text/u,
     "The official SVG export must contain the keyboard-created and resized native text element.");
   const svgViewBox = svgInfo.viewBox?.trim().split(/[ ,]+/u).map(Number) ?? [];
@@ -460,10 +464,21 @@ try {
       localStatusCounts,
       remote: remoteFontRequests.length,
       remoteSamples: remoteFontRequests.slice(0, 3),
+      remoteResponseCount: remoteFontRequests.filter(({ status }) => status !== undefined).length,
+      remoteFailureSamples: failedRequests.filter(({ url }) =>
+        url.includes("/fonts/") && new URL(url).origin !== new URL(atlasFrame.url()).origin,
+      ).slice(0, 3),
     },
+    embeddedFontCount,
+    externalFontCount,
     failedRequests: { count: failedRequests.length, remoteFontRequests: failedRequests.filter((request) => request.url.includes("/fonts/")).length },
   };
   console.log("svg-export-diagnostics", JSON.stringify(svgDiagnostics));
+  assert.ok(localFontRequests.length > 0, "The Canvas editor must request its self-hosted fonts.");
+  assert.equal(localFontRequests.filter(({ status }) => status !== 200).length, 0,
+    `Every same-origin font response must succeed: ${JSON.stringify(svgDiagnostics.fontRequests)}`);
+  assert.equal(svgDiagnostics.fontRequests.remoteResponseCount, 0,
+    `External Excalidraw fallback URLs must stay blocked by the host CSP: ${JSON.stringify(svgDiagnostics.fontRequests)}`);
   if (browserEvents.some(({ errors }) => errors.some((error) => error.type === "error"))) {
     throw new Error("Captured the real Canvas export error; stopping before later UI assertions.");
   }
