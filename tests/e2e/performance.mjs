@@ -124,8 +124,10 @@ async function readMetrics(page) { return page.evaluate(() => window.__atlasPerf
 async function readHeap(frame) {
   return frame.evaluate(() => {
     const memory = performance.memory;
-    if (!memory) return { status: 'NOT_CHECKED', reason: 'Chromium did not expose performance.memory for this frame.' };
-    return { status: 'MEASURED', usedBytes: memory.usedJSHeapSize, totalBytes: memory.totalJSHeapSize, limitBytes: memory.jsHeapSizeLimit };
+    const measurement = 'Chromium performance.memory exposed in the Atlas frame';
+    const scope = 'Approximate/shared renderer JavaScript heap; same-site frames may share a renderer or isolate across separate ports. This is not isolated Plugin or Worker heap usage.';
+    if (!memory) return { status: 'NOT_CHECKED', measurement, scope, reason: 'Chromium did not expose performance.memory for the Atlas frame.' };
+    return { status: 'MEASURED', measurement, scope, usedBytes: memory.usedJSHeapSize, totalBytes: memory.totalJSHeapSize, limitBytes: memory.jsHeapSizeLimit };
   });
 }
 

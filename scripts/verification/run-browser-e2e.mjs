@@ -17,8 +17,16 @@ const caseIds = [
   'Q01-profile-plugin-presence-and-host-origin-storage-isolation',
   'Q05-indexeddb-denial-fails-closed',
   'Q05-quota-aborted-commit-preserves-source-and-recoverable-draft',
-  'Q13-atlas-ime-enter-waits-for-composition-end'
+  'Q13-atlas-synthetic-ime-enter-guard',
+  'Q13-atlas-chromium-composition-enter-guard',
+  'Q13-atlas-keyboard-only-undo-redo',
+  'Q13-atlas-theme-responsive-operations'
 ];
+const selectedCaseIds = process.env.ATLAS_E2E_CASES
+  ? [...new Set(process.env.ATLAS_E2E_CASES.split(',').map(value => value.trim()).filter(Boolean))]
+  : null;
+const selectedCaseSet = new Set(selectedCaseIds ?? caseIds);
+const unknownSelectedCases = (selectedCaseIds ?? []).filter(id => !caseIds.includes(id));
 
 async function reserveBasePort() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -122,7 +130,14 @@ async function inspectArtifact(profile) {
 
 const report = {
   schemaVersion: 'atlas.browser-e2e-evidence/v1',
-  purpose: 'Host storage, profile-origin isolation, and Atlas IME E2E subset. These checks do not establish Q01-Q15 as a whole.',
+  purpose: selectedCaseIds
+    ? 'Scoped browser E2E invocation for the requested case IDs only. Unselected cases remain NOT_CHECKED; this does not establish Q01-Q15 as a whole.'
+    : 'Host storage, profile-origin isolation, and Atlas Q13 browser E2E subset. These checks do not establish Q01-Q15 as a whole.',
+  caseSelection: {
+    mode: selectedCaseIds ? 'explicit-subset' : 'default-runner-subset',
+    requestedCaseIds: selectedCaseIds ?? caseIds,
+    unselectedCases: caseIds.filter(id => !selectedCaseSet.has(id))
+  },
   headSha: currentHead(repoRoot),
   exactCli: process.env.ATLAS_E2E_EXACT_CLI ?? `${process.argv[0]} ${process.argv.slice(1).join(' ')}`,
   argv: process.argv,
@@ -165,6 +180,9 @@ const requestedProfiles = (process.env.ATLAS_E2E_PROFILES ?? profileNames.join('
 const invalidProfiles = requestedProfiles.filter(profile => !profileNames.includes(profile));
 if (invalidProfiles.length) {
   report.profiles.push({ profile: invalidProfiles.join(','), status: 'FAIL', reason: 'Unknown profile name.' });
+}
+if (unknownSelectedCases.length) {
+  report.profiles.push({ profile: 'case-selection', status: 'FAIL', reason: `Unknown case ID(s): ${unknownSelectedCases.join(', ')}` });
 }
 
 if (browserError) {
@@ -209,24 +227,29 @@ if (browserError) {
         continue;
       }
       profileReport.server = { argv: server.argv, ready: true, baseUrl };
+      const recordCase = async (id, run) => {
+        if (!selectedCaseSet.has(id)) {
+          profileReport.cases.push({ id, status: 'NOT_CHECKED', reason: 'Not selected for this scoped invocation.' });
+          return;
+        }
+        try {
+          profileReport.cases.push({ id, status: 'PASS', evidence: await run() });
+          process.stderr.write(`[Browser E2E] ${profile} ${id}: PASS\n`);
+        } catch (error) {
+          const detail = error instanceof Error ? `${error.name}: ${error.message.split('\n')[0]}` : String(error);
+          profileReport.cases.push({
+            id,
+            status: 'FAIL',
+            error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+          });
+          process.stderr.write(`[Browser E2E] ${profile} ${id}: FAIL — ${detail.slice(0, 240)}\n`);
+        }
+      };
       await runHostStorageCases({
         browser,
         baseUrl,
         profile,
-        record: async (id, run) => {
-          try {
-            profileReport.cases.push({ id, status: 'PASS', evidence: await run() });
-            process.stderr.write(`[Browser E2E] ${profile} ${id}: PASS\n`);
-          } catch (error) {
-            const detail = error instanceof Error ? `${error.name}: ${error.message.split('\n')[0]}` : String(error);
-            profileReport.cases.push({
-              id,
-              status: 'FAIL',
-              error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-            });
-            process.stderr.write(`[Browser E2E] ${profile} ${id}: FAIL — ${detail.slice(0, 240)}\n`);
-          }
-        }
+        record: recordCase
       });
       if (profile !== 'story') {
         const { runImeEntryCases } = await import('../../tests/e2e/ime-entry.mjs');
@@ -234,20 +257,7 @@ if (browserError) {
           browser,
           baseUrl,
           profile,
-          record: async (id, run) => {
-            try {
-              profileReport.cases.push({ id, status: 'PASS', evidence: await run() });
-              process.stderr.write(`[Browser E2E] ${profile} ${id}: PASS\n`);
-            } catch (error) {
-              const detail = error instanceof Error ? `${error.name}: ${error.message.split('\n')[0]}` : String(error);
-              profileReport.cases.push({
-                id,
-                status: 'FAIL',
-                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-              });
-              process.stderr.write(`[Browser E2E] ${profile} ${id}: FAIL — ${detail.slice(0, 240)}\n`);
-            }
-          }
+          record: recordCase
         });
       }
       profileReport.server.shutdown = await stopServer(server);
@@ -273,14 +283,16 @@ if (browserError) {
 await browser?.close();
 for (const profile of report.profiles) {
   const cases = profile.cases ?? [];
-  if (cases.some(test => test.status === 'FAIL')) profile.status = 'FAIL';
-  else if (cases.length === 0 || cases.some(test => test.status === 'NOT_CHECKED')) profile.status = 'NOT_CHECKED';
+  const assessedCases = cases.filter(test => selectedCaseSet.has(test.id));
+  if (assessedCases.some(test => test.status === 'FAIL')) profile.status = 'FAIL';
+  else if (assessedCases.length === 0 || assessedCases.some(test => test.status === 'NOT_CHECKED')) profile.status = 'NOT_CHECKED';
   else profile.status = 'PASS';
   profile.exitStatus = profile.status === 'PASS' ? 0 : profile.status === 'FAIL' ? 1 : 2;
 }
 const allCases = report.profiles.flatMap(profile => profile.cases ?? []);
-if (invalidProfiles.length || allCases.some(test => test.status === 'FAIL')) report.suiteStatus = 'FAIL';
-else if (allCases.length === 0 || allCases.some(test => test.status === 'NOT_CHECKED')) report.suiteStatus = 'NOT_CHECKED';
+const assessedCases = allCases.filter(test => selectedCaseSet.has(test.id));
+if (invalidProfiles.length || unknownSelectedCases.length || assessedCases.some(test => test.status === 'FAIL')) report.suiteStatus = 'FAIL';
+else if (assessedCases.length === 0 || assessedCases.some(test => test.status === 'NOT_CHECKED')) report.suiteStatus = 'NOT_CHECKED';
 else report.suiteStatus = 'PASS';
 report.exitStatus = report.suiteStatus === 'PASS' ? 0 : report.suiteStatus === 'FAIL' ? 1 : 2;
 
