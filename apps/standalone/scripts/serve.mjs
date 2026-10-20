@@ -25,7 +25,9 @@ function serve(port, plugin) {
       if (plugin && path === '/index.html' || !plugin && path === '/frame.html') { res.writeHead(403); res.end(); return; }
       const info = await stat(file);
       if (!info.isFile()) throw new Error('Not a file');
-      const csp = ["default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' blob: data:", "font-src 'self' data:", "worker-src 'self' blob:", "connect-src 'none'", "object-src 'none'", "base-uri 'none'", "form-action 'none'", plugin ? `frame-ancestors http://127.0.0.1:${hostPort}` : `frame-src http://127.0.0.1:${atlasPort} http://127.0.0.1:${storyPort}`].join('; ');
+      // Official Excalidraw reads self-hosted font bytes with fetch before FontFace.
+      const fontConnect = plugin === 'atlas' ? `http://127.0.0.1:${port}/fonts/` : "'none'";
+      const csp = ["default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' blob: data:", "font-src 'self' data:", "worker-src 'self' blob:", `connect-src ${fontConnect}`, "object-src 'none'", "base-uri 'none'", "form-action 'none'", plugin ? `frame-ancestors http://127.0.0.1:${hostPort}` : `frame-src http://127.0.0.1:${atlasPort} http://127.0.0.1:${storyPort}`].join('; ');
       res.writeHead(200, { 'Content-Type': mime[extname(file)] ?? 'application/octet-stream', 'Content-Length': info.size, 'Content-Security-Policy': csp, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()' });
       res.end(req.method === 'HEAD' ? undefined : await readFile(file));
     } catch { res.writeHead(404); res.end('Not found'); }
