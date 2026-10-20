@@ -15,7 +15,7 @@ import type {
   NonDeletedExcalidrawElement,
   OrderedExcalidrawElement,
 } from "@excalidraw/excalidraw/element/types";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { restoreExcalidrawScene, serializeExcalidrawScene } from "../io/scene-core.js";
 import type { CanvasEditorProps, CanvasPoint, CanvasViewport } from "./types.js";
 import { KeyboardControls } from "./KeyboardControls.js";
@@ -25,6 +25,23 @@ type InternalProps = Pick<CanvasEditorProps, "sceneText" | "onChange" | "readOnl
 type ExcalidrawLinkEvent = CustomEvent<{
   nativeEvent: MouseEvent | ReactPointerEvent<HTMLCanvasElement>;
 }>;
+
+function activateHistoryButtonWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (event.repeat || (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar")) return;
+  if (!(event.target instanceof Element)) return;
+
+  const button = event.target.closest<HTMLButtonElement>(
+    'button[data-testid="button-undo"], button[data-testid="button-redo"]',
+  );
+  if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+
+  // Excalidraw 0.18.1 renders these history controls as buttons but does not
+  // activate them from keyboard events. Invoke the same official button action
+  // after preventing the browser's synthetic activation from duplicating it.
+  event.preventDefault();
+  event.stopPropagation();
+  button.click();
+}
 
 function makeInitialData(sceneText: string): ExcalidrawInitialDataState {
   const restored = restoreExcalidrawScene(sceneText);
@@ -124,7 +141,7 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
 
   return (
     <div className="atlas-canvas-editor-surface" ref={rootRef}>
-      <div className="atlas-canvas-excalidraw">
+      <div className="atlas-canvas-excalidraw" onKeyDownCapture={activateHistoryButtonWithKeyboard}>
         <Excalidraw
           initialData={initialData}
           excalidrawAPI={onApi}
