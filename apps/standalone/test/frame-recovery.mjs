@@ -83,7 +83,12 @@ try {
       await page.frameLocator('iframe[title="Atlas"]').locator('body').waitFor();
       assert.equal(await page.getByRole('region',{name:'Atlas Plugin',exact:true}).getByRole('alert').count(),0);
     }
+    const oldNonce = new URL(frame.url()).searchParams.get('nonce');
     await frame.getByRole('button',{name:'Pluginを再読込',exact:true}).click();
+    await page.waitForFunction(({title,nonce}) => {
+      const iframe = document.querySelector(`iframe[title="${title}"]`);
+      return iframe && new URL(iframe.src).searchParams.get('nonce') !== nonce;
+    },{title:plugin,nonce:oldNonce});
     const restarted = await connectedFrame();
     assert.ok(await restarted.evaluate(() => globalThis.__atlasFaultEpoch) > epoch);
     faults.push(fault);
