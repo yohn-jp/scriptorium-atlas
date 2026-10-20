@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { validateContract, assertContract, type PluginHostClient, type ProviderRequest } from '@scriptorium-atlas/contracts';
 import { loaders, providerLoaders } from 'virtual:atlas-profile';
 import { createHostClient } from './rpc-client.js';
+import { isDeferredResizeNotification } from './frame-errors.js';
 
 type Endpoint = {dispatch(request: ProviderRequest, signal?: AbortSignal): Promise<unknown>;dispose():void};
 type UiModule = { AtlasPlugin?: ComponentType<{host: PluginHostClient}>; StoryKnowledge?: ComponentType<{host: PluginHostClient}> };
@@ -62,10 +63,17 @@ function serveProvider(port: MessagePort, host: PluginHostClient, epoch: number)
   };
 }
 
-class FrameBoundary extends React.Component<{children: React.ReactNode}, {error:string}> {
-  override state = {error:''};
+class FrameBoundary extends React.Component<{children: React.ReactNode}, {error:string; resizeNotices:number; resizeNoticeAt:string}> {
+  override state = {error:'', resizeNotices:0, resizeNoticeAt:''};
   static getDerivedStateFromError(error:unknown) { return {error:String(error).slice(0,2048)}; }
-  private onError = (event: ErrorEvent) => this.setState({error:String(event.error ?? event.message).slice(0,2048)});
+  private onError = (event: ErrorEvent) => {
+    if (isDeferredResizeNotification(event, location.href)) {
+      // Do not cancel the native event or console report. Preserve the live editor and every notice.
+      this.setState(current => ({resizeNotices:current.resizeNotices + 1, resizeNoticeAt:new Date().toISOString()}));
+      return;
+    }
+    this.setState({error:String(event.error ?? event.message).slice(0,2048)});
+  };
   private onRejection = (event: PromiseRejectionEvent) => this.setState({error:String(event.reason).slice(0,2048)});
   override componentDidMount() {
     window.addEventListener('error',this.onError);
@@ -76,7 +84,7 @@ class FrameBoundary extends React.Component<{children: React.ReactNode}, {error:
     window.removeEventListener('unhandledrejection',this.onRejection);
   }
   override render() {
-    return this.state.error ? <section role="alert"><h1>Pluginでエラーが発生しました</h1><p>{this.state.error}</p><p>Hostへ耐久記録していない下書きは、このPluginを再読込すると失われる可能性があります。</p><button onClick={() => location.reload()}>Pluginを再読込</button></section> : this.props.children;
+    return this.state.error ? <section role="alert"><h1>Pluginでエラーが発生しました</h1><p>{this.state.error}</p><p>Hostへ耐久記録していない下書きは、このPluginを再読込すると失われる可能性があります。</p><button onClick={() => location.reload()}>Pluginを再読込</button></section> : <>{this.props.children}{this.state.resizeNotices > 0 && <aside role="status" aria-label="表示調整の通知" data-resize-notification-count={this.state.resizeNotices} style={{position:'fixed',bottom:8,left:8,zIndex:10000,pointerEvents:'none',padding:'4px 8px',border:'1px solid GrayText',borderRadius:4,background:'Canvas',color:'CanvasText',fontSize:12}}>表示の調整通知: {this.state.resizeNotices} 回 · <time dateTime={this.state.resizeNoticeAt}>{new Date(this.state.resizeNoticeAt).toLocaleTimeString('ja-JP')}</time></aside>}</>;
   }
 }
 

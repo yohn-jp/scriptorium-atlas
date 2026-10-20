@@ -40,6 +40,41 @@ try {
     await frame.waitForFunction(() => !!globalThis.__atlasFaultPort);
     return frame;
   }
+  const resizeFrame = await connectedFrame();
+  await resizeFrame.evaluate(() => {
+    globalThis.__nativeResizeProbe = { events: [], callbackCounts: [0, 0] };
+    window.addEventListener('error', (event) => {
+      if (event.message === 'ResizeObserver loop completed with undelivered notifications.') {
+        globalThis.__nativeResizeProbe.events.push({isTrusted:event.isTrusted, errorIsNull:event.error === null,
+          filename:event.filename, lineno:event.lineno, colno:event.colno});
+      }
+    });
+    const startProbe = (index) => {
+      const target = document.createElement('div');
+      target.style.cssText = 'position:fixed;left:-100px;top:0;width:10px;height:10px';
+      document.body.append(target);
+      const observer = new ResizeObserver(() => {
+        const count = ++globalThis.__nativeResizeProbe.callbackCounts[index];
+        if (count === 1) target.style.width = '11px';
+        else {
+          observer.disconnect(); target.remove();
+          if (index === 0) setTimeout(() => startProbe(1), 0);
+        }
+      });
+      observer.observe(target);
+    };
+    startProbe(0);
+  });
+  await resizeFrame.getByRole('status', {name:'表示調整の通知'}).waitFor();
+  await resizeFrame.waitForFunction(() => globalThis.__nativeResizeProbe.callbackCounts.every(count => count === 2));
+  await page.waitForTimeout(250);
+  const resizeDiagnostic = await resizeFrame.evaluate(() => ({...globalThis.__nativeResizeProbe,
+    visibleCount:Number(document.querySelector('[data-resize-notification-count]')?.getAttribute('data-resize-notification-count'))}));
+  assert.ok(resizeDiagnostic.events.length >= 2, 'Repeated real native ResizeObserver deliveries must be observed.');
+  assert.equal(resizeDiagnostic.visibleCount, resizeDiagnostic.events.length, 'Every native delivery notice must remain visible and counted.');
+  assert.ok(resizeDiagnostic.events.every(event => event.isTrusted && event.errorIsNull && event.lineno === 0 && event.colno === 0));
+  assert.equal(await resizeFrame.getByRole('alert').filter({hasText:'Pluginでエラーが発生しました'}).count(), 0);
+  assert.equal(await pending.getByText(source, {exact:true}).innerText(), source);
   const faults = ['stale-epoch', 'malformed', 'oversized', 'cyclic', 'bigint'];
   for (const fault of faults) {
     const frame = await connectedFrame();
@@ -68,12 +103,18 @@ try {
     const restarted = await connectedFrame();
     assert.ok(await restarted.evaluate(() => globalThis.__atlasFaultEpoch) > epoch);
   }
-  for (const fault of ['uncaught-exception','unhandled-rejection']) {
+  for (const fault of ['uncaught-exception','uncaught-resize-message','synthetic-resize-notification','unhandled-rejection']) {
     const frame = await connectedFrame();
     const epoch = await frame.evaluate(() => globalThis.__atlasFaultEpoch);
     await frame.evaluate(kind => {
       setTimeout(() => {
         if (kind === 'uncaught-exception') throw new Error('Injected frame exception');
+        if (kind === 'uncaught-resize-message') throw new Error('ResizeObserver loop completed with undelivered notifications.');
+        if (kind === 'synthetic-resize-notification') {
+          window.dispatchEvent(new ErrorEvent('error', {message:'ResizeObserver loop completed with undelivered notifications.',
+            filename:location.href, lineno:0, colno:0, error:null}));
+          return;
+        }
         void Promise.reject(new Error('Injected frame rejection'));
       },0);
     },fault);
@@ -111,7 +152,7 @@ try {
   await page.getByRole('button', { name: 'notes/frame-draft.md', exact: true }).click();
   assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), source);
   console.log(JSON.stringify({ status: 'PASS', profile, browser: browser.version(), baseUrl, workspaceId,
-    faults, case: 'real invalid frame RPC rejects only the target; independent frame reload renews epoch; journal commits exact bytes through Host reload' }));
+    faults, resizeDiagnostic, case: 'native resize notices preserve UI; true exceptions and invalid RPC isolate only the target; reload renews epoch; journal commits exact bytes through Host reload' }));
 } finally {
   await context.close();
   await browser.close();
