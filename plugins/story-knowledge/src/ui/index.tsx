@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PluginHostClient } from "@scriptorium-atlas/contracts";
 import { STORY_ENTITY_TYPES, type EditableStoryEntityType, type StoryEntity, type StoryIndex, type StoryRelation } from "../domain/types.js";
 import { buildStoryIndex, incomingStoryReferences, searchStory } from "../domain/index.js";
@@ -168,8 +168,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
     setPreview({ change, title, impact });
   }
 
-  function saveSelected(event: FormEvent): void {
-    event.preventDefault();
+  function saveSelected(): void {
     if (!index || !selected || !draft || !selected.editable) return;
     try {
       const patch: Record<string, unknown> = {
@@ -199,8 +198,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
     }
   }
 
-  function startCreate(event: FormEvent): void {
-    event.preventDefault();
+  function startCreate(): void {
     if (!index) return;
     try {
       const other = JSON.parse(createFields) as unknown;
@@ -233,8 +231,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
     }
   }
 
-  function startCreateRelation(event: FormEvent): void {
-    event.preventDefault();
+  function startCreateRelation(): void {
     if (!index || !selected || !relationTarget) return;
     try {
       const change = planCreateStoryRelation(index, selected.id, relationTarget, relationKind, relationNote || undefined);
@@ -345,7 +342,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
           {selected && draft && <article className="card">
             <div className="topline"><div><h2>{TYPE_LABELS[selected.type]}: {selected.name}</h2><span className="pill">{selected.id} · {selected.path}</span></div><button className="source-link" onClick={() => void openSource(selected.path, selected.revision)}>Sourceを開く</button></div>
             {!selected.editable && <div className="warning">このSourceには診断があります。読み取り専用で表示しています。</div>}
-            <form onSubmit={saveSelected}>
+            <form onSubmit={(event) => { event.preventDefault(); saveSelected(); }}>
               <div className="formgrid">
                 <label>表示名<input value={draft.name} onChange={(event) => updateDraft("name", event.currentTarget.value)} disabled={!selected.editable} /></label>
                 <label>別名（カンマ区切り）<input value={draft.aliases} onChange={(event) => updateDraft("aliases", event.currentTarget.value)} disabled={!selected.editable} /></label>
@@ -353,7 +350,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
                 <label>説明<textarea value={draft.description} onChange={(event) => updateDraft("description", event.currentTarget.value)} disabled={!selected.editable} /></label>
               </div>
               {selected.type === "manuscript" && <label>原稿本文<textarea value={draft.body} onChange={(event) => updateDraft("body", event.currentTarget.value)} disabled={!selected.editable} rows={12} /></label>}
-              <div className="actions"><button type="submit" disabled={!selected.editable || !draftDirty}>編集案をプレビュー</button>{draftDirty && <button type="button" onClick={() => { drafts.current.delete(selected.id); setDraft(createDraft(selected)); setDraftDirty(false); setDraftMessage("現在のSourceからフォームを再読込しました。"); }}>フォームをSourceに戻す</button>}<span className="muted">ID・Source Path・親子関係は専用操作で管理します。</span></div>
+              <div className="actions"><button type="button" onClick={saveSelected} disabled={!selected.editable || !draftDirty}>編集案をプレビュー</button>{draftDirty && <button type="button" onClick={() => { drafts.current.delete(selected.id); setDraft(createDraft(selected)); setDraftDirty(false); setDraftMessage("現在のSourceからフォームを再読込しました。"); }}>フォームをSourceに戻す</button>}<span className="muted">ID・Source Path・親子関係は専用操作で管理します。</span></div>
             </form>
             {draftMessage && <p role="status" className="muted">{draftMessage}</p>}
             <details><summary>Sourceのその他のフィールド</summary>
@@ -361,7 +358,7 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
               <div className="formgrid"><label>Field名<input value={fieldName} onChange={(event) => setFieldName(event.currentTarget.value)} disabled={!selected.editable} /></label><label>JSON値<textarea value={fieldJson} onChange={(event) => setFieldJson(event.currentTarget.value)} disabled={!selected.editable} /></label></div><button onClick={applyAdditionalField} disabled={!selected.editable}>Field編集案を作成</button>
             </details>
           </article>}
-            <article className="card"><h2>作成</h2><form onSubmit={startCreate}>
+            <article className="card"><h2>作成</h2><form onSubmit={(event) => { event.preventDefault(); startCreate(); }}>
             <div className="formgrid">
               <label>種類<select value={createType} onChange={(event) => setCreateType(event.currentTarget.value as EditableStoryEntityType)}>{CREATE_TYPES.map((type) => <option value={type} key={type}>{TYPE_LABELS[type]}</option>)}</select></label>
               <label>表示名<input value={createName} onChange={(event) => setCreateName(event.currentTarget.value)} required /></label>
@@ -372,13 +369,13 @@ export function StoryKnowledge({ host }: { host: PluginHostClient }) {
             </div>
             {(createType === "scene" || createType === "manuscript") && <label>{createType === "scene" ? "対応する原稿本文" : "原稿本文"}<textarea value={createBody} onChange={(event) => setCreateBody(event.currentTarget.value)} rows={8} /></label>}
             <label>追加フィールド（JSON）<textarea value={createFields} onChange={(event) => setCreateFields(event.currentTarget.value)} /></label>
-            <button type="submit">作成案をプレビュー</button>{createError && <p role="alert" className="error">{createError}</p>}
+            <button type="button" onClick={startCreate}>作成案をプレビュー</button>{createError && <p role="alert" className="error">{createError}</p>}
           </form></article>
           {selected && <article className="card"><h2>関連する項目</h2>
             {selectedRelations.length === 0 ? <p className="muted">関係はありません。</p> : selectedRelations.map((relation) => <div className="relation" key={relation.id}><div>{relationLabel(index, relation)}<br /><small>{relation.provenance.map((item) => `${item.path} · ${item.field}`).join(" / ")}</small></div><div className="actions"><button onClick={() => { setSelectedId(relation.fromId); }}>From</button><button onClick={() => { setSelectedId(relation.toId); }}>To</button><button onClick={() => editRelationForm(relation)}>編集フォーム</button><button onClick={() => startDeleteRelation(relation)}>削除案</button></div></div>)}
             {editingRelation && <details open><summary>関連編集フォーム</summary><div className="formgrid"><label>Target<select value={editRelationTarget || editingRelation.toId} onChange={(event) => setEditRelationTarget(event.currentTarget.value)}>{index.entities.filter((entity) => entity.editable).map((entity) => <option value={entity.id} key={entity.id}>{entity.name} · {entity.id}</option>)}</select></label><label>Kind<input value={editRelationKind} onChange={(event) => setEditRelationKind(event.currentTarget.value)} disabled={editingRelation.provenance.some((item) => item.field !== "relations")} /></label><label>Note<input value={editRelationNote} onChange={(event) => setEditRelationNote(event.currentTarget.value)} /></label></div><div className="actions"><button onClick={() => { startUpdateRelation(editingRelation, editRelationTarget || editingRelation.toId, editRelationKind, editRelationNote); setEditingRelationId(""); }}>関連編集案を作成</button><button onClick={() => setEditingRelationId("")}>閉じる</button></div></details>}
-            <form onSubmit={startCreateRelation}>
-              <h3>関連を追加</h3><div className="formgrid"><label>Target<select value={relationTarget} onChange={(event) => setRelationTarget(event.currentTarget.value)} required><option value="">選択してください</option>{index.entities.filter((entity) => entity.editable && entity.id !== selected.id).map((entity) => <option value={entity.id} key={entity.id}>{TYPE_LABELS[entity.type]} · {entity.name}</option>)}</select></label><label>Kind<select value={relationKind} onChange={(event) => setRelationKind(event.currentTarget.value)}>{RELATION_KINDS.map((kind) => <option value={kind} key={kind}>{kind}</option>)}</select></label><label>Note<input value={relationNote} onChange={(event) => setRelationNote(event.currentTarget.value)} /></label></div><button type="submit">関連追加案を作成</button>{relationError && <p role="alert" className="error">{relationError}</p>}
+            <form onSubmit={(event) => { event.preventDefault(); startCreateRelation(); }}>
+              <h3>関連を追加</h3><div className="formgrid"><label>Target<select value={relationTarget} onChange={(event) => setRelationTarget(event.currentTarget.value)} required><option value="">選択してください</option>{index.entities.filter((entity) => entity.editable && entity.id !== selected.id).map((entity) => <option value={entity.id} key={entity.id}>{TYPE_LABELS[entity.type]} · {entity.name}</option>)}</select></label><label>Kind<select value={relationKind} onChange={(event) => setRelationKind(event.currentTarget.value)}>{RELATION_KINDS.map((kind) => <option value={kind} key={kind}>{kind}</option>)}</select></label><label>Note<input value={relationNote} onChange={(event) => setRelationNote(event.currentTarget.value)} /></label></div><button type="button" onClick={startCreateRelation} disabled={!relationTarget}>関連追加案を作成</button>{relationError && <p role="alert" className="error">{relationError}</p>}
             </form>
           </article>}
           {selected && <article className="card"><h2>削除</h2><p>incoming referenceが残る削除は既定で拒否されます。Cascadeを選ぶと、表示された参照元Sourceを同じ変更案で更新します。</p><label><span><input type="checkbox" checked={cascade} onChange={(event) => { setCascade(event.currentTarget.checked); setDeletePlan(undefined); }} /> incoming referenceをCascadeする</span></label><button onClick={startDelete} disabled={!selected.editable}>削除案を確認</button>

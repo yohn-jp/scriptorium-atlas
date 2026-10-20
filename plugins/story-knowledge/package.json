@@ -36,7 +36,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "node ./tests/browser-acceptance.mjs"
   },
   "dependencies": {
     "@scriptorium-atlas/contracts": "workspace:*",
