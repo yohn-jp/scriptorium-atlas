@@ -49,6 +49,15 @@ test('NodeRef identity uses both provider and local id without delimiter collisi
   assert.equal(graph([node('alice', {}, 'provider.one'), node('alice', {}, 'provider.two')]).nodes.length, 2);
 });
 
+test('edge identities use both provider and local edge id and reject duplicates', () => {
+  const from = ref('alice', 'provider.one');
+  const to = ref('alice', 'provider.two');
+  const first = edge('relation', from, to);
+  const second = { ...first, ref: ref('relation', 'provider.two') };
+  assert.equal(graph([node('alice', {}, 'provider.one'), node('alice', {}, 'provider.two')], [first, second]).edges.length, 2);
+  errorCode(() => graph([], [first, first]), 'DUPLICATE_EDGE');
+});
+
 test('search indexes Japanese substrings across every contracted searchable field', () => {
   const indexed = graph([
     node('amayadori', {
@@ -90,6 +99,31 @@ test('snapshot page streams require complete node and edge pages from one exact 
   duplicate.addNodesPage({ snapshot, items: [node('a')], nextCursor: null, complete: true });
   duplicate.addEdgesPage({ snapshot, items: [], nextCursor: null, complete: true });
   errorCode(() => duplicate.build(), 'DUPLICATE_NODE');
+});
+
+test('page cursors are unique, terminal pages stay terminal, and every snapshot field including epoch must match', () => {
+  const builder = beginGraphSnapshot(snapshot);
+  builder.addNodesPage({ snapshot, items: [], nextCursor: 'next', complete: false });
+  errorCode(() => builder.addNodesPage({ snapshot, items: [], nextCursor: 'next', complete: false }), 'CURSOR_LOOP');
+
+  for (const mismatch of [
+    { workspaceId: 'other-workspace' },
+    { sourceRevision: 'source-2' },
+    { providerRevision: 'provider-2' },
+    { epoch: snapshot.epoch + 1 },
+  ]) {
+    const mismatched = beginGraphSnapshot(snapshot);
+    errorCode(() => mismatched.addNodesPage({ snapshot: { ...snapshot, ...mismatch }, items: [], nextCursor: null, complete: true }), 'SNAPSHOT_MISMATCH');
+  }
+
+  const terminal = beginGraphSnapshot(snapshot);
+  terminal.addNodesPage({ snapshot, items: [], nextCursor: null, complete: true });
+  errorCode(() => terminal.addNodesPage({ snapshot, items: [], nextCursor: null, complete: true }), 'INCOMPLETE_SNAPSHOT');
+
+  const partialEdges = beginGraphSnapshot(snapshot);
+  partialEdges.addNodesPage({ snapshot, items: [], nextCursor: null, complete: true });
+  partialEdges.addEdgesPage({ snapshot, items: [], nextCursor: 'edge-page-2', complete: false });
+  errorCode(() => partialEdges.build(), 'INCOMPLETE_SNAPSHOT');
 });
 
 test('neighbors respect direction and hop depth, retaining unresolved endpoints', () => {
@@ -179,4 +213,9 @@ test('complete delta pages combine only one consecutive snapshot transition', ()
   assert.deepEqual(applyGraphDeltaPages(indexed, pages).nodes.map((item) => item.ref.localId), ['a', 'b', 'c']);
   errorCode(() => applyGraphDeltaPages(indexed, [pages[0]!]), 'RESYNC_REQUIRED');
   errorCode(() => applyGraphDeltaPages(indexed, [{ ...pages[1]!, items: [{ previousSnapshot: target, snapshot: target }] }]), 'RESYNC_REQUIRED');
+  errorCode(() => applyGraphDeltaPages(indexed, [
+    { ...pages[0]!, nextCursor: 'repeat' },
+    { ...pages[0]!, nextCursor: 'repeat' },
+    pages[1]!,
+  ]), 'CURSOR_LOOP');
 });

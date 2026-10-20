@@ -37,7 +37,7 @@ test('graph worker rejects replies made stale by snapshot replacement', async ()
 
   const pending = client.search({ query: 'A' });
   await waitFor(() => worker.requests.some((request) => request.type === 'search'));
-  const nextSnapshot = { ...snapshot, sourceRevision: 'source-2', providerRevision: 'provider-2' };
+  const nextSnapshot = { ...snapshot, sourceRevision: 'source-2', providerRevision: 'provider-2', epoch: snapshot.epoch + 1 };
   const replacement = client.replaceSnapshot(nextSnapshot, [node], []);
   await assert.rejects(pending, (error: unknown) => error instanceof GraphWorkerClientError && error.code === 'STALE_RESULT');
   await replacement;
