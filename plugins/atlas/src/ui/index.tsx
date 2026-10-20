@@ -1305,7 +1305,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
                 assets={assetUrls}
                 graph={graph}
                 onBoardChange={(next) => acceptBoard(activeSession.board.boardId, next)}
-                onSceneChange={(sceneText) => replaceSession(activeSession.board.boardId, { ...activeSession, sceneText })}
+                onSceneChange={(sceneText) => {
+                  const boardId = activeSession.board.boardId;
+                  const current = sessionsRef.current.get(boardId);
+                  if (current) replaceSession(boardId, { ...current, sceneText });
+                }}
                 onDuplicateCard={duplicateCard}
                 onSource={(source) => void openSource(source)}
                 onNavigateToNode={navigateToNode}
