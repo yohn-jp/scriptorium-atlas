@@ -379,9 +379,17 @@ async function runBrowserConsumer(consumerDirectory, browserChecks) {
 
   const uiImports = knownUi.map((module, index) => `import { ${uiComponents.get(module.specifier)} as Ui${index} } from ${JSON.stringify(module.specifier)};`).join('\n');
   const cssImports = knownCss.map(module => `import ${JSON.stringify(module.specifier)};`).join('\n');
+  const hasCanvas = knownUi.some(module => module.specifier === '@scriptorium-atlas/canvas/ui');
+  const editableScene = JSON.stringify({ type: 'excalidraw', version: 2, source: 'packed-consumer', elements: [], appState: {}, files: {} });
+  const canvasSetup = hasCanvas ? `import { configureExcalidrawAssets } from '@scriptorium-atlas/canvas';
+import { exportExcalidrawScene, downloadBlob } from '@scriptorium-atlas/canvas/io';
+configureExcalidrawAssets('/');
+const editable = new URL(location.href).searchParams.has('editable');
+let packedCanvasScene = editable ? ${JSON.stringify(editableScene)} : '{}';
+` : '';
   const mounts = knownUi.map((module, index) => {
     if (module.specifier === '@scriptorium-atlas/canvas/ui') {
-      return `React.createElement('section',{id:'canvas-consumer'},React.createElement(Ui${index},{sceneText:'{}',onChange:()=>{}}))`;
+      return `React.createElement('section',{id:'canvas-consumer'},React.createElement(Ui${index},{sceneText:packedCanvasScene,style:{height:480},onChange:(scene)=>{packedCanvasScene=scene;globalThis.__packedCanvasScene=scene;}}),editable&&React.createElement('button',{id:'packed-svg-export',onClick:async()=>downloadBlob(await exportExcalidrawScene(packedCanvasScene,'svg'),'packed-consumer.svg')},'SVG export'))`;
     }
     const id = module.specifier === '@scriptorium-atlas/atlas/ui' ? 'atlas-consumer' : 'story-consumer';
     return `React.createElement('section',{id:${JSON.stringify(id)}},React.createElement(Ui${index},{host}))`;
@@ -390,13 +398,18 @@ async function runBrowserConsumer(consumerDirectory, browserChecks) {
 import { createRoot } from 'react-dom/client';
 ${uiImports}
 ${cssImports}
+${canvasSetup}
 const workspace={workspaceId:'pack-consumer-workspace',sourceRevision:'${'a'.repeat(64)}',epoch:1};
 const host={snapshot:async()=>({workspace,files:[],nextCursor:null,complete:true}),list:async()=>({workspaceId:workspace.workspaceId,files:[],nextCursor:null,complete:true}),read:async()=>{throw new Error('Unexpected source read in empty consumer fixture.');},prepare:async()=>{throw new Error('Unexpected prepare in read-only consumer fixture.');},beginAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},appendAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},prepareAsset:async()=>{throw new Error('Unexpected asset write in read-only consumer fixture.');},requestSource:async()=>{throw new Error('Unexpected source request in empty consumer fixture.');},describeProviders:async()=>[],acquireProvider:async()=>{throw new Error('Unexpected provider acquisition in empty consumer fixture.');},providerCall:async()=>{throw new Error('Unexpected provider call in empty consumer fixture.');},releaseProvider:async()=>{},subscribeWorkspace:()=>()=>{}};
 createRoot(document.getElementById('root')).render(React.createElement(React.Fragment,null,${mounts}));
 `;
-  await writeFile(join(consumerDirectory, 'index.html'), '<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Atlas packed UI consumer</title></head><body><div id="root"></div><script type="module" src="/browser-consumer.mjs"></script></body></html>\n', 'utf8');
+  const consumerCsp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'";
+  await writeFile(join(consumerDirectory, 'index.html'), `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${consumerCsp}"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Atlas packed UI consumer</title></head><body><div id="root"></div><script type="module" src="/browser-consumer.mjs"></script></body></html>\n`, 'utf8');
   await writeFile(join(consumerDirectory, 'browser-consumer.mjs'), source, 'utf8');
-  await writeFile(join(consumerDirectory, 'vite.config.mjs'), `export default { base: './', build: { outDir: 'browser-dist', emptyOutDir: true, manifest: true } };\n`, 'utf8');
+  const canvasPlugins = hasCanvas ? `import { fileURLToPath } from 'node:url';
+import { copyCanvasAssets, excalidrawWorkerVitePlugin } from '@scriptorium-atlas/canvas/assets';
+const plugins=[excalidrawWorkerVitePlugin(),{name:'packed-canvas-assets',async closeBundle(){await copyCanvasAssets(fileURLToPath(new URL('./browser-dist',import.meta.url)));}}];\n` : 'const plugins=[];\n';
+  await writeFile(join(consumerDirectory, 'vite.config.mjs'), `${canvasPlugins}export default { base: './', plugins, worker:{format:'es'}, build: { modulePreload:{polyfill:false}, outDir: 'browser-dist', emptyOutDir: true, manifest: true } };\n`, 'utf8');
 
   const build = await run('pnpm', ['exec', 'vite', 'build', '--config', 'vite.config.mjs'], consumerDirectory);
   evidence.buildExitStatus = build.exitStatus;
@@ -468,6 +481,23 @@ createRoot(document.getElementById('root')).render(React.createElement(React.Fra
       assert.deepEqual(pageErrors, [], `packed browser UI raised page errors: ${pageErrors.join(' | ')}`);
       const requestedLazyUiChunks = requested.filter(path => lazyUiChunks.some(file => path.endsWith(`/${file}`)));
       assert.deepEqual(requestedLazyUiChunks, [], 'the invalid read-only scene must keep the lazy Excalidraw editor unloaded');
+      if (hasCanvas) {
+        await page.goto(`${baseUrl}?editable=1`, { waitUntil: 'domcontentloaded' });
+        const editor = page.locator('#canvas-consumer .excalidraw');
+        await editor.locator('canvas.excalidraw__canvas.interactive').waitFor({ state: 'visible', timeout: 30_000 });
+        await page.locator('#canvas-consumer .atlas-canvas-accessibility > summary').click();
+        await page.getByLabel('追加する要素').selectOption('text');
+        await page.getByLabel('追加する文字').fill('PACKED_CANVAS_SVG');
+        await page.getByRole('button', { name: '要素を追加', exact: true }).click();
+        await page.waitForFunction(() => globalThis.__packedCanvasScene?.includes('PACKED_CANVAS_SVG'));
+        const downloadPromise = page.waitForEvent('download');
+        await page.locator('#packed-svg-export').click();
+        const download = await downloadPromise;
+        const svg = await readFile(await download.path(), 'utf8');
+        assert.ok(svg.includes('<svg') && svg.includes('PACKED_CANVAS_SVG'), 'packed Canvas must export its actual native text through the public IO entry');
+        assert.deepEqual(pageErrors, [], 'the editable packed Canvas and official font Worker must not raise browser errors');
+        rendered.push({ package: '@scriptorium-atlas/canvas', rendered: 'editable native Canvas and SVG export', svgBytes: Buffer.byteLength(svg), svgSha256: createHash('sha256').update(svg).digest('hex') });
+      }
       evidence.rendered = rendered;
       evidence.requestedLazyUiChunks = requestedLazyUiChunks;
       evidence.browser = { name: 'Chromium', version: browser.version(), executablePath: executablePath ?? 'Playwright bundled Chromium' };
