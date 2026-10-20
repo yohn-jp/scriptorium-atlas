@@ -469,6 +469,19 @@ async function run() {
     for (const node of movedNodes) assert.ok(pinsAfterLayouts.some((pin) => pin.nodeId === node.id), `Every layout mode should preserve the pin for ${node.id}.`);
     report.cases.push('force-layered-timeline-manual-layouts-preserve-pins');
 
+    await atlas.getByLabel('ノードの種類').selectOption('story.character');
+    await atlas.getByLabel('Providerで絞り込む').selectOption('scriptorium.story-knowledge');
+    const savedBoardFilter = atlas.getByLabel('ボード内を絞り込む');
+    await savedBoardFilter.fill(firstName);
+    await savedBoardFilter.press('Tab');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    const savedGraphFilter = board.views.find((view) => view.kind === 'graph')?.filter;
+    assert.deepEqual(savedGraphFilter?.kinds, ['story.character']);
+    assert.deepEqual(savedGraphFilter?.providers, ['scriptorium.story-knowledge']);
+    assert.equal(savedGraphFilter?.query, firstName);
+    report.cases.push('graph-kind-provider-and-query-filters-persist-in-board-document');
+
     const secondBoardName = `Secondary board ${randomUUID().slice(0, 5)}`;
     await atlas.getByRole('button', { name: '＋ 新しいボード' }).click();
     await atlas.getByLabel('ボード名').waitFor({ state: 'visible' });
@@ -482,7 +495,7 @@ async function run() {
     const nav = atlas.getByRole('navigation', { name: 'Atlasボード' });
     await nav.getByRole('button').filter({ hasText: secondBoardName }).click();
     assert.equal((await downloadBoard(page, atlas)).nodes.filter((node) => node.label === 'Secondary board node').length, 1);
-    const firstBoardNav = nav.getByRole('button').first();
+    const firstBoardNav = nav.getByRole('button').filter({ hasText: firstBoardName });
     await firstBoardNav.click();
     board = await downloadBoard(page, atlas);
     assert.ok(board.nodes.some((node) => node.id === firstNode.id), 'Switching back to the first board should retain its provider nodes.');
@@ -496,12 +509,21 @@ async function run() {
     const reloadedFirstBoard = reloadedNav.getByRole('button').filter({ hasText: firstBoardName });
     await reloadedFirstBoard.waitFor({ state: 'visible' });
     await reloadedFirstBoard.click();
-    await reloadedAtlas.getByRole('tab', { name: /グラフ/u }).waitFor({ state: 'visible' });
+    const reloadedGraphTab = reloadedAtlas.getByRole('tab', { name: /グラフ/u });
+    await reloadedGraphTab.waitFor({ state: 'visible' });
+    await reloadedGraphTab.click();
+    await reloadedAtlas.getByLabel('ボード内を絞り込む').waitFor({ state: 'visible' });
+    assert.equal(await reloadedAtlas.getByLabel('ボード内を絞り込む').inputValue(), firstName, 'Board filter query should restore after Host reload.');
+    assert.deepEqual(await reloadedAtlas.getByLabel('ノードの種類').locator('option:checked').evaluateAll((options) => options.map((option) => option.value)), ['story.character']);
     const reloadedBoard = await downloadBoard(page, reloadedAtlas);
     assert.ok(reloadedBoard.nodes.some((node) => node.id === firstNode.id), 'Host reload should retain provider node identities.');
-    assert.ok(reloadedBoard.views.find((view) => view.kind === 'graph')?.pins?.length, 'Host reload should restore graph pins.');
-    assert.ok(reloadedBoard.views.find((view) => view.kind === 'graph')?.viewport, 'Host reload should restore the graph viewport.');
-    report.cases.push('host-reload-restores-graph-pin-viewport-and-provider-references');
+    const reloadedGraphView = reloadedBoard.views.find((view) => view.kind === 'graph');
+    assert.ok(reloadedGraphView?.pins?.length, 'Host reload should restore graph pins.');
+    assert.ok(reloadedGraphView?.viewport, 'Host reload should restore the graph viewport.');
+    assert.deepEqual(reloadedGraphView?.filter?.kinds, ['story.character']);
+    assert.deepEqual(reloadedGraphView?.filter?.providers, ['scriptorium.story-knowledge']);
+    assert.equal(reloadedGraphView?.filter?.query, firstName);
+    report.cases.push('host-reload-restores-graph-pin-viewport-filter-and-provider-references');
 
     assert.deepEqual(dialogs, [], 'Graph flows should not depend on sandbox-blocked native dialogs.');
     assert.deepEqual(pageErrors, [], 'Graph interaction flow must not throw uncaught page errors.');
