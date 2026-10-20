@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { zipSync } from 'fflate';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const seed = 'atlas-v1-perf-20261021';
 const STORY_PROVIDER_ID = 'scriptorium.story-knowledge';
 
@@ -39,6 +38,59 @@ function sha256(bytes) {
 
 function arrayBuffer(bytes) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function stableJson(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Non-finite values cannot be serialized into a bundle manifest.');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const object = value;
+    const keys = Object.keys(object).filter(key => object[key] !== undefined).sort(compareStrings);
+    return `{${keys.map(key => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`;
+  }
+  throw new Error('Unsupported value in deterministic bundle manifest.');
+}
+
+function compareStrings(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function sortedInventory(records) {
+  return [...records].sort((left, right) => compareStrings(left.path, right.path));
+}
+
+function workspaceRevision(records) {
+  const inventory = sortedInventory(records).map(record => [record.path, record.revision]);
+  return sha256(Buffer.from(stableJson(inventory), 'utf8'));
+}
+
+function createBundleArchive(records, workspaceId, name, sourceRevision) {
+  const sortedRecords = sortedInventory(records);
+  const manifest = {
+    schema: 'atlas.bundle/v1',
+    workspaceId,
+    name,
+    sourceRevision,
+    files: sortedRecords.map(file => ({ path: file.path, sha256: file.revision, bytes: file.bytes.byteLength }))
+  };
+  const manifestBytes = Buffer.from(`${stableJson(manifest)}\n`, 'utf8');
+  const entryCount = sortedRecords.length + 1;
+  const expandedBytes = sortedRecords.reduce((total, file) => total + file.bytes.byteLength, manifestBytes.byteLength);
+  if (entryCount > 100_000) throw new Error('Performance dataset exceeds the 100,000-entry bundle limit including manifest.json.');
+  if (expandedBytes > 256 * 1024 * 1024) throw new Error('Performance dataset exceeds the 256 MiB expanded bundle limit including manifest.json.');
+
+  const entries = Object.create(null);
+  entries['manifest.json'] = [new Uint8Array(manifestBytes), { os: 3, attrs: 0o100644 << 16 }];
+  for (const file of sortedRecords) {
+    entries[`workspace/${file.path}`] = [new Uint8Array(file.bytes), { os: 3, attrs: 0o100644 << 16 }];
+  }
+  const archive = zipSync(entries, { level: 6, mtime: new Date('1980-01-01T00:00:00.000Z'), os: 3 });
+  if (archive.byteLength > 512 * 1024 * 1024) throw new Error('Performance dataset exceeds the 512 MiB compressed archive limit.');
+  return { archive: Buffer.from(archive), manifestBytes, entryCount, expandedBytes };
 }
 
 function deterministicBoard({ nodeCount, edgeCount, cardCount }) {
@@ -92,13 +144,6 @@ function deterministicBoard({ nodeCount, edgeCount, cardCount }) {
 
 async function main() {
   const options = optionsFrom(process.argv.slice(2));
-  const persistenceModule = resolve(repoRoot, 'packages/persistence/dist/bundle.js');
-  try {
-    await stat(persistenceModule);
-  } catch {
-    throw new Error('Production persistence build is missing. Run the workspace build before generating measured bundles.');
-  }
-  const { createBundle, workspaceRevision } = await import(`file://${persistenceModule}`);
   const records = [];
   const encoder = new TextEncoder();
   const degree = options.nodes ? options.edges / options.nodes : 0;
@@ -145,16 +190,12 @@ async function main() {
     });
   }
 
-  const sourceRevision = await workspaceRevision(records);
-  const archive = Buffer.from(await (await createBundle({
-    workspaceId: 'perf-workspace-v1',
-    name: `Atlas deterministic performance dataset ${options.nodes}/${options.edges}`,
-    sourceRevision,
-    files: records,
-  })).arrayBuffer());
+  const workspaceId = 'perf-workspace-v1';
+  const name = `Atlas deterministic performance dataset ${options.nodes}/${options.edges}`;
+  const sourceRevision = workspaceRevision(records);
+  const { archive, manifestBytes, entryCount, expandedBytes } = createBundleArchive(records, workspaceId, name, sourceRevision);
   await mkdir(dirname(options.output), { recursive: true });
   await writeFile(options.output, archive);
-  const expandedBytes = records.reduce((total, file) => total + file.bytes.byteLength, 0);
   const report = {
     schemaVersion: 'atlas.performance-dataset/v1',
     seed,
@@ -166,8 +207,11 @@ async function main() {
     canvasCards: options.cards,
     sourceFileCount: options.nodes,
     payloadFileCount: records.length,
-    bundleEntryCountIncludingManifest: records.length + 1,
-    payloadBytes: expandedBytes,
+    bundleEntryCountIncludingManifest: entryCount,
+    payloadBytes: expandedBytes - manifestBytes.byteLength,
+    manifestBytes: manifestBytes.byteLength,
+    manifestSha256: sha256(manifestBytes),
+    expandedBytesIncludingManifest: expandedBytes,
     archiveBytes: archive.byteLength,
     archiveSha256: sha256(archive),
     workspaceSourceRevision: sourceRevision,
