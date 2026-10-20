@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 const hostRoot = process.env.ATLAS_HOST_ROOT;
 if (!hostRoot) throw new Error('Set ATLAS_HOST_ROOT to the Host checkout containing dist/atlas and apps/standalone/scripts/serve.mjs.');
@@ -95,6 +96,31 @@ async function commitAtlasUntilClean(page, atlas) {
   assert.fail(`Atlas did not become clean: ${await atlas.locator('.atlas-save-indicator').textContent()}`);
 }
 
+async function commitAtlasUntilStable(page, atlas) {
+  const proposalSelector = 'section[aria-label="変更の承認"] article';
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (await page.locator(proposalSelector).count()) {
+      await commitPending(page);
+      continue;
+    }
+    const saveState = await atlas.locator('.atlas-save-indicator').textContent();
+    if (!saveState?.includes('Hostの基準状態')) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      continue;
+    }
+    const firstBoard = await downloadBoard(page, atlas);
+    const firstScene = await downloadScene(page, atlas);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1200));
+    if (await page.locator(proposalSelector).count()) continue;
+    if (!(await atlas.locator('.atlas-save-indicator').textContent())?.includes('Hostの基準状態')) continue;
+    const stableBoard = await downloadBoard(page, atlas);
+    const stableScene = await downloadScene(page, atlas);
+    if (!isDeepStrictEqual(firstBoard, stableBoard) || !firstScene.equals(stableScene)) continue;
+    return { board: stableBoard, scene: stableScene };
+  }
+  assert.fail(`Atlas did not reach a stable Host-committed Board and scene: ${await atlas.locator('.atlas-save-indicator').textContent()}`);
+}
+
 async function downloadBoard(page, atlas) {
   const downloadPromise = page.waitForEvent('download');
   await atlas.getByRole('button', { name: '.atlas.jsonをエクスポート' }).click();
@@ -116,6 +142,13 @@ async function renameActiveView(atlas, name) {
   await input.fill(name);
   await input.press('Enter');
   await atlas.getByRole('tab', { name: new RegExp(name, 'u') }).waitFor({ state: 'visible' });
+}
+
+async function renameActiveBoard(atlas, name) {
+  const input = atlas.getByLabel('ボード名');
+  await input.fill(name);
+  await input.press('Enter');
+  await atlas.getByRole('button', { name: new RegExp(name, 'u') }).waitFor({ state: 'visible' });
 }
 
 async function selectView(atlas, name) {
@@ -207,6 +240,13 @@ async function run() {
     await atlas.getByRole('button', { name: 'ボードを作成', exact: true }).click();
     await atlas.getByLabel('ボード名').waitFor({ state: 'visible' });
     await commitAtlasUntilClean(page, atlas);
+    await renameActiveBoard(atlas, 'Viewport Board A');
+    await commitAtlasUntilClean(page, atlas);
+    await atlas.getByRole('button', { name: '＋ 新しいボード' }).click();
+    await atlas.getByLabel('ボード名').waitFor({ state: 'visible' });
+    await renameActiveBoard(atlas, 'Viewport Board B');
+    await commitAtlasUntilClean(page, atlas);
+    await atlas.getByRole('button', { name: /Viewport Board A/u }).click();
     await atlas.getByLabel('ビューを追加').selectOption('freeform');
     await renameActiveView(atlas, 'Viewport B');
     const freeformTabs = atlas.getByRole('tab', { name: /キャンバス/u });
@@ -244,13 +284,26 @@ async function run() {
     await pan(page, atlas, 74, 46);
     await page.waitForTimeout(600);
     const changedA = await downloadBoard(page, atlas);
-    const viewportA = changedA.views.find((view) => view.id === viewAId)?.viewport;
+    let viewportA = changedA.views.find((view) => view.id === viewAId)?.viewport;
     assert.ok(viewportA && viewportA.zoom > (initialViewports.get(viewAId)?.zoom ?? 1), 'Canvas zoom should be saved to the active Atlas view.');
     assert.ok(viewportA && (viewportA.x !== initialViewports.get(viewAId)?.x || viewportA.y !== initialViewports.get(viewAId)?.y),
       'A physical Canvas pan should update the active Atlas view viewport.');
-    const offsetA = await cardOffset(atlas);
+    let offsetA = await cardOffset(atlas);
     assert.deepEqual(await downloadScene(page, atlas), originalScene,
       'Pan and zoom should update only the Atlas Board viewport; the separate Excalidraw scene bytes must remain unchanged.');
+    await pan(page, atlas, -42, 34);
+    await atlas.getByRole('button', { name: /Viewport Board B/u }).click();
+    await atlas.getByRole('button', { name: /Viewport Board A/u }).click();
+    await selectView(atlas, 'Viewport A');
+    const afterBoardSwitch = await downloadBoard(page, atlas);
+    const switchedViewportA = afterBoardSwitch.views.find((view) => view.id === viewAId)?.viewport;
+    assert.ok(switchedViewportA && viewportA && (switchedViewportA.x !== viewportA.x || switchedViewportA.y !== viewportA.y),
+      'A pending Canvas pan must flush into its original Board when switching to another Board.');
+    viewportA = switchedViewportA;
+    offsetA = await cardOffset(atlas);
+    assert.deepEqual(await downloadScene(page, atlas), originalScene,
+      'Switching Boards while a Canvas pan is pending must leave the original Excalidraw scene unchanged.');
+    report.cases.push('pending-pan-flushes-to-original-board-on-board-switch');
 
     await selectView(atlas, 'Viewport B');
     const beforeB = await downloadBoard(page, atlas);
@@ -277,8 +330,7 @@ async function run() {
       'Viewport state for a second Canvas view must not be written into the shared Excalidraw scene.');
     report.cases.push('physical-pan-and-zoom-persist-independently-per-freeform-view');
 
-    await commitAtlasUntilClean(page, atlas);
-    const committed = await downloadBoard(page, atlas);
+    const { board: committed, scene: committedScene } = await commitAtlasUntilStable(page, atlas);
     const committedA = committed.views.find((view) => view.id === viewAId)?.viewport;
     const committedB = committed.views.find((view) => view.id === viewBId)?.viewport;
     assert.deepEqual(committedA, viewportA, 'The Host proposal must contain the exact first view viewport.');
@@ -287,10 +339,13 @@ async function run() {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByLabel('開く').selectOption({ label: workspaceName });
     const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
+    await reloadedAtlas.getByRole('button', { name: /Viewport Board A/u }).click();
     await reloadedAtlas.getByRole('tab', { name: /Viewport A/u }).waitFor({ state: 'visible' });
     await selectView(reloadedAtlas, 'Viewport A');
     const restoredOffsetA = await cardOffset(reloadedAtlas);
     const reloadedBoardA = await downloadBoard(page, reloadedAtlas);
+    assert.deepEqual(reloadedBoardA, committed, 'Reload should expose the exact Board content acknowledged by Host, including its latest viewport proposal.');
+    assert.deepEqual(await downloadScene(page, reloadedAtlas), committedScene, 'Reload should retain the exact separately committed Excalidraw scene bytes.');
     assert.deepEqual(reloadedBoardA.views.find((view) => view.id === viewAId)?.viewport, committedA,
       'Host reload should restore the exact first Atlas viewport.');
     assert.deepEqual(restoredOffsetA, offsetA, 'Host reload should restore the first Canvas camera over the same card positions.');

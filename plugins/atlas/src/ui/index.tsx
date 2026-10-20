@@ -1298,6 +1298,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
             />}
             {activeView?.kind === 'freeform' && <div className="atlas-canvas-shell">
               {activeSession.sceneError ? <div className="atlas-scene-readonly"><p>{activeSession.sceneError}</p>{activeSession.sceneText === null ? <p>生シーンを読み込めません。対応するシーンをインポートして置き換えてください。</p> : <pre>{activeSession.sceneText.slice(0, 6000)}</pre>}</div> : activeSession.sceneText === null ? <div className="atlas-loading" role="status">Canvasを読み込んでいます…</div> : <FreeformView
+                key={activeSession.board.boardId}
                 board={activeSession.board}
                 view={activeView}
                 sceneText={activeSession.sceneText}
