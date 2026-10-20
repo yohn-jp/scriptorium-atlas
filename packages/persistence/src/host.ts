@@ -897,10 +897,17 @@ async function prepareProposal(
     if (staged.bytes.byteLength !== upload.totalBytes || await sha256(staged.bytes) !== upload.sha256) {
       fail('INVALID_INPUT', 'Staged asset bytes do not match the declared upload size and hash.');
     }
-    if (inferContentType(upload.path, staged.bytes) !== upload.contentType) {
-      fail('INVALID_INPUT', 'Staged image bytes do not match the declared safe content type.', { path: upload.path });
+    const inferredContentType = inferContentType(upload.path, staged.bytes);
+    let stagedContentType = upload.contentType;
+    if (upload.path.toLowerCase().endsWith('.svg')) {
+      if (upload.contentType !== 'image/svg+xml' && upload.contentType !== 'application/octet-stream') {
+        fail('INVALID_INPUT', 'SVG asset content type must be image/svg+xml or application/octet-stream.', { path: upload.path });
+      }
+      if (inferredContentType === 'application/octet-stream') stagedContentType = inferredContentType;
+    } else if (inferredContentType !== upload.contentType) {
+      fail('INVALID_INPUT', 'Staged image bytes do not match the declared content type.', { path: upload.path });
     }
-    await createWrite(upload.path, bytesToBase64(staged.bytes), 'base64', upload.contentType);
+    await createWrite(upload.path, bytesToBase64(staged.bytes), 'base64', stagedContentType);
   }
 
   const nextInventory = projectInventory(snapshot.inventory, writes);
@@ -1515,7 +1522,11 @@ function validateAssetStart(handle: WorkspaceHandle, asset: AssetUploadStart): A
   if (!Number.isSafeInteger(asset.totalBytes) || asset.totalBytes < 1 || asset.totalBytes > 10 * 1024 * 1024) {
     fail('INVALID_INPUT', 'Staged assets must contain between 1 byte and 10 MiB.');
   }
-  if (!/\.(?:png|jpe?g|webp|svg)$/iu.test(path) || !/^image\/[a-z0-9.+-]+$/iu.test(asset.contentType) || asset.contentType.length > 128) {
+  const isSvg = path.toLowerCase().endsWith('.svg');
+  const validContentType = isSvg
+    ? asset.contentType === 'image/svg+xml' || asset.contentType === 'application/octet-stream'
+    : /^image\/[a-z0-9.+-]+$/iu.test(asset.contentType);
+  if (!/\.(?:png|jpe?g|webp|svg)$/iu.test(path) || !validContentType || asset.contentType.length > 128) {
     fail('INVALID_INPUT', 'Staged asset uploads are limited to image files with an image content type.', { path });
   }
   validateFileSize(path, asset.totalBytes);

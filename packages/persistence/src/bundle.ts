@@ -2,6 +2,7 @@ import { Unzip, UnzipInflate, UnzipPassThrough, zipSync, type Zippable } from 'f
 import { assertBoardIntegrity } from '@scriptorium-atlas/contracts';
 import type { FileRecord } from './model.js';
 import { base64ToBytes, compareStrings, copyBytes, decodeUtf8, sha256, stableJson, utf8Bytes } from './bytes.js';
+import { svgContentType } from './svg.js';
 import { fail } from './errors.js';
 import { caseFoldPath, validateRelativePath, validateWorkspaceId, validateWorkspaceName, validateWorkspacePayloadPath } from './path.js';
 
@@ -287,7 +288,7 @@ export function inferContentType(path: string, bytes?: Uint8Array): string {
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
   if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.svg')) return bytes && isSafeSvg(bytes) ? 'image/svg+xml' : 'application/octet-stream';
+  if (lower.endsWith('.svg')) return svgContentType(bytes);
   return 'application/octet-stream';
 }
 
@@ -306,28 +307,6 @@ function isTextPath(path: string): boolean {
 
 function isImagePath(path: string): boolean {
   return /\.(?:png|jpe?g|webp|svg)$/i.test(path);
-}
-
-function isSafeSvg(bytes: Uint8Array): boolean {
-  const content = decodeUtf8(bytes);
-  if (content === undefined || typeof DOMParser === 'undefined') return false;
-  try {
-    const document = new DOMParser().parseFromString(content, 'image/svg+xml');
-    const root = document.documentElement;
-    if (root.localName.toLowerCase() !== 'svg' || document.querySelector('parsererror, script, foreignObject')) return false;
-    for (const element of Array.from(document.querySelectorAll('*'))) {
-      for (const attribute of Array.from(element.attributes)) {
-        const name = attribute.name.toLowerCase();
-        const value = attribute.value.trim();
-        if (name.startsWith('on')) return false;
-        if ((name === 'href' || name === 'xlink:href' || name === 'src') && value !== '' && !value.startsWith('#')) return false;
-        if (/(?:url\s*\(\s*(?!['"]?#)|@import)/iu.test(value)) return false;
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function validateKnownDocument(path: string, bytes: Uint8Array): void {

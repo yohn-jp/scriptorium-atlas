@@ -13,3 +13,5 @@ Host-owned IndexedDB storage and deterministic Atlas Board serialization for the
 ## Byte helpers
 
 `@scriptorium-atlas/persistence/bytes` exports the storage implementation's SHA-256, UTF-8, base64, and stable JSON helpers for Host components that need the same byte rules.
+
+Run `npm run typecheck` and `npm test` from this package for its static and unit checks. `npm run test:browser` builds the package and exercises SVG classification with Chromium through Playwright.
