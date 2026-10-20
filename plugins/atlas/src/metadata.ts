@@ -1,11 +1,17 @@
 import descriptor from './manifest.json' with { type: 'json' };
 import type { PluginDescriptor } from '@scriptorium-atlas/contracts';
 
+function isPluginDescriptor(value: unknown): value is PluginDescriptor {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.schema === 'atlas.plugin/v1'
+    && typeof candidate.id === 'string'
+    && typeof candidate.version === 'string'
+    && Array.isArray(candidate.provides) && candidate.provides.every((item) => typeof item === 'string')
+    && Array.isArray(candidate.requires) && candidate.requires.every((item) => typeof item === 'string');
+}
+
+if (!isPluginDescriptor(descriptor)) throw new Error('Invalid Atlas plugin manifest metadata.');
+
 /** Lightweight plugin metadata entry. UI and graph dependencies are separate exports. */
-export const pluginDescriptor: PluginDescriptor = {
-  schema: 'atlas.plugin/v1',
-  id: descriptor.id,
-  version: descriptor.version,
-  provides: descriptor.provides,
-  requires: descriptor.requires,
-};
+export const pluginDescriptor = descriptor;
