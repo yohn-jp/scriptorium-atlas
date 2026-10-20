@@ -107,8 +107,16 @@ async function openHostSourcePanel(page) {
 }
 
 async function waitForEntity(story, name) {
-  const item = story.getByRole("option").filter({ hasText: name }).first();
-  await item.waitFor({ state: "visible" });
+  const listbox = story.getByRole("listbox", { name: "Story項目" });
+  const item = listbox.getByRole("option").filter({ hasText: name }).first();
+  try {
+    await item.waitFor({ state: "visible" });
+  } catch (error) {
+    const currentOptions = await listbox.getByRole("option").allInnerTexts().catch(() => []);
+    const type = await story.locator('aside[aria-label="Storyエンティティ一覧"]').getByLabel("種類").inputValue().catch(() => "unavailable");
+    const query = await story.locator('aside[aria-label="Storyエンティティ一覧"]').getByLabel("検索").inputValue().catch(() => "unavailable");
+    throw new Error(`Story entity '${name}' was not visible. Filter=${type}, query=${JSON.stringify(query)}, options=${JSON.stringify(currentOptions)}`, { cause: error });
+  }
   return item;
 }
 
@@ -196,6 +204,7 @@ async function createEntity(page, story, { type, name, volumeName, chapterName, 
 async function chooseEntity(story, name, type) {
   await story.getByRole("button", { name: "ライブラリ", exact: true }).click();
   const library = story.locator('aside[aria-label="Storyエンティティ一覧"]');
+  await library.getByLabel("検索").fill("");
   await library.getByLabel("種類").selectOption(type ?? "all");
   const item = await waitForEntity(story, name);
   await item.click();
@@ -228,8 +237,7 @@ async function editTimelineField(page, story, entityName, field, value) {
   const detail = await chooseEntity(story, entityName, "event");
   const additionalFields = detail.locator("details").filter({ hasText: "Sourceのその他のフィールド" });
   await additionalFields.locator("summary").click();
-  const fieldRow = additionalFields.locator("tbody tr").filter({ has: additionalFields.getByRole("cell", { name: field, exact: true }) });
-  await fieldRow.getByRole("button", { name: "編集", exact: true }).click();
+  await additionalFields.getByLabel("Field名").fill(field);
   await additionalFields.getByLabel("JSON値").fill(JSON.stringify(value));
   await additionalFields.getByRole("button", { name: "Field編集案を作成" }).click();
   await submitPreview(page, story, `「${field}」を編集`);
@@ -252,7 +260,7 @@ async function deleteEntity(page, story, entityName, type) {
   await preview(story).waitFor({ state: "visible" });
   await submitPreview(page, story, entityName);
   const library = story.locator('aside[aria-label="Storyエンティティ一覧"]');
-  await library.getByRole("option").filter({ hasText: entityName }).first().waitFor({ state: "detached" });
+  await library.getByRole("listbox", { name: "Story項目" }).getByRole("option").filter({ hasText: entityName }).first().waitFor({ state: "detached" });
 }
 
 async function editEntityName(page, story, entityName, nextName, type) {
@@ -272,7 +280,7 @@ async function createHostSource(page, story, path, content) {
   await openHostSourcePanel(page);
   await page.getByLabel("相対Path").fill(path);
   await openHostSourcePanel(page);
-  await page.getByLabel("Source").fill(content);
+  await page.getByLabel("Source", { exact: true }).fill(content);
   await page.getByRole("button", { name: "変更案を耐久記録して確認" }).click();
   const proposal = page.locator('section[aria-label="変更の承認"] article').last();
   await proposal.waitFor({ state: "visible" });
@@ -305,6 +313,7 @@ async function runAcceptance({ browser, baseUrl }) {
     volume: `${prefix} 第一巻`,
     chapter: `${prefix} 第一章`,
     scene: `${prefix} 第一場面`,
+    sceneManuscript: `${prefix} 第一場面`,
     manuscript: `${prefix} 独立原稿`,
     laterEvent: `${prefix} 後の出来事`,
   };
@@ -499,13 +508,18 @@ async function runAcceptance({ browser, baseUrl }) {
     const sceneDetail = reloadedStory.locator("article.card").filter({ has: reloadedStory.getByRole("heading", { name: `場面: ${names.scene}`, exact: true }) });
     await sceneDetail.waitFor({ state: "visible" });
     await sceneDetail.getByRole("button", { name: "Sourceを開く", exact: true }).click();
-    const hostSource = page.getByLabel("Source");
+    const hostSource = page.getByLabel("Source", { exact: true });
     const sceneYaml = await waitForValue(hostSource, (value) => value.includes(names.scene), "Host should navigate to the scene YAML source.");
     const manuscriptPathMatch = /^manuscript:\s*(.+)$/mu.exec(sceneYaml);
     assert.ok(manuscriptPathMatch?.[1], "Scene YAML must identify its paired manuscript path.");
     const manuscriptPath = manuscriptPathMatch[1].trim().replace(/^['"]|['"]$/gu, "");
     await page.getByRole("button", { name: manuscriptPath, exact: true }).click();
-    const manuscriptSource = await waitForValue(hostSource, (value) => value.includes(`受入テスト本文: ${names.scene}`), "Host should open the scene's paired manuscript.");
+    const originalSceneName = names.scene.replace(/ 編集$/u, "");
+    const manuscriptSource = await waitForValue(
+      hostSource,
+      (value) => value.includes("type: manuscript") && value.includes(`受入テスト本文: ${originalSceneName}`),
+      "Host should open the scene's paired manuscript.",
+    );
     evidence.cases.push({
       id: "scene-hierarchy-navigation-and-host-source-open",
       status: "PASS",
@@ -527,7 +541,7 @@ async function runAcceptance({ browser, baseUrl }) {
     const updatedEventRow = timeline.locator("tbody tr").filter({ hasText: names.event });
     await openHostSourcePanel(page);
     await updatedEventRow.getByRole("button", { name: /bible\/timeline\/events\//u }).click();
-    const updatedEventSource = await waitForValue(page.getByLabel("Source"), (value) => value.includes("2042-05-30"), "Timeline Source navigation must open the committed Event YAML.");
+    const updatedEventSource = await waitForValue(page.getByLabel("Source", { exact: true }), (value) => value.includes("2042-05-30"), "Timeline Source navigation must open the committed Event YAML.");
     evidence.cases.push({
       id: "explicit-timeline-date-order-edit-and-reload",
       status: "PASS",
@@ -536,6 +550,7 @@ async function runAcceptance({ browser, baseUrl }) {
 
     await reloadedStory.getByRole("button", { name: "ライブラリ", exact: true }).click();
     const library = reloadedStory.locator('aside[aria-label="Storyエンティティ一覧"]');
+    const entityOptions = library.getByRole("listbox", { name: "Story項目" }).getByRole("option");
     const searchInput = library.getByLabel("検索");
     const typeFilter = library.getByLabel("種類");
     const searchableTypes = [];
@@ -543,9 +558,9 @@ async function runAcceptance({ browser, baseUrl }) {
       const query = type === "location" ? names.storyLocation : names[type];
       await typeFilter.selectOption(type);
       await searchInput.fill(query);
-      const matches = library.getByRole("option").filter({ hasText: query });
+      const matches = entityOptions.filter({ hasText: query });
       await matches.first().waitFor({ state: "visible" });
-      assert.equal(await library.getByRole("option").count(), 1, `Search by display name and ${type} type should return exactly one match.`);
+      assert.equal(await entityOptions.count(), 1, `Search by display name and ${type} type should return exactly one match.`);
       searchableTypes.push(type);
     }
     await typeFilter.selectOption("all");
@@ -562,7 +577,7 @@ async function runAcceptance({ browser, baseUrl }) {
     for (const [type, entityName] of [
       ["thread", names.thread],
       ["scene", names.scene],
-      ["manuscript", names.scene],
+      ["manuscript", names.sceneManuscript],
       ["manuscript", names.manuscript],
       ["chapter", names.chapter],
       ["volume", names.volume],
@@ -614,10 +629,8 @@ async function runAcceptance({ browser, baseUrl }) {
     const storyMain = reloadedStory.locator("main.story-knowledge");
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileSearch = reloadedStory.locator('aside[aria-label="Storyエンティティ一覧"]').getByLabel("検索");
-    await mobileSearch.fill(names.normal);
-    const mobileRow = await waitForEntity(reloadedStory, names.normal);
-    await mobileRow.click();
-    const mobileNameInput = storyMain.getByLabel("表示名");
+    const mobileDetail = await chooseEntity(reloadedStory, names.normal);
+    const mobileNameInput = mobileDetail.getByLabel("表示名");
     await mobileNameInput.waitFor({ state: "visible" });
     const mobileLayout = await storyMain.evaluate((element) => ({
       viewport: document.documentElement.clientWidth,
