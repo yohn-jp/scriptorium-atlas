@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openIndexedDbHost } from '../src/host.js';
+import { openIndexedDbHost, validateRelativePath } from '../src/host.js';
 import { sha256, bytesToBase64, copyArrayBuffer, utf8Bytes } from '../src/bytes.js';
 import { workspaceRevision } from '../src/bundle.js';
 
@@ -37,6 +37,11 @@ afterEach(() => {
 });
 
 describe('IndexedDB Host persistence', () => {
+  it('exports the canonical relative-path validator from the Host entry', () => {
+    expect(validateRelativePath('provider/source.yaml')).toBe('provider/source.yaml');
+    expect(() => validateRelativePath('../outside.yaml')).toThrowError();
+  });
+
   it('durably prepares a full review, requires author approval, and commits idempotently', async () => {
     const host = await open();
     const workspace = await host.createWorkspace({ name: 'Draft' });

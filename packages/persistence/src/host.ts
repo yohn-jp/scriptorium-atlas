@@ -41,6 +41,7 @@ import {
   validateWorkspaceId,
   validateWorkspaceName
 } from './path.js';
+export { validateRelativePath };
 import {
   createBundle,
   inferContentType,
