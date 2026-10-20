@@ -111,6 +111,11 @@ async function downloadBoard(page, atlas) {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
+function laneLabelsInOrder(view) {
+  const labelsById = new Map(view.lanes.map((lane) => [lane.id, lane.label]));
+  return view.laneIds.map((id) => labelsById.get(id));
+}
+
 function makeViewFixture(board) {
   board.name = 'Q07 Structured Acceptance';
   const nodeId = 'q07-node-clock';
@@ -238,7 +243,7 @@ async function run() {
     const committedBoard = committed.views.find((view) => view.kind === 'board');
     const committedTimeline = committed.views.find((view) => view.kind === 'timeline');
     const committedStory = committed.views.find((view) => view.kind === 'storyboard');
-    assert.deepEqual(committedBoard.lanes.map((lane) => lane.label), ['未割り当て', '準備', '進行中', 'レビュー', '完了']);
+    assert.deepEqual(laneLabelsInOrder(committedBoard), ['未割り当て', '準備', '進行中', 'レビュー', '完了']);
     assert.deepEqual(committedBoard.lanes.find((lane) => lane.label === '未割り当て').cardIds, [fixture.cardBId]);
     assert.deepEqual(committedBoard.lanes.find((lane) => lane.label === '準備').cardIds, [fixture.cardAId]);
     assert.equal(committedTimeline.axis, 'story.scene-order');
@@ -258,7 +263,7 @@ async function run() {
     assert.equal(reloadedTimeline.axis, 'story.scene-order');
     assert.ok(reloadedTimeline.timeline.entries.every((entry) => entry.value === null));
     assert.deepEqual(reloadedStory.cardOrder, [fixture.cardBId, fixture.cardAId]);
-    assert.deepEqual(reloadedKanban.lanes.map((lane) => lane.label), ['未割り当て', '準備', '進行中', 'レビュー', '完了']);
+    assert.deepEqual(laneLabelsInOrder(reloadedKanban), ['未割り当て', '準備', '進行中', 'レビュー', '完了']);
     report.cases.push('reload-restores-kanban-timeline-and-storyboard-state');
 
     assert.deepEqual(dialogs, [], 'Structured view operations should not request native modal dialogs in the sandbox.');

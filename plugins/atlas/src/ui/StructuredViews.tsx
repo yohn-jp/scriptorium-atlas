@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { BoardDocument, BoardView, TimelineAxis } from '@scriptorium-atlas/contracts';
-import { applyAtlasCommand, createAtlasId } from '../commands/model.js';
+import { applyAtlasCommand, createAtlasId, orderedBoardLanes } from '../commands/model.js';
 
 export type StructuredViewsProps = {
   board: BoardDocument;
@@ -24,6 +24,8 @@ type InnerProps = {
   onOpenCard(cardId: string): void;
 };
 
+type KanbanProps = Omit<InnerProps, 'view'> & { view: Extract<BoardView, { kind: 'board' }> };
+
 function cardKindLabel(kind: BoardDocument['cards'][number]['kind']): string {
   switch (kind) {
     case 'text': return 'テキスト';
@@ -33,8 +35,8 @@ function cardKindLabel(kind: BoardDocument['cards'][number]['kind']): string {
   }
 }
 
-function KanbanView({ board, view, dispatch, onOpenCard }: InnerProps) {
-  const lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] as string[] }));
+function KanbanView({ board, view, dispatch, onOpenCard }: KanbanProps) {
+  const lanes = orderedBoardLanes(view);
   const cardsById = new Map(board.cards.map((card) => [card.id, card]));
 
   const saveLanes = (next: typeof lanes) => dispatch({ type: 'view.set-lanes', viewId: view.id, lanes: next });

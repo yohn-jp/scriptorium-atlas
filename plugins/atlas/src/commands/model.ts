@@ -8,6 +8,7 @@ import type {
 import { assertBoardIntegrity } from '@scriptorium-atlas/contracts';
 
 type BoardView = BoardDocument['views'][number];
+type BoardLane = NonNullable<Extract<BoardView, { kind: 'board' }>['lanes']>[number];
 type BoardCard = BoardDocument['cards'][number];
 type BoardNodePatch = {
   label?: string;
@@ -83,6 +84,18 @@ const fail = (code: ConstructorParameters<typeof AtlasCommandError>[0], message:
 };
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+export function orderedBoardLanes(view: Extract<BoardView, { kind: 'board' }>): BoardLane[] {
+  const lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] }));
+  if (!view.laneIds?.length) return [...lanes];
+  const byId = new Map(lanes.map((lane) => [lane.id, lane]));
+  const ordered = view.laneIds.flatMap((id) => {
+    const lane = byId.get(id);
+    return lane ? [lane] : [];
+  });
+  const orderedIds = new Set(view.laneIds);
+  return [...ordered, ...lanes.filter((lane) => !orderedIds.has(lane.id))];
+}
 
 const itemIndex = <T extends { id: string }>(items: T[], id: string, label: string): number => {
   const index = items.findIndex((item) => item.id === id);
@@ -347,7 +360,7 @@ export function applyAtlasCommand(input: BoardDocument, command: AtlasCommand): 
       }
       board.views = board.views.map((view) => {
         if (view.kind === 'board') {
-          let lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] }));
+          let lanes = orderedBoardLanes(view);
           if (lanes.length === 0) lanes = [{ id: 'lane-unassigned', label: 'Unassigned', cardIds: [] }];
           const unassignedIndex = lanes.findIndex((lane) => lane.id === 'lane-unassigned');
           const laneIndex = unassignedIndex >= 0 ? unassignedIndex : 0;
@@ -374,7 +387,7 @@ export function applyAtlasCommand(input: BoardDocument, command: AtlasCommand): 
       board.cards.push(duplicate);
       board.views = board.views.map((view) => {
         if (view.kind === 'board') {
-          let lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] }));
+          let lanes = orderedBoardLanes(view);
           if (lanes.length === 0) lanes = [{ id: 'lane-unassigned', label: 'Unassigned', cardIds: [] }];
           const sourceLane = lanes.find((lane) => lane.cardIds.includes(command.id)) ?? lanes[0]!;
           const updatedLanes = lanes.map((lane) => ({ ...lane, cardIds: [...lane.cardIds] }));
@@ -483,7 +496,7 @@ export function applyAtlasCommand(input: BoardDocument, command: AtlasCommand): 
       requireCard(board, command.cardId);
       updateView(board, command.viewId, (view) => {
         if (view.kind !== 'board') fail('INVALID_COMMAND', 'Cards can only be assigned to a board view.');
-        const lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] }));
+        const lanes = orderedBoardLanes(view);
         const laneIndex = lanes.findIndex((lane) => lane.id === command.laneId);
         if (laneIndex < 0) fail('ITEM_NOT_FOUND', `Lane \"${command.laneId}\" does not exist.`);
         const updated = lanes.map((lane) => ({
