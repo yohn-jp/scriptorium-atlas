@@ -183,7 +183,9 @@ async function run() {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByLabel('開く').selectOption({ label: workspaceName });
     const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
-    await reloadedAtlas.getByRole('tab', { name: /グラフ/u }).waitFor({ state: 'visible' });
+    const graphTab = reloadedAtlas.getByRole('tab', { name: /グラフ/u });
+    await graphTab.waitFor({ state: 'visible' });
+    await graphTab.click();
     const reloadedBoard = await downloadBoard(page, reloadedAtlas);
     const reloadedManualNodesData = reloadedBoard.nodes.filter((node) => node.origin === 'manual');
     assert.equal(reloadedManualNodesData.length, 2, `Host reload should restore both committed manual nodes; got ${JSON.stringify(reloadedManualNodesData)}.`);
