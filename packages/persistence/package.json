@@ -2,7 +2,7 @@
   "name": "@scriptorium-atlas/persistence",
   "version": "0.1.0",
   "license": "MIT",
-  "private": true,
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "exports": {

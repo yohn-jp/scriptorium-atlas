@@ -1,7 +1,7 @@
 {
   "name": "@scriptorium-atlas/canvas",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "sideEffects": [
     "./dist/ui/ExcalidrawEditor.js",
