@@ -21,6 +21,16 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 type AddKind = "rectangle" | "diamond" | "ellipse" | "arrow" | "freedraw" | "text";
 type GeometryDraft = Readonly<{ x: string; y: string; width: string; height: string }>;
 type Geometry = Readonly<{ x: number; y: number; width: number; height: number }>;
+type FreehandPoint = readonly [number, number];
+type NormalizedFreehand = Readonly<{
+  xOffset: number;
+  yOffset: number;
+  width: number;
+  height: number;
+  points: readonly FreehandPoint[];
+}>;
+
+const DEFAULT_FREEHAND_DRAFT = "0,0\n45,28\n90,8\n130,40";
 
 const CREATE_OPTIONS: ReadonlyArray<Readonly<{ value: AddKind; label: string }>> = [
   { value: "rectangle", label: "矩形" },
@@ -45,25 +55,57 @@ function activeElementsSignature(elements: readonly ExcalidrawElement[]): string
   ].join("\u001f")).join("\u001e");
 }
 
+function parseFreehandPointDraft(draft: string): FreehandPoint[] | null {
+  const lines = draft.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2 || lines.length > 256) return null;
+
+  const points: FreehandPoint[] = [];
+  for (const line of lines) {
+    const parts = line.split(/[\s,]+/);
+    if (parts.length !== 2 || parts.some((part) => !part)) return null;
+    const coordinates = parts.map(Number);
+    if (!coordinates.every((coordinate) => Number.isFinite(coordinate) && Math.abs(coordinate) <= 1_000_000)) {
+      return null;
+    }
+    points.push([coordinates[0], coordinates[1]]);
+  }
+  return points;
+}
+
+function normalizeFreehandPoints(points: readonly FreehandPoint[]): NormalizedFreehand {
+  const xOffset = Math.min(...points.map(([x]) => x));
+  const yOffset = Math.min(...points.map(([, y]) => y));
+  const maxX = Math.max(...points.map(([x]) => x));
+  const maxY = Math.max(...points.map(([, y]) => y));
+  return {
+    xOffset,
+    yOffset,
+    width: Math.max(1, maxX - xOffset),
+    height: Math.max(1, maxY - yOffset),
+    points: points.map(([x, y]) => [x - xOffset, y - yOffset]),
+  };
+}
+
+function freehandDraftFromElement(element: ExcalidrawFreeDrawElement): string {
+  return element.points.map(([x, y]) => `${x},${y}`).join("\n");
+}
+
 function makeFreehandElement(
   x: number,
   y: number,
   appState: ReturnType<ExcalidrawImperativeAPI["getAppState"]>,
+  inputPoints: readonly FreehandPoint[],
 ): ExcalidrawFreeDrawElement {
-  const points: ExcalidrawFreeDrawElement["points"] = [
-    [0, 0] as ExcalidrawFreeDrawElement["points"][number],
-    [45, 28] as ExcalidrawFreeDrawElement["points"][number],
-    [90, 8] as ExcalidrawFreeDrawElement["points"][number],
-    [130, 40] as ExcalidrawFreeDrawElement["points"][number],
-  ];
+  const normalized = normalizeFreehandPoints(inputPoints);
+  const points = normalized.points as ExcalidrawFreeDrawElement["points"];
 
   return {
     id: crypto.randomUUID(),
     type: "freedraw",
-    x,
-    y,
-    width: 130,
-    height: 40,
+    x: x + normalized.xOffset,
+    y: y + normalized.yOffset,
+    width: normalized.width,
+    height: normalized.height,
     points,
     pressures: points.map(() => 0.5),
     simulatePressure: true,
@@ -104,6 +146,7 @@ function createElement(
   x: number,
   y: number,
   text: string,
+  freehandPoints: readonly FreehandPoint[],
   api: ExcalidrawImperativeAPI,
 ): OrderedExcalidrawElement[] {
   let skeleton: ExcalidrawElementSkeleton;
@@ -117,7 +160,7 @@ function createElement(
       skeleton = makeArrowSkeleton(x, y);
       break;
     case "freedraw":
-      skeleton = makeFreehandElement(x, y, api.getAppState());
+      skeleton = makeFreehandElement(x, y, api.getAppState(), freehandPoints);
       break;
     case "text":
       skeleton = { type: "text", x, y, text };
@@ -162,6 +205,9 @@ function withGeometry(
       points: scaledPoints(element.points, scaleX, scaleY),
     }, true);
   }
+  if (element.type === "text") {
+    return newElementWith(element, { ...updates, autoResize: false }, true);
+  }
   return newElementWith(element, updates, true);
 }
 
@@ -204,6 +250,8 @@ export function KeyboardControls({
   );
   const [kind, setKind] = useState<AddKind>("rectangle");
   const [text, setText] = useState("テキスト");
+  const [freehandDraft, setFreehandDraft] = useState(DEFAULT_FREEHAND_DRAFT);
+  const [selectedFreehandDraft, setSelectedFreehandDraft] = useState(DEFAULT_FREEHAND_DRAFT);
   const [draft, setDraft] = useState<GeometryDraft>({ x: "0", y: "0", width: "100", height: "80" });
   const [status, setStatus] = useState("");
   const elementSignatureRef = useRef(activeElementsSignature(elements));
@@ -240,7 +288,12 @@ export function KeyboardControls({
     : "";
 
   useEffect(() => {
-    if (selectedElement) setDraft(geometryDraft(selectedElement));
+    if (selectedElement) {
+      setDraft(geometryDraft(selectedElement));
+      if (selectedElement.type === "freedraw") {
+        setSelectedFreehandDraft(freehandDraftFromElement(selectedElement));
+      }
+    }
   }, [selectedElementSignature]);
 
   const updateSelection = useCallback((ids: readonly string[]) => {
@@ -258,9 +311,14 @@ export function KeyboardControls({
   }, [api, elements]);
 
   const addElement = () => {
+    const freehandPoints = kind === "freedraw" ? parseFreehandPointDraft(freehandDraft) : [];
+    if (kind === "freedraw" && !freehandPoints) {
+      setStatus("フリーハンドは2〜256点のx,y座標を1行ずつ入力してください。");
+      return;
+    }
     const center = sceneCenter(api, canvasRoot);
     const offset = (elements.length % 7) * 24;
-    const created = createElement(kind, center.x + offset, center.y + offset, text, api);
+    const created = createElement(kind, center.x + offset, center.y + offset, text, freehandPoints ?? [], api);
     const allElements = api.getSceneElementsIncludingDeleted();
     const nextElements = [...allElements, ...created];
     api.updateScene({
@@ -288,6 +346,32 @@ export function KeyboardControls({
     );
     api.updateScene({ elements: nextElements, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
     setStatus("位置とサイズを更新しました。");
+  };
+
+  const applyFreehandPoints = () => {
+    if (!selectedElement || selectedElement.type !== "freedraw") return;
+    const points = parseFreehandPointDraft(selectedFreehandDraft);
+    if (!points) {
+      setStatus("フリーハンドは2〜256点のx,y座標を1行ずつ入力してください。");
+      return;
+    }
+
+    const normalized = normalizeFreehandPoints(points);
+    const pressures = normalized.points.map((_, index) => selectedElement.pressures[index] ?? 0.5);
+    const updated = newElementWith(selectedElement, {
+      x: selectedElement.x + normalized.xOffset,
+      y: selectedElement.y + normalized.yOffset,
+      width: normalized.width,
+      height: normalized.height,
+      points: normalized.points as ExcalidrawFreeDrawElement["points"],
+      pressures,
+    }, true);
+    const currentElements: readonly OrderedExcalidrawElement[] = api.getSceneElementsIncludingDeleted();
+    api.updateScene({
+      elements: currentElements.map((element) => element.id === updated.id ? updated : element),
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    setStatus("フリーハンドの点を更新しました。");
   };
 
   const groupSelection = () => {
@@ -331,6 +415,13 @@ export function KeyboardControls({
           <label>
             文字
             <input aria-label="追加する文字" value={text} onChange={(event) => setText(event.currentTarget.value)} />
+          </label>
+        )}
+        {kind === "freedraw" && (
+          <label className="atlas-canvas-accessibility-stack">
+            点（x,yを1行ずつ）
+            <textarea aria-label="追加するフリーハンド点" rows={4} value={freehandDraft}
+              onChange={(event) => setFreehandDraft(event.currentTarget.value)} />
           </label>
         )}
         <button type="button" onClick={addElement}>要素を追加</button>
@@ -400,8 +491,18 @@ export function KeyboardControls({
           <button type="button" onClick={applyGeometry}>位置とサイズを適用</button>
         </fieldset>
       )}
+      {selectedElement?.type === "freedraw" && (
+        <fieldset>
+          <legend>選択フリーハンドの点</legend>
+          <label className="atlas-canvas-accessibility-stack">
+            点（x,yを1行ずつ）
+            <textarea aria-label="選択フリーハンドの点" rows={4} value={selectedFreehandDraft}
+              onChange={(event) => setSelectedFreehandDraft(event.currentTarget.value)} />
+          </label>
+          <button type="button" onClick={applyFreehandPoints}>点を適用</button>
+        </fieldset>
+      )}
       <p className="atlas-canvas-accessibility-status" role="status" aria-live="polite">{status}</p>
     </div>
   );
 }
-
