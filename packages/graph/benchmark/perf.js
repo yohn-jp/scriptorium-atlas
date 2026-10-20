@@ -49,6 +49,35 @@ async function runSize(nodeCount) {
   graphClient.close();
 
   const layoutClient = createLayoutWorkerClient({ timeoutMs: 120_000 });
+  let forceCompletion;
+  if (nodeCount === 1_000) {
+    const seed = 'atlas-worker-force-1k-v1';
+    const pins = [
+      { nodeId: nodeId(0), x: 0, y: 0, mode: 'manual' },
+      { nodeId: nodeId(nodeCount - 1), x: 900, y: 600, mode: 'manual' },
+    ];
+    const completionStart = performance.now();
+    const result = await layoutClient.calculate({
+      kind: 'force',
+      boardRevision: 1,
+      snapshot,
+      seed,
+      iterations: 240,
+      pins,
+      nodes: graph.boardNodes,
+      edges: graph.boardEdges,
+    });
+    forceCompletion = {
+      outcome: 'completed',
+      elapsedMs: round(performance.now() - completionStart),
+      iterations: 240,
+      seed,
+      pinnedNodeCount: pins.length,
+      resultNodeCount: result.positions.length,
+      underTwoSeconds: performance.now() - completionStart <= 2_000,
+    };
+  }
+
   const layoutStart = performance.now();
   const controller = new AbortController();
   const force = layoutClient.calculate({
@@ -81,6 +110,7 @@ async function runSize(nodeCount) {
     searchJapaneseSubstring: summarize(search),
     neighborsDepth3: summarize(neighbors),
     shortestPath: summarize(shortestPath),
+    ...(forceCompletion ? { forceCompletion } : {}),
     forceCancellation,
   };
 }
@@ -126,13 +156,17 @@ function makeGraph(count) {
       source: { workspaceId: 'worker-benchmark', path: `stories/${index % 100}/chapter-${index}.yaml`, revision: 'r1' },
     };
   });
-  const edges = Array.from({ length: count - 1 }, (_, index) => ({
-    ref: { providerId: 'bench.edge', localId: `edge-${index}` },
-    from: nodeRef(index),
-    to: nodeRef(index + 1),
-    kind: 'relationship',
-    directed: true,
-  }));
+  const edges = Array.from({ length: count * 2 }, (_, edgeIndex) => {
+    const index = Math.floor(edgeIndex / 2);
+    const variant = edgeIndex % 2;
+    return {
+      ref: { providerId: 'bench.edge', localId: `edge-${index}-${variant}` },
+      from: nodeRef(index),
+      to: nodeRef((index + 1) % count),
+      kind: variant === 0 ? 'relationship.next' : 'relationship.related',
+      directed: true,
+    };
+  });
   const boardNodes = nodes.map((node, index) => ({
     id: node.ref.localId,
     origin: 'provider',
@@ -142,7 +176,7 @@ function makeGraph(count) {
     position: { x: (index % 100) * 20, y: Math.floor(index / 100) * 20 },
   }));
   const boardEdges = edges.map((edge, index) => ({
-    id: `board-edge-${index}`,
+    id: `board-${edge.ref.localId}`,
     from: edge.from.localId,
     to: edge.to.localId,
     meaning: 'semantic',
