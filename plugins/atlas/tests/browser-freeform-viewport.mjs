@@ -170,25 +170,22 @@ async function closeCanvasKeyboardControls(atlas) {
 
 async function zoom(page, atlas, direction, count) {
   await closeCanvasKeyboardControls(atlas);
-  const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
-  const box = await canvas.boundingBox();
-  assert.ok(box && box.width > 100 && box.height > 100, 'The official Canvas surface should be visible for native zoom shortcuts.');
-  await page.mouse.click(box.x + box.width - 90, box.y + box.height - 90);
+  const editor = atlas.locator('.excalidraw').first();
+  await editor.waitFor({ state: 'visible' });
   const shortcut = direction === 'in' ? 'Control+Equal' : 'Control+Minus';
-  for (let index = 0; index < count; index += 1) await page.keyboard.press(shortcut);
+  for (let index = 0; index < count; index += 1) await editor.press(shortcut);
   await page.waitForTimeout(220);
 }
 
 async function overflowZoomUntilRejected(page, atlas) {
   await closeCanvasKeyboardControls(atlas);
-  const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
-  const box = await canvas.boundingBox();
-  assert.ok(box && box.width > 100 && box.height > 100, 'The official Canvas surface should be visible for native zoom shortcuts.');
-  const focusPoint = { x: box.x + box.width - 90, y: box.y + box.height - 90 };
-  await page.mouse.click(focusPoint.x, focusPoint.y);
+  const editor = atlas.locator('.excalidraw').first();
+  await editor.waitFor({ state: 'visible' });
   const rejection = atlas.getByRole('status').filter({ hasText: '保存範囲外' });
-  for (let index = 0; index < 120; index += 1) {
-    await page.keyboard.press('Control+Equal');
+  // The pinned official shortcut increases by 0.1 per key; from 1.0, 71
+  // presses cross Atlas's 8.0 Board-view bound.
+  for (let index = 0; index < 80; index += 1) {
+    await editor.press('Control+Equal');
     await page.waitForTimeout(220);
     if (await rejection.count()) return;
   }
@@ -207,13 +204,27 @@ async function setCanvasPosition(atlas, x, y) {
 async function pan(page, atlas, dx, dy) {
   await closeCanvasKeyboardControls(atlas);
   const canvas = atlas.locator('.excalidraw__canvas.interactive').first();
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 100 && box.height > 100, 'The visible official Canvas surface should have usable geometry.');
+  const frameBox = await page.locator('iframe[title="Atlas"]').boundingBox();
+  assert.ok(frameBox, 'Atlas iframe should have visible browser geometry before the physical pan.');
   const start = { x: box.x + box.width - 90, y: box.y + box.height - 90 };
   const end = { x: start.x + dx, y: start.y + dy };
   const viewport = page.viewportSize();
-  assert.ok(viewport && start.x > 0 && start.y > 0 && end.x < viewport.width && end.y < viewport.height,
-    'The physical pan should remain inside the visible browser viewport.');
+  assert.ok(viewport, 'The browser should have a viewport for the physical pan.');
+  const clip = {
+    left: Math.max(0, frameBox.x),
+    top: Math.max(0, frameBox.y),
+    right: Math.min(viewport.width, frameBox.x + frameBox.width),
+    bottom: Math.min(viewport.height, frameBox.y + frameBox.height),
+  };
+  const inside = (point) => point.x >= box.x && point.x <= box.x + box.width
+    && point.y >= box.y && point.y <= box.y + box.height
+    && point.x >= clip.left && point.x <= clip.right
+    && point.y >= clip.top && point.y <= clip.bottom;
+  assert.ok(inside(start) && inside(end),
+    `Physical pan endpoints must be inside the Canvas, visible iframe clip, and browser viewport: ${JSON.stringify({ start, end, box, clip })}`);
   await page.mouse.click(start.x, start.y);
   await page.mouse.move(start.x, start.y);
   await page.keyboard.down('Space');
