@@ -1,10 +1,3 @@
-import {
-  exportToBlob,
-  exportToSvg,
-  getNonDeletedElements,
-} from "@excalidraw/excalidraw";
-import { restoreExcalidrawScene } from "./scene.js";
-
 export type CanvasImageFormat = "png" | "svg";
 
 export function downloadExcalidrawScene(sceneText: string, filename = "drawing.excalidraw"): void {
@@ -16,7 +9,12 @@ export async function exportExcalidrawScene(
   sceneText: string,
   format: CanvasImageFormat,
 ): Promise<Blob> {
-  const restored = restoreExcalidrawScene(sceneText);
+  const [excalidraw, sceneIo] = await Promise.all([
+    import("@excalidraw/excalidraw"),
+    import("./scene.js"),
+  ]);
+  const restored = await sceneIo.restoreExcalidrawScene(sceneText);
+  const { exportToBlob, exportToSvg, getNonDeletedElements } = excalidraw;
   const elements = getNonDeletedElements(restored.elements);
   const appState = restored.appState;
   const files = restored.files;

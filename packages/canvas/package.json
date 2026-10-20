@@ -10,7 +10,9 @@
   "files": [
     "dist",
     "README.md",
-    "scripts/copy-fonts.mjs"
+    "scripts/copy-fonts.mjs",
+    "scripts/copy-canvas-assets.mjs",
+    "scripts/font-notices.md"
   ],
   "exports": {
     ".": {
@@ -24,6 +26,10 @@
     "./io": {
       "types": "./dist/io/index.d.ts",
       "import": "./dist/io/index.js"
+    },
+    "./assets": {
+      "types": "./dist/assets-node.d.ts",
+      "import": "./scripts/copy-canvas-assets.mjs"
     },
     "./scene": {
       "types": "./dist/scene/index.d.ts",

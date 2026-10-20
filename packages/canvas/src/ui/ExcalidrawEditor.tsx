@@ -16,7 +16,7 @@ import type {
   OrderedExcalidrawElement,
 } from "@excalidraw/excalidraw/element/types";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { restoreExcalidrawScene, serializeExcalidrawScene } from "../io/scene.js";
+import { restoreExcalidrawScene, serializeExcalidrawScene } from "../io/scene-core.js";
 import type { CanvasEditorProps, CanvasPoint, CanvasViewport } from "./types.js";
 import "@excalidraw/excalidraw/index.css";
 

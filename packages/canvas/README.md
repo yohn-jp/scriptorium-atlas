@@ -1,6 +1,6 @@
 # `@scriptorium-atlas/canvas`
 
-The Canvas package wraps the official Excalidraw React editor for Atlas. The root entry exports only small package metadata and the font-path configurator. Import the editor from `@scriptorium-atlas/canvas/ui` and image/document I/O helpers from `@scriptorium-atlas/canvas/io`.
+The Canvas package wraps the official Excalidraw React editor for Atlas. The root entry exports only small package metadata and the font-path configurator. Import the editor from `@scriptorium-atlas/canvas/ui`, image/document I/O helpers from `@scriptorium-atlas/canvas/io`, and the Node-only static asset copier from `@scriptorium-atlas/canvas/assets`.
 
 ```tsx
 import { useState } from "react";
@@ -17,19 +17,21 @@ function BoardCanvas() {
 }
 ```
 
-Copy the exact pinned Excalidraw production fonts into the app's public `fonts/` directory during its build. Since Excalidraw font URLs already include `fonts/`, configure the asset base as `/`:
+The Node-only `copyCanvasAssets(outputDirectory)` helper writes the exact pinned Excalidraw production fonts to `<outputDirectory>/fonts`, along with a `manifest.json` containing each file's SHA-256 and license mapping and a `THIRD_PARTY_NOTICES.md`. For example, a Vite `closeBundle` hook can dynamically import `@scriptorium-atlas/canvas/assets` for the `atlas` and `combined` profiles and call `copyCanvasAssets("dist/atlas")`. Do not import this Node-only helper from browser code.
+
+For a direct public-folder copy, the CLI does the same work:
 
 ```sh
-pnpm --filter @scriptorium-atlas/canvas copy-fonts -- apps/standalone/public/fonts
+pnpm --filter @scriptorium-atlas/canvas copy-fonts -- ../../apps/standalone/public/fonts
 ```
 
-`configureExcalidrawAssets()` must run before the editor is mounted. It accepts a same-origin path ending in `/`; the editor does not load unless a local asset base is configured. Include the copied fonts in the deployed app so offline sessions use the self-hosted files. The font files are generated from the pinned npm dependency and are not checked into Git.
+Since Excalidraw font URLs already include `fonts/`, use `/` as the asset base when deploying at the origin root. `configureExcalidrawAssets()` must run before the editor is mounted. It accepts a same-origin path ending in `/`; the editor does not load unless a local asset base is configured. Include the copied fonts in the deployed app so offline sessions use the self-hosted files. The font files are generated from the pinned npm dependency and are not checked into Git.
 
 `CanvasEditor` receives and returns the `.excalidraw` document text. The `@scriptorium-atlas/canvas/io` entry exports these Host-facing helpers:
 
-- `createEmptyExcalidrawScene(): string` creates a valid Excalidraw v2 JSON document for a new board's separate `.excalidraw` file.
-- `restoreExcalidrawScene(sceneText): RestoredExcalidrawScene` validates and restores supported scenes with Excalidraw's official `restore` API.
-- `serializeExcalidrawScene(snapshot, originalSceneText?): string` serializes a `ExcalidrawSceneSnapshot` with Excalidraw's official `serializeAsJSON` API, retaining original bytes on a no-op and unknown JSON fields during edits.
+- `createEmptyExcalidrawScene(): Promise<string>` creates a valid Excalidraw v2 JSON document for a new board's separate `.excalidraw` file.
+- `restoreExcalidrawScene(sceneText): Promise<RestoredExcalidrawScene>` validates and restores supported scenes with Excalidraw's official `restore` API.
+- `serializeExcalidrawScene(snapshot, originalSceneText?): Promise<string>` serializes a `ExcalidrawSceneSnapshot` with Excalidraw's official `serializeAsJSON` API, retaining original bytes on a no-op and unknown JSON fields during edits.
 - `exportExcalidrawScene(sceneText, format: "png" | "svg"): Promise<Blob>` renders a PNG or SVG export.
 - `downloadExcalidrawScene(sceneText, filename?)` downloads the original scene text as `.excalidraw`.
 

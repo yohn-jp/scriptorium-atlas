@@ -1,74 +1,32 @@
-import { restore, serializeAsJSON } from "@excalidraw/excalidraw";
-import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
-import type { AppState, BinaryFiles } from "@excalidraw/excalidraw/types";
-import { EMPTY_EXCALIDRAW_SCENE, inspectExcalidrawScene } from "../scene/inspect.js";
-import { preserveSceneExtensions } from "../scene/preserve.js";
+import type {
+  ExcalidrawSceneSnapshot,
+  RestoredExcalidrawScene,
+} from "./scene-core.js";
 
-export type RestoredExcalidrawScene = ReturnType<typeof restore>;
+export type { ExcalidrawSceneSnapshot, RestoredExcalidrawScene };
 
-export type ExcalidrawSceneSnapshot = Readonly<{
-  elements: readonly ExcalidrawElement[];
-  appState: Partial<AppState>;
-  files: BinaryFiles;
-}>;
-
-/** Create official Excalidraw JSON for a new board's separate `.excalidraw` file. */
-export function createEmptyExcalidrawScene(): string {
-  const restored = restore(
-    EMPTY_EXCALIDRAW_SCENE as Parameters<typeof restore>[0],
-    null,
-    null,
-  );
-  return preserveSceneExtensions(
-    EMPTY_EXCALIDRAW_SCENE,
-    serializeAsJSON(restored.elements, restored.appState, restored.files, "local"),
-  );
+/** Create Excalidraw v2 JSON for a new board's separate `.excalidraw` file. */
+export async function createEmptyExcalidrawScene(): Promise<string> {
+  const core = await import("./scene-core.js");
+  return core.createEmptyExcalidrawScene();
 }
 
 /** Import supported Excalidraw v2 JSON through Excalidraw's official restore API. */
-export function restoreExcalidrawScene(sceneText: string): RestoredExcalidrawScene {
-  const inspection = inspectExcalidrawScene(sceneText);
-  if (inspection.status === "read-only") {
-    throw new Error(inspection.message);
-  }
-  return restore(inspection.data as Parameters<typeof restore>[0], null, null);
+export async function restoreExcalidrawScene(
+  sceneText: string,
+): Promise<RestoredExcalidrawScene> {
+  const core = await import("./scene-core.js");
+  return core.restoreExcalidrawScene(sceneText);
 }
 
 /**
- * Serialize a restored editor snapshot using Excalidraw's local scene format.
- * Existing bytes are returned verbatim if the editor has made no semantic
- * change; unknown fields are retained when a supported scene is edited.
+ * Serialize with Excalidraw's official local scene serializer. Existing bytes
+ * stay verbatim on a no-op, and unknown fields survive edits to supported scenes.
  */
-export function serializeExcalidrawScene(
+export async function serializeExcalidrawScene(
   snapshot: ExcalidrawSceneSnapshot,
   originalSceneText?: string,
-): string {
-  const serialized = serializeAsJSON(
-    snapshot.elements,
-    snapshot.appState,
-    snapshot.files,
-    "local",
-  );
-
-  if (originalSceneText === undefined) return serialized;
-
-  const inspection = inspectExcalidrawScene(originalSceneText);
-  if (inspection.status === "read-only") {
-    throw new Error(inspection.message);
-  }
-
-  const previous = restore(
-    inspection.data as Parameters<typeof restore>[0],
-    null,
-    null,
-  );
-  const previousCanonical = serializeAsJSON(
-    previous.elements,
-    previous.appState,
-    previous.files,
-    "local",
-  );
-  if (previousCanonical === serialized) return originalSceneText;
-
-  return preserveSceneExtensions(inspection.data, serialized);
+): Promise<string> {
+  const core = await import("./scene-core.js");
+  return core.serializeExcalidrawScene(snapshot, originalSceneText);
 }
