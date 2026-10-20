@@ -11,3 +11,12 @@ node plugins/atlas/tests/browser-card-export.mjs
 ```
 
 The test uses a temporary browser context and commits only to that context's IndexedDB. It does not alter the Host build or source tree. The Chromium path can be omitted when Playwright's bundled browser is available. Set `ATLAS_ARTIFACT_HEAD` to record the exact Host build commit in the JSON report; set `ATLAS_EXPORT_ARTIFACT_DIR` to copy the generated PNG and SVG previews to a local directory. The report includes SHA-256 hashes and output dimensions for both exports.
+
+`browser-graph-history.mjs` uses the same environment variables to verify prompt-free manual-node creation, visible ReactFlow nodes, inspector rename, duplicate, undo/redo, Host commit, and reload persistence:
+
+```sh
+ATLAS_HOST_ROOT=/path/to/scriptorium-atlas \
+ATLAS_E2E_CHROMIUM=/path/to/chromium \
+ATLAS_ARTIFACT_HEAD=<built-host-commit> \
+node plugins/atlas/tests/browser-graph-history.mjs
+```

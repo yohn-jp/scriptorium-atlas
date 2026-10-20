@@ -23,6 +23,8 @@ import { applyAtlasCommand, createAtlasId } from '../commands/model.js';
 type FlowNode = Node<{ label: string; kind: string; origin: 'manual' | 'provider' | 'preview'; groupId?: string }>;
 type ProviderSnapshot = { snapshot: SnapshotRef; nodes: GraphNode[]; edges: import('@scriptorium-atlas/contracts').GraphEdge[]; providerId: string };
 type SearchResult = Awaited<ReturnType<GraphWorkerClient['search']>>;
+const FLOW_NODE_WIDTH = 180;
+const FLOW_NODE_HEIGHT = 52;
 
 export type GraphCanvasProps = {
   board: BoardDocument;
@@ -54,6 +56,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   const [labelDraft, setLabelDraft] = useState('');
   const [annotationDraft, setAnnotationDraft] = useState('');
   const [edgeLabelDraft, setEdgeLabelDraft] = useState('');
+  const [addingManualNode, setAddingManualNode] = useState(false);
+  const [manualNodeLabelDraft, setManualNodeLabelDraft] = useState('');
 
   const graphNodeByKey = useMemo(() => new Map(props.graph?.nodes.map((node) => [nodeKey(node.ref), node]) ?? []), [props.graph?.nodes]);
   const boardNodes = useMemo(() => props.board.nodes.filter((node) => {
@@ -83,6 +87,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     const boardFlowNodes = boardNodes.map((item) => ({
       id: item.id,
       position: positions[item.id] ?? item.position,
+      width: FLOW_NODE_WIDTH,
+      height: FLOW_NODE_HEIGHT,
       selected: selectedNodeIds.includes(item.id),
       draggable: true,
       connectable: true,
@@ -96,6 +102,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       return {
         id,
         position: positions[id] ?? { x: anchor.x + 250 + (index % 3) * 190, y: anchor.y + Math.floor(index / 3) * 130 },
+        width: FLOW_NODE_WIDTH,
+        height: FLOW_NODE_HEIGHT,
         selected: selectedNodeIds.includes(id),
         draggable: false,
         connectable: false,
@@ -230,13 +238,15 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   useEffect(() => setEdgeLabelDraft(selectedEdge?.label ?? ''), [selectedEdge?.id, selectedEdge?.label]);
 
   const addManualNode = () => {
-    const label = window.prompt('ノード名');
-    if (!label?.trim()) return;
+    const label = manualNodeLabelDraft.trim();
+    if (!label) return;
     const offset = props.board.nodes.length * 28;
     dispatch({ type: 'node.create', node: {
       id: createAtlasId('node'), origin: 'manual', kind: 'generic.note', label: label.trim(),
       position: { x: 80 + offset, y: 80 + offset },
     } });
+    setManualNodeLabelDraft('');
+    setAddingManualNode(false);
   };
 
   const duplicateSelectedNode = () => {
@@ -344,7 +354,23 @@ function GraphCanvasBody(props: GraphCanvasProps) {
     <div className="atlas-graph-layout" onKeyDown={onGraphKeyDown} tabIndex={0}>
       <section className="atlas-graph-main" aria-label="グラフ作業領域">
         <div className="atlas-toolbar atlas-graph-toolbar">
-          <button type="button" onClick={addManualNode}>＋ 手動ノード</button>
+          <button type="button" onClick={() => { setManualNodeLabelDraft(''); setAddingManualNode(true); }}>＋ 手動ノード</button>
+          {addingManualNode && <div className="atlas-manual-node-form" role="group" aria-label="手動ノードの追加">
+            <label>ノード名<input
+              autoFocus
+              aria-label="手動ノード名"
+              value={manualNodeLabelDraft}
+              onChange={(event) => setManualNodeLabelDraft(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+                  event.preventDefault();
+                  addManualNode();
+                }
+              }}
+            /></label>
+            <button type="button" onClick={addManualNode} disabled={!manualNodeLabelDraft.trim()}>ノードを作成</button>
+            <button type="button" onClick={() => { setAddingManualNode(false); setManualNodeLabelDraft(''); }}>キャンセル</button>
+          </div>}
           <button type="button" onClick={groupSelection} disabled={selectedNodeIdsInBoard.length < 2}>選択項目をグループ化</button>
           <button type="button" onClick={duplicateSelectedNode} disabled={selectedNode?.origin !== 'manual'}>ノードを複製</button>
           <button type="button" onClick={removeSelection} disabled={!selectedNodeIdsInBoard.length && !selectedEdgeIds.some((id) => props.board.edges.some((edge) => edge.id === id && edge.meaning === 'visual'))}>選択項目を削除</button>

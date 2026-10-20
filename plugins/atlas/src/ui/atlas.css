@@ -112,6 +112,9 @@
 .atlas-graph-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .atlas-graph-toolbar { min-height: 42px; padding: 5px 8px; border-bottom: 1px solid var(--atlas-line); background: var(--atlas-panel); }
 .atlas-graph-toolbar button { font-size: 11px; padding: 5px 8px; }
+.atlas-manual-node-form { display: flex; align-items: end; gap: 6px; padding: 4px 6px; border: 1px solid var(--atlas-line); border-radius: 7px; background: var(--atlas-canvas); }
+.atlas-manual-node-form label { display: grid; gap: 2px; color: var(--atlas-muted); font-size: 10px; }
+.atlas-manual-node-form input { width: 140px; padding: 4px 6px; font-size: 11px !important; }
 .atlas-toolbar-separator { width: 1px; height: 22px; margin: 0 3px; background: var(--atlas-line); }
 .atlas-graph-flow { position: relative; flex: 1; min-height: 180px; }
 .atlas-graph-flow .react-flow { background-color: var(--atlas-canvas); }
