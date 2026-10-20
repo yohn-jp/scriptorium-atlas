@@ -1,4 +1,4 @@
-import type { ELK as ElkApi, ElkNode } from 'elkjs/lib/elk.bundled.js';
+import type { ELK as ElkApi, ElkNode } from 'elkjs/lib/elk-api.js';
 import type { Position } from '@scriptorium-atlas/contracts';
 import { LayoutError, type LayoutInput, type LayoutNode, type LayoutPosition, type LayoutResult } from './types.js';
 
@@ -151,8 +151,6 @@ async function layeredLayout(
   sourceNodes: readonly LayoutNode[],
   sourceEdges: readonly LayoutInput['edges'][number][],
 ): Promise<LayoutPosition[]> {
-  const elkModule = await import('elkjs/lib/elk.bundled.js');
-  const ELKConstructor = elkModule.default as unknown as new () => ElkApi;
   const direction = input.direction ?? 'RIGHT';
   const nodeSpacing = input.nodeSpacing ?? 48;
   const layerSpacing = input.layerSpacing ?? 96;
@@ -160,7 +158,6 @@ async function layeredLayout(
     throw new LayoutError('INVALID_INPUT', 'Layered spacing must be between 0 and 10000');
   }
 
-  const elk = new ELKConstructor();
   const graph: ElkNode = {
     id: 'atlas-root',
     layoutOptions: {
@@ -172,8 +169,33 @@ async function layeredLayout(
     children: sourceNodes.map((node) => ({ id: node.id, width: node.width ?? defaultNodeWidth, height: node.height ?? defaultNodeHeight })),
     edges: sourceEdges.map((edge) => ({ id: edge.id, sources: [edge.from], targets: [edge.to] })),
   };
-  const result = await elk.layout(graph);
-  return (result.children ?? []).map((node) => position(node.id, node.x ?? 0, node.y ?? 0));
+  const hasNativeWorker = typeof document === 'undefined' && typeof self !== 'undefined';
+  const elk = await createElk();
+  try {
+    const result = await elk.layout(graph);
+    return (result.children ?? []).map((node) => position(node.id, node.x ?? 0, node.y ?? 0));
+  } finally {
+    if (hasNativeWorker) elk.terminateWorker();
+  }
+}
+
+async function createElk(): Promise<ElkApi> {
+  // elk.bundled installs its fake Worker by requiring elk-worker.min.js. In a
+  // DedicatedWorker that file instead binds self.onmessage and exports no
+  // fake Worker, so use ELK's public API with its official nested Worker entry.
+  if (typeof document === 'undefined' && typeof self !== 'undefined') {
+    const elkModule = await import('elkjs/lib/elk-api.js');
+    const ElkConstructor = elkModule.default as unknown as new (options: { workerFactory: () => Worker }) => ElkApi;
+    return new ElkConstructor({
+      workerFactory: () => new Worker(new URL('./elk-entry.js', import.meta.url), { type: 'module' }),
+    });
+  }
+
+  // Keep direct Node calculateLayout consumers working with elkjs's bundled
+  // in-process worker. Browser layout calculations run in the branch above.
+  const elkModule = await import('elkjs/lib/elk.bundled.js');
+  const ElkConstructor = elkModule.default as unknown as new () => ElkApi;
+  return new ElkConstructor();
 }
 
 function timelineLayout(
