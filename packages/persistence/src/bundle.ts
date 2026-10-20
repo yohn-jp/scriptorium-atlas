@@ -1,14 +1,16 @@
 import { Unzip, UnzipInflate, UnzipPassThrough, zipSync, type Zippable } from 'fflate';
-import { assertBoardIntegrity } from '@scriptorium-atlas/contracts';
+import { assertBoardIntegrity, validateBundleManifest } from '@scriptorium-atlas/contracts';
+import type { BundleManifest, BundleManifestFile } from '@scriptorium-atlas/contracts';
 import type { FileRecord } from './model.js';
 import { base64ToBytes, compareStrings, copyBytes, decodeUtf8, sha256, stableJson, utf8Bytes } from './bytes.js';
 import { svgContentType } from './svg.js';
 import { fail } from './errors.js';
 import { caseFoldPath, validateRelativePath, validateWorkspaceId, validateWorkspaceName, validateWorkspacePayloadPath } from './path.js';
 
-// manifest.json consumes one of the 100,000 allowed archive entries.
-export const MAX_WORKSPACE_FILES = 99_999;
-export const MAX_BUNDLE_ENTRIES = 100_000;
+// The V1 cap is 100,000 bundle entries total; one entry is reserved for manifest.json.
+export const MAX_WORKSPACE_FILES = 100_000;
+export const MAX_WORKSPACE_PAYLOAD_FILES = MAX_WORKSPACE_FILES - 1;
+export const MAX_BUNDLE_ENTRIES = MAX_WORKSPACE_FILES;
 export const MAX_BUNDLE_EXPANDED_BYTES = 256 * 1024 * 1024;
 export const MAX_BUNDLE_MANIFEST_BYTES = MAX_BUNDLE_EXPANDED_BYTES;
 export const MAX_BUNDLE_ARCHIVE_BYTES = 512 * 1024 * 1024;
@@ -39,20 +41,6 @@ export interface BundleManifestEntry {
   byteLength: number;
 }
 
-interface BundleManifestFile {
-  path: string;
-  sha256: string;
-  bytes: number;
-}
-
-interface BundleManifest {
-  schema: typeof BUNDLE_SCHEMA;
-  workspaceId: string;
-  name: string;
-  sourceRevision: string;
-  files: BundleManifestFile[];
-}
-
 interface CentralEntry {
   name: string;
   rawName: Uint8Array;
@@ -71,8 +59,11 @@ interface CentralEntry {
 export async function createBundle(source: BundleSource): Promise<Blob> {
   validateWorkspaceId(source.workspaceId);
   validateWorkspaceName(source.name);
-  if (source.files.length > MAX_WORKSPACE_FILES) {
-    fail('INVALID_INPUT', 'Workspace file count exceeds the V1 bundle limit.', { maxFiles: MAX_WORKSPACE_FILES });
+  if (source.files.length > MAX_WORKSPACE_PAYLOAD_FILES) {
+    fail('INVALID_INPUT', 'Workspace payload file count exceeds the V1 bundle limit after reserving manifest.json.', {
+      maxPayloadFiles: MAX_WORKSPACE_PAYLOAD_FILES,
+      maxEntries: MAX_WORKSPACE_FILES
+    });
   }
   const files = [...source.files].sort((left, right) => compareStrings(left.path, right.path));
   const seenPaths = new Set<string>();
@@ -158,7 +149,12 @@ export async function parseBundle(blob: Blob, destination?: { workspaceId?: stri
   const manifest = validateManifest(parsed);
   const destinationWorkspaceId = validateWorkspaceId(destination?.workspaceId ?? manifest.workspaceId);
   const destinationName = validateWorkspaceName(destination?.name ?? manifest.name);
-  if (manifest.files.length > MAX_WORKSPACE_FILES) fail('INVALID_INPUT', 'Workspace has too many payload files.');
+  if (manifest.files.length > MAX_WORKSPACE_PAYLOAD_FILES) {
+    fail('INVALID_INPUT', 'Workspace has too many payload files after reserving manifest.json.', {
+      maxPayloadFiles: MAX_WORKSPACE_PAYLOAD_FILES,
+      maxEntries: MAX_WORKSPACE_FILES
+    });
+  }
 
   const expectedEntries = new Set<string>([MANIFEST_PATH]);
   const sourceFiles: FileRecord[] = [];
@@ -262,9 +258,10 @@ export function assertBundleWorkspaceCapacity(
   sourceRevision: string,
   files: readonly BundleManifestEntry[]
 ): void {
-  if (files.length > MAX_WORKSPACE_FILES) {
+  if (files.length > MAX_WORKSPACE_PAYLOAD_FILES) {
     fail('INVALID_INPUT', 'Workspace exceeds the V1 payload file count after reserving manifest.json.', {
-      maxPayloadFiles: MAX_WORKSPACE_FILES,
+      maxPayloadFiles: MAX_WORKSPACE_PAYLOAD_FILES,
+      maxEntries: MAX_WORKSPACE_FILES,
       files: files.length
     });
   }
@@ -342,42 +339,19 @@ export function validateKnownDocument(path: string, bytes: Uint8Array): void {
 }
 
 function validateManifest(value: unknown): BundleManifest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT', 'Bundle manifest must be an object.');
-  const item = value as Record<string, unknown>;
-  const allowedKeys = ['files', 'name', 'schema', 'sourceRevision', 'workspaceId'];
-  if (Object.keys(item).some(key => !allowedKeys.includes(key)) || allowedKeys.some(key => !(key in item))) {
-    fail('INVALID_INPUT', 'Bundle manifest fields do not match atlas.bundle/v1.');
-  }
-  if (item.schema !== BUNDLE_SCHEMA) {
+  const item = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  if (item && 'schema' in item && item.schema !== BUNDLE_SCHEMA) {
     fail('UNSUPPORTED_VERSION', 'Bundle schema version is not supported.', { schema: item.schema });
   }
-  if (typeof item.workspaceId !== 'string' || typeof item.name !== 'string' || typeof item.sourceRevision !== 'string' || !Array.isArray(item.files)) {
-    fail('INVALID_INPUT', 'Bundle manifest fields are malformed.');
+  if (item && Array.isArray(item.files) && item.files.length > MAX_WORKSPACE_PAYLOAD_FILES) {
+    fail('INVALID_INPUT', 'Bundle manifest lists too many payload files after reserving manifest.json.', {
+      maxPayloadFiles: MAX_WORKSPACE_PAYLOAD_FILES,
+      maxEntries: MAX_WORKSPACE_FILES
+    });
   }
-  validateWorkspaceId(item.workspaceId);
-  validateWorkspaceName(item.name);
-  if (!/^[a-f0-9]{64}$/.test(item.sourceRevision)) fail('INVALID_INPUT', 'Manifest workspace revision is malformed.');
-  if (item.files.length > MAX_WORKSPACE_FILES) fail('INVALID_INPUT', 'Bundle manifest lists too many payload files.');
-  const files = item.files.map((file, index) => {
-    if (!file || typeof file !== 'object' || Array.isArray(file)) {
-      fail('INVALID_INPUT', 'Manifest file entry is malformed.', { index });
-    }
-    const record = file as Record<string, unknown>;
-    if (Object.keys(record).some(key => !['bytes', 'path', 'sha256'].includes(key)) || Object.keys(record).length !== 3) {
-      fail('INVALID_INPUT', 'Manifest file entry fields are invalid.', { index });
-    }
-    if (typeof record.path !== 'string' || typeof record.sha256 !== 'string' || typeof record.bytes !== 'number') {
-      fail('INVALID_INPUT', 'Manifest file entry fields are malformed.', { index });
-    }
-    return { path: record.path, sha256: record.sha256, bytes: record.bytes };
-  });
-  return {
-    schema: BUNDLE_SCHEMA,
-    workspaceId: item.workspaceId,
-    name: item.name,
-    sourceRevision: item.sourceRevision,
-    files
-  };
+  if (!validateBundleManifest(value)) fail('INVALID_INPUT', 'Bundle manifest fields do not match atlas.bundle/v1.');
+  for (const entry of value.files) validateWorkspacePayloadPath(entry.path);
+  return value;
 }
 
 function validateArchiveEntries(archive: Uint8Array, entries: CentralEntry[]): void {

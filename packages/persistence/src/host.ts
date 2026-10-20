@@ -45,7 +45,6 @@ import {
   createBundle,
   inferContentType,
   assertBundleWorkspaceCapacity,
-  MAX_WORKSPACE_FILES,
   MAX_SOURCE_TEXT_BYTES,
   parseBundle,
   validateKnownDocument,
@@ -960,19 +959,7 @@ async function readFullSnapshot(database: IDBDatabase, workspaceId: string): Pro
   const filesRequest = requestValue(transaction.objectStore('files').index('byWorkspace').getAll(workspaceId) as IDBRequest<FileRecord[]>);
   const [workspace, files] = await Promise.all([workspaceRequest, filesRequest, done]);
   if (!workspace) fail('UNAVAILABLE', 'Workspace does not exist.', { workspaceId });
-  if (files.length > MAX_WORKSPACE_FILES) {
-    fail('INVALID_INPUT', 'Workspace exceeds the V1 payload file count after reserving manifest.json.', {
-      maxPayloadFiles: MAX_WORKSPACE_FILES,
-      files: files.length
-    });
-  }
-  let totalBytes = 0;
-  for (const file of files) {
-    totalBytes += file.bytes.byteLength;
-    if (totalBytes > 256 * 1024 * 1024) {
-      fail('INVALID_INPUT', 'Workspace payload exceeds the V1 expanded bundle size limit.', { maxBytes: 256 * 1024 * 1024 });
-    }
-  }
+  // Keep reading legacy over-limit workspaces; createBundle reports export limits without changing stored files.
   return { workspace, files: files.sort((left, right) => compareStrings(left.path, right.path)) };
 }
 
