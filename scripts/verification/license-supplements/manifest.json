@@ -1,0 +1,406 @@
+{
+  "schemaVersion": "atlas.bundle-license-supplements/v1",
+  "sources": {
+    "excalidraw": {
+      "url": "https://raw.githubusercontent.com/excalidraw/excalidraw/v0.18.1/LICENSE",
+      "revision": "v0.18.1",
+      "file": "LICENSE",
+      "textFile": "excalidraw-0.18.1-MIT.txt",
+      "sha256": "1352d204fdb90d5e482c13139d848bc2c9300a9a7de358a0a558a23e72d0d8be",
+      "note": "Pinned upstream tag for the exact included release."
+    },
+    "radix-primitives": {
+      "url": "https://raw.githubusercontent.com/radix-ui/primitives/3c5e05fab070dfa68212230e85baf0879269c57d/LICENSE",
+      "revision": "3c5e05fab070dfa68212230e85baf0879269c57d",
+      "file": "LICENSE",
+      "textFile": "radix-primitives-MIT.txt",
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "verifiedAt": [
+        "https://raw.githubusercontent.com/radix-ui/primitives/157415ed1f34c53b5afbf53a047895ed6a7f957f/LICENSE",
+        "https://raw.githubusercontent.com/radix-ui/primitives/3c5e05fab070dfa68212230e85baf0879269c57d/LICENSE",
+        "https://raw.githubusercontent.com/radix-ui/primitives/704069ee4c40c3b6f342c104dff5ad873ee39c43/LICENSE",
+        "https://raw.githubusercontent.com/radix-ui/primitives/e1bdb77ea2445407b239558f2902c2e1950586fe/LICENSE"
+      ],
+      "note": "Exact package manifests declare MIT and link the shared radix-ui/primitives repository. Upstream omits this root LICENSE from package tarballs. The shared bytes were cross-checked against every listed immutable revision."
+    },
+    "fastdom": {
+      "url": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+      "revision": "npm:fastdom@1.0.12",
+      "file": "package/README.md#License",
+      "textFile": "fastdom-1.0.12-MIT.txt",
+      "sha256": "a00400f35c03ae21dce90fb07854180fc9579b206a325f8c9153fc63c11b9612",
+      "sourceIntegrity": "sha512-LB+xjSTEbjHE1cWsxu+tN2Xqr1kpi+V9aADI7sVM5ZMaXyYGPHULQMzpJMYqOTULK/73pUkWVzzObFRBkPr+hg==",
+      "note": "Exact License section extracted from the exact published package README after validating its NPM tarball integrity."
+    },
+    "react-remove-scroll-bar": {
+      "url": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE",
+      "revision": "7301c160fda44cb8cf2b9fdfde61efad35736196",
+      "file": "LICENSE",
+      "textFile": "react-remove-scroll-bar-2.3.8-MIT.txt",
+      "sha256": "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84",
+      "note": "The exact 2.3.8 package manifest and README declare MIT; the published README contains only the SPDX name. Full text is copied from the official repository LICENSE at the pinned upstream commit that introduced it."
+    }
+  },
+  "entries": [
+    {
+      "version": "0.18.1",
+      "license": "MIT",
+      "sourceId": "excalidraw",
+      "registryMetadataUrl": "https://registry.npmjs.org/@excalidraw/excalidraw/0.18.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@excalidraw/excalidraw/-/excalidraw-0.18.1.tgz",
+      "packageArtifactIntegrity": "sha512-6i5Gt7IDTOH//qa0Z315Ly5iVRhjWpu2whrlQFqkuwrkKUWgRsMk0P5qdE7bpyDpai7jeLeWYkyj1eVAfni1lw==",
+      "packageGitHead": null,
+      "packageName": "@excalidraw/excalidraw"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/primitive/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/primitive/-/primitive-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-3e7rn8FDMin4CgeL7Z/49smCA3rFYY3Ha2rUQ7HRWFadS5iCRw08ZgVT1LaNTCNqgvrUiyczLflrVrF0SRQtNA==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/primitive"
+    },
+    {
+      "version": "1.1.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/primitive/1.1.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/primitive/-/primitive-1.1.1.tgz",
+      "packageArtifactIntegrity": "sha512-SJ31y+Q/zAyShtXJc8x83i9TYdbAfHZ++tUZnvjJJqFjzsdUnKsxPL6IEtBlxKkU7yzer//GQtZSV4GbldL3YA==",
+      "packageGitHead": "3c5e05fab070dfa68212230e85baf0879269c57d",
+      "packageName": "@radix-ui/primitive"
+    },
+    {
+      "version": "1.1.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-arrow/1.1.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-arrow/-/react-arrow-1.1.2.tgz",
+      "packageArtifactIntegrity": "sha512-G+KcpzXHq24iH0uGG/pF8LyzpFJYGD4RfLjCIBfGdSLXvjLHST31RUiRVrupIBMvIppMgSzQ6l66iAxl03tdlg==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-arrow"
+    },
+    {
+      "version": "1.0.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-collection/1.0.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-collection/-/react-collection-1.0.1.tgz",
+      "packageArtifactIntegrity": "sha512-uuiFbs+YCKjn3X1DTSx9G7BHApu4GHbi3kgiwsnFUbOKCrwejAJv4eE4Vc8C0Oaxt9T0aV4ox0WCOdx+39Xo+g==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-collection"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-compose-refs/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-compose-refs/-/react-compose-refs-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-0KaSv6sx787/hK3eF53iOkiSLwAGlFMx5lotrqD2pTjB18KbybKoEIgkNZTKC60YECDQTKGTRcDBILwZVqVKvA==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-compose-refs"
+    },
+    {
+      "version": "1.1.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-compose-refs/1.1.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-compose-refs/-/react-compose-refs-1.1.1.tgz",
+      "packageArtifactIntegrity": "sha512-Y9VzoRDSJtgFMUCoiZBDVo084VQ5hfpXxVE+NgkdNsjiDBByiImMZKKhxMwCbdHvhlENG6a833CbFkOQvTricw==",
+      "packageGitHead": "3c5e05fab070dfa68212230e85baf0879269c57d",
+      "packageName": "@radix-ui/react-compose-refs"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-context/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-context/-/react-context-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-1pVM9RfOQ+n/N5PJK33kRSKsr1glNxomxONs5c49MliinBY6Yw2Q995qfBUUo0/Mbg05B/sGA0gkgPI7kmSHBg==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-context"
+    },
+    {
+      "version": "1.1.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-context/1.1.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-context/-/react-context-1.1.1.tgz",
+      "packageArtifactIntegrity": "sha512-UASk9zi+crv9WteK/NU4PLvOoL3OuE6BWVKNF6hPRBtYBDXQ2u5iu3O59zUlJiTVvkyuycnqrztsHVJwcK9K+Q==",
+      "packageGitHead": "157415ed1f34c53b5afbf53a047895ed6a7f957f",
+      "packageName": "@radix-ui/react-context"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-direction/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-direction/-/react-direction-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-2HV05lGUgYcA6xgLQ4BKPDmtL+QbIZYH5fCOTAOOcJ5O0QbWS3i9lKaurLzliYUDhORI2Qr3pyjhJh44lKA3rQ==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-direction"
+    },
+    {
+      "version": "1.1.5",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-dismissable-layer/1.1.5",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-dismissable-layer/-/react-dismissable-layer-1.1.5.tgz",
+      "packageArtifactIntegrity": "sha512-E4TywXY6UsXNRhFrECa5HAvE5/4BFcGyfTyK36gP+pAW1ed7UTK4vKwdr53gAJYwqbfCWC6ATvJa3J3R/9+Qrg==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-dismissable-layer"
+    },
+    {
+      "version": "1.1.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-focus-guards/1.1.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-focus-guards/-/react-focus-guards-1.1.1.tgz",
+      "packageArtifactIntegrity": "sha512-pSIwfrT1a6sIoDASCSpFwOasEwKTZWDw/iBdtnqKO7v6FeOzYJ7U53cPzYFVR3geGGXgVHaH+CdngrrAzqUGxg==",
+      "packageGitHead": "157415ed1f34c53b5afbf53a047895ed6a7f957f",
+      "packageName": "@radix-ui/react-focus-guards"
+    },
+    {
+      "version": "1.1.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-focus-scope/1.1.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-focus-scope/-/react-focus-scope-1.1.2.tgz",
+      "packageArtifactIntegrity": "sha512-zxwE80FCU7lcXUGWkdt6XpTTCKPitG1XKOwViTxHVKIJhZl9MvIl2dVHeZENCWD9+EdWv05wlaEkRXUykU27RA==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-focus-scope"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-id/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-id/-/react-id-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-Q6iAB/U7Tq3NTolBBQbHTgclPmGWE3OlktGGqrClPozSw4vkQ1DfQAOtzgRPecKsMdJINE05iaoDUG8tRzCBjw==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-id"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-id/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-id/-/react-id-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-EJUrI8yYh7WOjNOqpoJaf1jlFIH2LvtgAl+YcFqNCa+4hj64ZXmPkAKOFs/ukjz3byN6bdb/AVUqHkI8/uWWMA==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-id"
+    },
+    {
+      "version": "1.1.6",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-popover/1.1.6",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-popover/-/react-popover-1.1.6.tgz",
+      "packageArtifactIntegrity": "sha512-NQouW0x4/GnkFJ/pRqsIS3rM/k97VzKnVb2jB7Gq7VEGPy5g7uNV1ykySFt7eWSp3i2uSGFwaJcvIRJBAHmmFg==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-popover"
+    },
+    {
+      "version": "1.2.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-popper/1.2.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-popper/-/react-popper-1.2.2.tgz",
+      "packageArtifactIntegrity": "sha512-Rvqc3nOpwseCyj/rgjlJDYAgyfw7OC1tTkKn2ivhaMGcYt8FSBlahHOZak2i3QwkRXUXgGgzeEe2RuqeEHuHgA==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-popper"
+    },
+    {
+      "version": "1.1.4",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-portal/1.1.4",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-portal/-/react-portal-1.1.4.tgz",
+      "packageArtifactIntegrity": "sha512-sn2O9k1rPFYVyKd5LAJfo96JlSGVFpa1fS6UuBJfrZadudiw5tAmru+n1x7aMRQ84qDM71Zh1+SzK5QwU0tJfA==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-portal"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-presence/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-presence/-/react-presence-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-A+6XEvN01NfVWiKu38ybawfHsBjWum42MRPnEuqPsBZ4eV7e/7K321B5VgYMPv3Xx5An6o1/l9ZuDBgmcmWK3w==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-presence"
+    },
+    {
+      "version": "1.1.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-presence/1.1.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-presence/-/react-presence-1.1.2.tgz",
+      "packageArtifactIntegrity": "sha512-18TFr80t5EVgL9x1SwF/YGtfG+l0BS0PRAlCWBDoBEiDQjeKgnNZRVJp/oVBl24sr3Gbfwc/Qpj4OcWTQMsAEg==",
+      "packageGitHead": "3c5e05fab070dfa68212230e85baf0879269c57d",
+      "packageName": "@radix-ui/react-presence"
+    },
+    {
+      "version": "1.0.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-primitive/1.0.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-primitive/-/react-primitive-1.0.1.tgz",
+      "packageArtifactIntegrity": "sha512-fHbmislWVkZaIdeF6GZxF0A/NH/3BjrGIYj+Ae6eTmTCr7EB0RQAAVEiqsXK6p3/JcRqVSBQoceZroj30Jj3XA==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-primitive"
+    },
+    {
+      "version": "2.0.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-primitive/2.0.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-primitive/-/react-primitive-2.0.2.tgz",
+      "packageArtifactIntegrity": "sha512-Ec/0d38EIuvDF+GZjcMU/Ze6MxntVJYO/fRlCPhCaVUyPY9WTalHJw54tp9sXeJo3tlShWpy41vQRgLRGOuz+w==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-primitive"
+    },
+    {
+      "version": "1.0.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-roving-focus/1.0.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-roving-focus/-/react-roving-focus-1.0.2.tgz",
+      "packageArtifactIntegrity": "sha512-HLK+CqD/8pN6GfJm3U+cqpqhSKYAWiOJDe+A+8MfxBnOue39QEeMa43csUn2CXCHQT0/mewh1LrrG4tfkM9DMA==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-roving-focus"
+    },
+    {
+      "version": "1.0.1",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-slot/1.0.1",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-slot/-/react-slot-1.0.1.tgz",
+      "packageArtifactIntegrity": "sha512-avutXAFL1ehGvAXtPquu0YK5oz6ctS474iM3vNGQIkswrVhdrS52e3uoMQBzZhNRAIE0jBnUyXWNmSjGHhCFcw==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-slot"
+    },
+    {
+      "version": "1.1.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-slot/1.1.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-slot/-/react-slot-1.1.2.tgz",
+      "packageArtifactIntegrity": "sha512-YAKxaiGsSQJ38VzKH86/BPRC4rh+b1Jpa+JneA5LRE7skmLPNAyeG8kPJj/oo4STLvlrs8vkf/iYyc3A5stYCQ==",
+      "packageGitHead": "e1bdb77ea2445407b239558f2902c2e1950586fe",
+      "packageName": "@radix-ui/react-slot"
+    },
+    {
+      "version": "1.0.2",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-tabs/1.0.2",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-tabs/-/react-tabs-1.0.2.tgz",
+      "packageArtifactIntegrity": "sha512-gOUwh+HbjCuL0UCo8kZ+kdUEG8QtpdO4sMQduJ34ZEz0r4922g9REOBM+vIsfwtGxSug4Yb1msJMJYN2Bk8TpQ==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-tabs"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-callback-ref/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-callback-ref/-/react-use-callback-ref-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-GZtyzoHz95Rhs6S63D2t/eqvdFCm7I+yHMLVQheKM7nBD8mbZIt+ct1jz4536MDnaOGKIxynJ8eHTkVGVVkoTg==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-use-callback-ref"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-callback-ref/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-callback-ref/-/react-use-callback-ref-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-CasTfvsy+frcFkbXtSJ2Zu9JHpN8TYKxkgJGWbjiZhFivxaeW7rMeZt7QELGVLaYVfFMsKHjb7Ak0nMEe+2Vfw==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-use-callback-ref"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-controllable-state/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-controllable-state/-/react-use-controllable-state-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-FohDoZvk3mEXh9AWAVyRTYR4Sq7/gavuofglmiXB2g1aKyboUD4YtgWxKj8O5n+Uak52gXQ4wKz5IFST4vtJHg==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-use-controllable-state"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-controllable-state/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-controllable-state/-/react-use-controllable-state-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-MtfMVJiSr2NjzS0Aa90NPTnvTSg6C/JLCV7ma0W6+OMV78vd8OyRpID+Ng9LxzsPbLeuBnWBA1Nq30AtBIDChw==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-use-controllable-state"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-escape-keydown/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-escape-keydown/-/react-use-escape-keydown-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-L7vwWlR1kTTQ3oh7g1O0CBF3YCyyTj8NmhLR+phShpyA50HCfBFKVJTpshm9PzLiKmehsrQzTYTpX9HvmC9rhw==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-use-escape-keydown"
+    },
+    {
+      "version": "1.0.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-layout-effect/1.0.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-layout-effect/-/react-use-layout-effect-1.0.0.tgz",
+      "packageArtifactIntegrity": "sha512-6Tpkq+R6LOlmQb1R5NNETLG0B4YP0wc+klfXafpUCj6JGyaUc8il7/kUZ7m59rGbXGczE9Bs+iz2qloqsZBduQ==",
+      "packageGitHead": null,
+      "packageName": "@radix-ui/react-use-layout-effect"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-layout-effect/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-layout-effect/-/react-use-layout-effect-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-+FPE0rOdziWSrH9athwI1R0HDVbWlEhd+FR+aSDk4uWGmSJ9Z54sdZVDQPZAinJhJXwfT+qnj969mCsT2gfm5w==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-use-layout-effect"
+    },
+    {
+      "version": "1.1.0",
+      "license": "MIT",
+      "sourceId": "radix-primitives",
+      "registryMetadataUrl": "https://registry.npmjs.org/@radix-ui/react-use-size/1.1.0",
+      "packageArtifactUrl": "https://registry.npmjs.org/@radix-ui/react-use-size/-/react-use-size-1.1.0.tgz",
+      "packageArtifactIntegrity": "sha512-XW3/vWuIXHa+2Uwcc2ABSfcCledmXhhQPlGbfcRXbiUQI5Icjcg19BGCZVKKInYbvUCut/ufbbLLPFC5cbb1hw==",
+      "packageGitHead": "704069ee4c40c3b6f342c104dff5ad873ee39c43",
+      "packageName": "@radix-ui/react-use-size"
+    },
+    {
+      "version": "1.0.12",
+      "license": "MIT",
+      "sourceId": "fastdom",
+      "registryMetadataUrl": "https://registry.npmjs.org/fastdom/1.0.12",
+      "packageArtifactUrl": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+      "packageArtifactIntegrity": "sha512-LB+xjSTEbjHE1cWsxu+tN2Xqr1kpi+V9aADI7sVM5ZMaXyYGPHULQMzpJMYqOTULK/73pUkWVzzObFRBkPr+hg==",
+      "packageGitHead": "a7b9044d58952b970c8b918dcf0e7c8824ba0ff5",
+      "packageName": "fastdom"
+    },
+    {
+      "version": "2.3.8",
+      "license": "MIT",
+      "sourceId": "react-remove-scroll-bar",
+      "registryMetadataUrl": "https://registry.npmjs.org/react-remove-scroll-bar/2.3.8",
+      "packageArtifactUrl": "https://registry.npmjs.org/react-remove-scroll-bar/-/react-remove-scroll-bar-2.3.8.tgz",
+      "packageArtifactIntegrity": "sha512-9r+yi9+mgU33AKcj6IbT9oRCO78WriSj6t/cF8DWBZJ9aOGPOTEDvdUDz1FwKim7QXWwmHqtdHnRJfhAxEG46Q==",
+      "packageGitHead": "b3b1287aad81def2e2ae707274b74531b61ddbaf",
+      "packageName": "react-remove-scroll-bar"
+    }
+  ]
+}

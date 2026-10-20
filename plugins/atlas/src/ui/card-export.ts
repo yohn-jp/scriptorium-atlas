@@ -1,0 +1,217 @@
+import type { Asset, BoardDocument } from '@scriptorium-atlas/contracts';
+import { nodeKey } from '@scriptorium-atlas/graph';
+import type { CanvasExportElementSkeleton, CanvasExportFile, CanvasExportImageMimeType, CanvasExportOverlay } from '@scriptorium-atlas/canvas/io';
+import { imageDataUrl } from './host-utils.js';
+import { sanitizeImageBytes, verifyAssetBytes } from './asset-media.js';
+import type { ProviderSnapshot } from './provider-snapshot.js';
+
+export type AtlasCardAssetReader = (asset: Asset) => Promise<Uint8Array>;
+
+export type AtlasCardExportResult = {
+  overlay: CanvasExportOverlay;
+  unavailableImagePaths: string[];
+};
+
+type PreparedCardImage = { file: CanvasExportFile; width: number; height: number };
+
+async function prepareCardImage(asset: Asset, readAsset: AtlasCardAssetReader): Promise<PreparedCardImage> {
+  const originalBytes = await readAsset(asset);
+  await verifyAssetBytes(asset, originalBytes);
+  const safeBytes = sanitizeImageBytes(originalBytes, asset.mime);
+  const sourceDataUrl = imageDataUrl(safeBytes, asset.mime);
+  const probe = new Image();
+  probe.src = sourceDataUrl;
+  await probe.decode();
+  if (probe.naturalWidth <= 0 || probe.naturalHeight <= 0) throw new Error('Image dimensions are unavailable.');
+
+  let mimeType: CanvasExportImageMimeType;
+  let dataURL: string;
+  switch (asset.mime) {
+    case 'image/png':
+    case 'image/jpeg':
+    case 'image/svg+xml':
+      mimeType = asset.mime;
+      dataURL = sourceDataUrl;
+      break;
+    case 'image/webp': {
+      const canvas = document.createElement('canvas');
+      canvas.width = probe.naturalWidth;
+      canvas.height = probe.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas cannot decode this WebP image.');
+      context.drawImage(probe, 0, 0);
+      mimeType = 'image/png';
+      dataURL = canvas.toDataURL(mimeType);
+      break;
+    }
+    default:
+      throw new Error(`Unsupported image type: ${asset.mime}.`);
+  }
+  return {
+    file: { id: `atlas-export-${crypto.randomUUID()}`, mimeType, dataURL },
+    width: probe.naturalWidth,
+    height: probe.naturalHeight,
+  };
+}
+
+function cardHeading(card: BoardDocument['cards'][number]): string {
+  switch (card.kind) {
+    case 'text': return 'Markdown';
+    case 'source': return 'ソース';
+    case 'provider-node': return 'Providerノード';
+    case 'image': return card.annotation?.trim() ? `画像 · ${card.annotation.trim()}` : '画像';
+  }
+}
+
+function cardBody(board: BoardDocument, card: BoardDocument['cards'][number], graph: ProviderSnapshot | null): string {
+  const source = card.source ? `${card.source.path}\nリビジョン ${card.source.revision.slice(0, 12)}` : '';
+  switch (card.kind) {
+    case 'text':
+      return [card.text, card.annotation].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
+    case 'source':
+      return [card.text, card.annotation, source].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
+    case 'provider-node': {
+      const liveNode = card.nodeRef
+        ? graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const cachedNode = card.nodeRef
+        ? board.nodes.find((node) => node.ref && nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const connected = Boolean(card.nodeRef && graph?.providerIds.includes(card.nodeRef.providerId));
+      const state = connected ? liveNode ? '接続中' : '未解決' : '未接続（キャッシュ表示）';
+      const label = liveNode?.label ?? cachedNode?.label ?? card.text ?? card.nodeRef?.localId;
+      const reference = card.nodeRef ? `${card.nodeRef.providerId}/${card.nodeRef.localId}` : '';
+      return [label, state, reference, card.annotation, source]
+        .filter((value): value is string => Boolean(value?.trim())).join('\n\n');
+    }
+    case 'image':
+      return source;
+  }
+}
+
+function appendCardFrame(
+  elements: CanvasExportElementSkeleton[],
+  card: BoardDocument['cards'][number],
+): void {
+  const { x, y } = card.position;
+  elements.push({
+    type: 'rectangle',
+    x,
+    y,
+    width: card.width,
+    height: card.height,
+    strokeColor: '#b8a688',
+    backgroundColor: '#fffdf5',
+    fillStyle: 'solid',
+    strokeWidth: 1,
+    roughness: 0,
+  });
+  elements.push({
+    type: 'rectangle',
+    x: x + 1,
+    y: y + 1,
+    width: Math.max(1, card.width - 2),
+    height: 30,
+    strokeColor: '#e1d9cb',
+    backgroundColor: '#f5eee0',
+    fillStyle: 'solid',
+    strokeWidth: 1,
+    roughness: 0,
+    label: {
+      text: cardHeading(card),
+      fontSize: 12,
+      strokeColor: '#302a23',
+      textAlign: 'left',
+      verticalAlign: 'middle',
+    },
+  });
+}
+
+function appendCardText(
+  elements: CanvasExportElementSkeleton[],
+  card: BoardDocument['cards'][number],
+  text: string,
+  y = card.position.y + 38,
+): void {
+  if (!text) return;
+  elements.push({
+    type: 'text',
+    x: card.position.x + 8,
+    y,
+    width: Math.max(1, card.width - 16),
+    text,
+    fontSize: 12,
+    strokeColor: '#302a23',
+    textAlign: 'left',
+    verticalAlign: 'top',
+  });
+}
+
+function fitImageInCard(
+  imageSize: { width: number; height: number },
+  card: BoardDocument['cards'][number],
+): { x: number; y: number; width: number; height: number } {
+  if (imageSize.width <= 0 || imageSize.height <= 0) throw new Error('Image dimensions are unavailable.');
+  const footerHeight = card.source ? 34 : 0;
+  const bounds = { width: Math.max(1, card.width - 12), height: Math.max(1, card.height - 42 - footerHeight) };
+  const scale = Math.min(bounds.width / imageSize.width, bounds.height / imageSize.height);
+  const width = imageSize.width * scale;
+  const height = imageSize.height * scale;
+  return {
+    x: card.position.x + (card.width - width) / 2,
+    y: card.position.y + 32 + (bounds.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+/** Converts Atlas-only card overlays into temporary official Canvas export elements. */
+export async function buildAtlasCardExportOverlay(
+  board: BoardDocument,
+  readAsset: AtlasCardAssetReader,
+  graph: ProviderSnapshot | null = null,
+): Promise<AtlasCardExportResult> {
+  const elements: CanvasExportElementSkeleton[] = [];
+  const files: CanvasExportFile[] = [];
+  const imageCache = new Map<string, Promise<PreparedCardImage>>();
+  const includedFileIds = new Set<string>();
+  const unavailableImagePaths: string[] = [];
+
+  for (const card of board.cards) {
+    appendCardFrame(elements, card);
+    if (card.kind !== 'image') {
+      appendCardText(elements, card, cardBody(board, card, graph));
+      continue;
+    }
+
+    const asset = board.assets.find((item) => item.id === card.assetId);
+    if (!asset) {
+      unavailableImagePaths.push(card.assetId ?? card.id);
+      appendCardText(elements, card, '画像アセットが見つかりません。');
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
+      continue;
+    }
+
+    try {
+      const image = imageCache.get(asset.id) ?? prepareCardImage(asset, readAsset);
+      if (!imageCache.has(asset.id)) imageCache.set(asset.id, image);
+      const prepared = await image;
+      if (!includedFileIds.has(prepared.file.id)) {
+        files.push(prepared.file);
+        includedFileIds.add(prepared.file.id);
+      }
+      const bounds = fitImageInCard(prepared, card);
+      elements.push({ type: 'image', ...bounds, fileId: prepared.file.id });
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
+    } catch {
+      unavailableImagePaths.push(asset.path);
+      appendCardText(elements, card, `画像アセットを読み込めません: ${asset.path}`);
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
+    }
+  }
+
+  return {
+    overlay: { elements, ...(files.length ? { files } : {}) },
+    unavailableImagePaths,
+  };
+}

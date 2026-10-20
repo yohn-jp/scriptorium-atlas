@@ -1,0 +1,7 @@
+{
+  "schema": "atlas.plugin/v1",
+  "id": "scriptorium.atlas",
+  "version": "1.0.0",
+  "provides": ["atlas.board/v1"],
+  "requires": ["atlas.host-port/v1"]
+}

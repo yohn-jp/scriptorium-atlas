@@ -1,0 +1,62 @@
+{
+  "name": "@scriptorium-atlas/canvas",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "sideEffects": [
+    "./dist/ui/ExcalidrawEditor.js",
+    "./dist/ui/styles.css"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "scripts/copy-fonts.mjs",
+    "scripts/copy-canvas-assets.mjs",
+    "scripts/font-notices.md",
+    "scripts/licenses"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "import": "./dist/ui/index.js"
+    },
+    "./io": {
+      "types": "./dist/io/index.d.ts",
+      "import": "./dist/io/index.js"
+    },
+    "./assets": {
+      "types": "./dist/assets-node.d.ts",
+      "import": "./scripts/copy-canvas-assets.mjs"
+    },
+    "./scene": {
+      "types": "./dist/scene/index.d.ts",
+      "import": "./dist/scene/index.js"
+    },
+    "./ui.css": "./dist/ui/styles.css"
+  },
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "copy-fonts": "node ./scripts/copy-fonts.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:browser": "node ./test/browser-operations.mjs",
+    "test:browser:accessibility": "node ./test/browser-keyboard-controls.mjs"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1"
+  },
+  "peerDependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.31",
+    "typescript": "5.9.3"
+  },
+  "description": "The Canvas package wraps the official Excalidraw React editor for Atlas.",
+  "license": "UNLICENSED"
+}

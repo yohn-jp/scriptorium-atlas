@@ -1,0 +1,41 @@
+{
+  "name": "@scriptorium-atlas/persistence",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "private": false,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    },
+    "./board": {
+      "types": "./dist/board.d.ts",
+      "import": "./dist/board.js"
+    },
+    "./bytes": {
+      "types": "./dist/bytes.d.ts",
+      "import": "./dist/bytes.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:browser": "npm run build && playwright test --config test/playwright.config.ts",
+    "test:browser:q05": "node test/q05-host-browser.mjs",
+    "test:browser:q05:crash": "node test/q05-browser-crash.mjs"
+  },
+  "dependencies": {
+    "@scriptorium-atlas/contracts": "workspace:*",
+    "fflate": "0.8.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "fake-indexeddb": "6.2.4",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

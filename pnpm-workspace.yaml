@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - plugins/*
+
+strictPeerDependencies: true
+preferFrozenLockfile: true
+allowBuilds:
+  esbuild: true

@@ -44,6 +44,15 @@
       "laneIds": [
         "lane-todo"
       ],
+      "lanes": [
+        {
+          "id": "lane-todo",
+          "label": "To do",
+          "cardIds": [
+            "card-1"
+          ]
+        }
+      ],
       "cardOrder": [
         "card-1"
       ]
@@ -57,7 +66,23 @@
         "y": 0,
         "zoom": 1
       },
-      "axis": "story.scene-order"
+      "axis": "story.scene-order",
+      "timeline": {
+        "range": {
+          "start": 0,
+          "end": 8
+        },
+        "entries": [
+          {
+            "itemId": "manual-note",
+            "value": 1
+          },
+          {
+            "itemId": "card-1",
+            "value": null
+          }
+        ]
+      }
     }
   ],
   "nodes": [

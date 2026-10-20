@@ -8,6 +8,7 @@
 - `.excalidraw`: Excalidrawの標準Scene JSON（`type: "excalidraw", version: 2`）。公式ライブラリのserialize/restore/import/exportを使い、Elements/Files/AppStateのうち永続対象の互換性を維持。未対応version/Elementで黙って丸めない。
 - Story: 既存 `bible/**/*.yaml`, `plot/**/*.yaml`, `manuscript/**/*.md` を正本とする。AtlasはStoryを所有しない。全Canvas DraftをStoryのYAMLへ混ぜない。
 - `.atlas.json`の `assets` は相対的Content Addressed Pathか、検証済みの既存File Pathを参照。外部URLを暗黙fetchしない。Standalone ZIP bundleでは必要Asset bytesを同梱する。
+- 画像Assetは10 MiB以下。HostがMIMEとbytesを検査し、最大1 MiBのBase64 chunkをStageしてSHA-256を照合した後、通常Document writes（合計8 MiB以下）と同じReview/Commitへ束ねる。許可しないSVG/HTMLは表示しない。
 - Multiple Boardは独立ファイル。Board間リンクは `workspaceId + relative path + boardId` で決定し、同名表示や現在のTab順はidentityとしない。
 
 ## 2. Board schema意味
@@ -16,7 +17,8 @@
 
 - `view.kind`: `graph | freeform | board | timeline | storyboard`。Graphはedge/Pin/Viewport/Filter、BoardはLane ID/順番、Timelineは明示Axis/temporal値のみ、StoryboardはCard IDのOrderを管理する。
 - `position`: 有限number、absolute pixel-space。NaN/Infinity/巨大値を拒否。Zoomは0.05–8、rotation等のExcalidraw固有属性は標準Sceneへ保持。
-- `pin`: `{ nodeKey, x, y, mode:"manual" }`。Provider更新で位置を変更しない。ラベル更新は参照が同一なら保持。
+- `pin`: `{ nodeId, x, y, mode:"manual" }`。Provider更新で位置を変更しない。ラベル更新は参照が同一なら保持。JSON Schemaとfixtureの`nodeId`を正とし、旧記述の`nodeKey`は誤記としてここで整合させる。
+- Structured board views persist their assignments: `view.lanes[]` stores a lane ID, label, and ordered card IDs; `view.timeline` stores an explicit numeric range and item values. `null` is an unknown time. The axis selects the units (`story.time`, `generic.time`, or `story.scene-order`). Host integrity validation rejects duplicate IDs, missing item references, and ranges where start exceeds end.
 - `card`: `text | source | provider-node | image`。Source/Provider CardにはRef・表示キャッシュ・missing状態があり、元の本文とは独立。自動Provider再取得がCardの手動Annotationを上書きしない。
 - `edge`: `semantic | visual` の別。Drawn arrow/Canvas connectorをsemantic関係に自動変換しない。Semantic Edgeの変更はStory Command→Change Intent。
 - `sourceRevision`はデータ正本を参照して表示更新できるが、LayoutなどのBoard revisionは独立に更新。Snapshotが更新された場合はStaleを明示して再読込。
@@ -32,6 +34,7 @@
 
 - `atlas-workspace.zip` に `manifest.json`、含まれる全Document、参照Asset bytes。ManifestにはSchema、Workspace ID、相対Path、SHA-256、file bytes。選択時に全件Manifest確認・hash/重複Path/Case-insensitive衝突・ZipSlip・絶対Path・NUL・Symlink・Bombを拒否。
 - V1のHost許容上限: Workspace総ファイル数100,000、1 source text ≤2MiB、1 image ≤10MiB、bundle展開後総量 ≤256MiB、ZIP entry ≤100,000、深さ32。超過時はErrorと既存Workspace保存。将来のStreaming巨大形式は別契約。
+- `manifest.json`もImport/Exportの1 entryとして件数に数え、実際にserializeしたmanifest bytesを展開後aggregate byte上限に含める。ZIP metadataとcompressed bytesも別に検証する。Import/Exportは同じファイル数・byte上限を適用し、超過時に既存Workspaceを削除・切詰めせずErrorで終了する。（2026-10-20の明示決定。Goal/Q条件は変更しない。）
 - 画像URL/外部CSS/scriptをAssetとして実行しない。SVGのImportはscript/eventHandler/foreignObject/external referencesを安全化してから表示し、疑わしいSVGはBlobとしてのみダウンロード可。
 - Export/ImportはByte preservationを検証。Gitの全履歴、private repository、Token、利用者の元ファイルを勝手にBundle化しない。ユーザー操作で選んだWorkspaceだけ処理する。
 - PNG/SVGは見えているCanvasと選択したexport regionを出力し、Graph Provider非同期未取得のNodeは明示Placeholder。export成功をRepositoryへSave/Pubished済と表現しない。

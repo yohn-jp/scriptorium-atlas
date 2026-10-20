@@ -575,6 +575,16 @@
           },
           "required": [],
           "additionalProperties": false
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/boardLane"
+          },
+          "maxItems": 10000
+        },
+        "timeline": {
+          "$ref": "#/$defs/timeline"
         }
       },
       "required": [
@@ -583,7 +593,43 @@
         "name",
         "viewport"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "timeline"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "axis"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "timeline": {}
+            },
+            "required": [
+              "timeline"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "timeline"
+              }
+            }
+          }
+        }
+      ]
     },
     "changeIntent": {
       "type": "object",
@@ -758,6 +804,3750 @@
       ],
       "additionalProperties": false
     },
+    "workspaceHandle": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sourceRevision",
+        "epoch"
+      ],
+      "additionalProperties": false
+    },
+    "workspaceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "fileMetadata": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "path",
+        "revision",
+        "contentType",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "versionedFile": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 15000000
+        },
+        "encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ]
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "revision",
+        "content",
+        "encoding",
+        "contentType",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "versionedFileChunk": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 5592408,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "encoding": {
+          "const": "base64"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "revision",
+        "offset",
+        "content",
+        "encoding",
+        "nextOffset",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "fileListQuery": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1024
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
+      "additionalProperties": false
+    },
+    "fileReadQuery": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "expectedRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "workspaceSnapshotQuery": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
+      "additionalProperties": false
+    },
+    "filePage": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fileMetadata"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "files",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "workspaceSnapshotPage": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/workspaceHandle"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workspaceSnapshotFile"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workspace",
+        "files",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "changePreviewFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "operation": {
+          "enum": [
+            "create",
+            "update",
+            "delete"
+          ]
+        },
+        "previousRevision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "nextRevision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        }
+      },
+      "required": [
+        "path",
+        "operation",
+        "previousRevision",
+        "nextRevision",
+        "bytes"
+      ],
+      "additionalProperties": false
+    },
+    "preparedChange": {
+      "type": "object",
+      "properties": {
+        "preparedId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "baseWorkspaceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/changePreviewFile"
+          },
+          "maxItems": 256
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "durableAck": {
+          "$ref": "#/$defs/durableAck"
+        }
+      },
+      "required": [
+        "preparedId",
+        "operationId",
+        "workspaceId",
+        "baseWorkspaceRevision",
+        "changes",
+        "createdAt",
+        "durableAck"
+      ],
+      "additionalProperties": false
+    },
+    "commitReceipt": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "path",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "committedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "operationId",
+        "workspaceId",
+        "sourceRevision",
+        "files",
+        "committedAt"
+      ],
+      "additionalProperties": false
+    },
+    "recoverySummary": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "pendingOperationIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxItems": 10000
+        },
+        "unknownCommitIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxItems": 10000
+        },
+        "readOnly": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "pendingOperationIds",
+        "unknownCommitIds",
+        "readOnly"
+      ],
+      "additionalProperties": false
+    },
+    "hostErrorCode": {
+      "type": "string",
+      "enum": [
+        "UNAVAILABLE",
+        "INVALID_INPUT",
+        "PERMISSION_DENIED",
+        "REVISION_CONFLICT",
+        "STORAGE_UNAVAILABLE",
+        "QUOTA_EXCEEDED",
+        "COMMIT_UNKNOWN",
+        "OPERATION_ID_REUSED",
+        "TIMEOUT",
+        "CANCELED",
+        "INVALID_PATH",
+        "UNSUPPORTED_VERSION",
+        "NOT_INSTALLED",
+        "DISABLED",
+        "HOST_UNAVAILABLE",
+        "PROVIDER_FAILED",
+        "PROTOCOL_INVALID",
+        "SNAPSHOT_STALE",
+        "RESYNC_REQUIRED",
+        "CANCELLED",
+        "OVERLOADED",
+        "SOURCE_MISSING",
+        "SCRIPTORIUM_HOST_UNAVAILABLE"
+      ]
+    },
+    "hostError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/hostErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "additionalProperties": false
+    },
+    "workspaceChanged": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "atlas.workspace.changed"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "epoch",
+        "sourceRevision"
+      ],
+      "additionalProperties": false
+    },
+    "frameReady": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "atlas.frame.ready"
+        },
+        "pluginId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "type",
+        "pluginId",
+        "nonce"
+      ],
+      "additionalProperties": false
+    },
+    "frameInit": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "atlas.frame.init"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "nonce",
+        "epoch"
+      ],
+      "additionalProperties": false
+    },
+    "providerFeature": {
+      "type": "string",
+      "enum": [
+        "listNodes",
+        "listEdges",
+        "getNodes",
+        "neighbors",
+        "diff",
+        "updated"
+      ]
+    },
+    "providerCapability": {
+      "type": "string",
+      "enum": [
+        "workspace.files.metadata",
+        "workspace.files.read",
+        "source.open",
+        "graph.read"
+      ]
+    },
+    "providerDescriptor": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "schemaVersion": {
+          "const": "atlas.graph/v1"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/providerFeature"
+          },
+          "maxItems": 16
+        },
+        "requiredReadCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/providerCapability"
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "id",
+        "schemaVersion",
+        "version",
+        "features",
+        "requiredReadCapabilities"
+      ],
+      "additionalProperties": false
+    },
+    "providerLease": {
+      "type": "object",
+      "properties": {
+        "leaseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "providerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "leaseId",
+        "providerId",
+        "snapshot",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "graphDelta": {
+      "type": "object",
+      "properties": {
+        "previousSnapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "changedNodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphNode"
+          },
+          "maxItems": 500
+        },
+        "removedNodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeRef"
+          },
+          "maxItems": 500
+        },
+        "changedEdges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphEdge"
+          },
+          "maxItems": 500
+        },
+        "removedEdges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeRef"
+          },
+          "maxItems": 500
+        }
+      },
+      "required": [
+        "previousSnapshot",
+        "snapshot"
+      ],
+      "additionalProperties": false
+    },
+    "graphEdgePage": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphEdge"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "items",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "neighbor": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "$ref": "#/$defs/graphNode"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphEdge"
+          },
+          "maxItems": 500
+        }
+      },
+      "required": [
+        "node",
+        "edges"
+      ],
+      "additionalProperties": false
+    },
+    "neighborPage": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/neighbor"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "items",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "graphDeltaPage": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphDelta"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "items",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "providerListQuery": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "maxItems": 128
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "maxItems": 64
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "additionalProperties": false
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "handle"
+      ]
+    },
+    "providerGetNodesQuery": {
+      "type": "object",
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeRef"
+          },
+          "maxItems": 500
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "handle",
+        "refs"
+      ],
+      "additionalProperties": false
+    },
+    "providerNeighborsQuery": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ]
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "handle",
+        "from",
+        "direction",
+        "depth",
+        "limit"
+      ],
+      "additionalProperties": false
+    },
+    "providerDiffQuery": {
+      "type": "object",
+      "properties": {
+        "previousSnapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "handle",
+        "previousSnapshot"
+      ],
+      "additionalProperties": false
+    },
+    "providerRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "open"
+            },
+            "params": {
+              "$ref": "#/$defs/providerOpenParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "listNodes"
+            },
+            "params": {
+              "$ref": "#/$defs/providerListQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "listEdges"
+            },
+            "params": {
+              "$ref": "#/$defs/providerListQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "getNodes"
+            },
+            "params": {
+              "$ref": "#/$defs/providerGetNodesQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "neighbors"
+            },
+            "params": {
+              "$ref": "#/$defs/providerNeighborsQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "diff"
+            },
+            "params": {
+              "$ref": "#/$defs/providerDiffQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "close"
+            },
+            "params": {
+              "$ref": "#/$defs/providerCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/providerCancelParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "providerResult": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/providerPage"
+        },
+        {
+          "$ref": "#/$defs/graphEdgePage"
+        },
+        {
+          "$ref": "#/$defs/neighborPage"
+        },
+        {
+          "$ref": "#/$defs/graphDeltaPage"
+        }
+      ]
+    },
+    "providerRpcRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "open"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerOpenParams"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "listNodes"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerListQuery"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "listEdges"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerListQuery"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "getNodes"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerGetNodesQuery"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "neighbors"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerNeighborsQuery"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "diff"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerDiffQuery"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "close"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerCloseParams"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.request"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "cancel"
+                },
+                "params": {
+                  "$ref": "#/$defs/providerCancelParams"
+                }
+              },
+              "required": [
+                "method",
+                "params"
+              ],
+              "additionalProperties": false
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "deadline",
+            "payload"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "providerRpcResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/providerOpenResult"
+            },
+            "method": {
+              "const": "open"
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "open"
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/providerPage"
+            },
+            "method": {
+              "const": "listNodes"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "listNodes"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/graphEdgePage"
+            },
+            "method": {
+              "const": "listEdges"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "listEdges"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/providerPage"
+            },
+            "method": {
+              "const": "getNodes"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "getNodes"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/neighborPage"
+            },
+            "method": {
+              "const": "neighbors"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "neighbors"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/graphDeltaPage"
+            },
+            "method": {
+              "const": "diff"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "diff"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "type": "null"
+            },
+            "method": {
+              "const": "close"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "close"
+            },
+            "handle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "type": "null"
+            },
+            "method": {
+              "const": "cancel"
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "result",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atlas.provider.response"
+            },
+            "protocolVersion": {
+              "const": "atlas.graph/v1"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "providerId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "method": {
+              "const": "cancel"
+            }
+          },
+          "required": [
+            "type",
+            "protocolVersion",
+            "requestId",
+            "providerId",
+            "epoch",
+            "ok",
+            "error",
+            "method"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "emptyParams": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "prepareParams": {
+      "type": "object",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/changeIntent"
+        }
+      },
+      "required": [
+        "change"
+      ],
+      "additionalProperties": false
+    },
+    "requestSourceParams": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/sourceRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "acquireProviderParams": {
+      "type": "object",
+      "properties": {
+        "providerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "providerId",
+        "sourceRevision"
+      ],
+      "additionalProperties": false
+    },
+    "providerCallParams": {
+      "type": "object",
+      "properties": {
+        "leaseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "request": {
+          "$ref": "#/$defs/pluginProviderRequest"
+        }
+      },
+      "required": [
+        "leaseId",
+        "request"
+      ],
+      "additionalProperties": false
+    },
+    "releaseProviderParams": {
+      "type": "object",
+      "properties": {
+        "leaseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "leaseId"
+      ],
+      "additionalProperties": false
+    },
+    "hostRpcRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "snapshot"
+            },
+            "params": {
+              "$ref": "#/$defs/workspaceSnapshotQuery"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "list"
+            },
+            "params": {
+              "$ref": "#/$defs/fileListQuery"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "read"
+            },
+            "params": {
+              "$ref": "#/$defs/fileReadQuery"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "prepare"
+            },
+            "params": {
+              "$ref": "#/$defs/prepareParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "requestSource"
+            },
+            "params": {
+              "$ref": "#/$defs/requestSourceParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "describeProviders"
+            },
+            "params": {
+              "$ref": "#/$defs/emptyParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "acquireProvider"
+            },
+            "params": {
+              "$ref": "#/$defs/acquireProviderParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "providerCall"
+            },
+            "params": {
+              "$ref": "#/$defs/providerCallParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "releaseProvider"
+            },
+            "params": {
+              "$ref": "#/$defs/releaseProviderParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "beginAsset"
+            },
+            "params": {
+              "$ref": "#/$defs/beginAssetParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "appendAsset"
+            },
+            "params": {
+              "$ref": "#/$defs/appendAssetParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "prepareAsset"
+            },
+            "params": {
+              "$ref": "#/$defs/prepareAssetParams"
+            },
+            "type": {
+              "const": "atlas.host.request"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "params",
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "hostRpcResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/workspaceSnapshotPage"
+        },
+        {
+          "$ref": "#/$defs/filePage"
+        },
+        {
+          "$ref": "#/$defs/versionedFile"
+        },
+        {
+          "$ref": "#/$defs/versionedFileChunk"
+        },
+        {
+          "$ref": "#/$defs/preparedChange"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/providerDescriptor"
+          },
+          "maxItems": 256
+        },
+        {
+          "$ref": "#/$defs/providerLease"
+        },
+        {
+          "$ref": "#/$defs/providerResult"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/assetUploadReceipt"
+        },
+        {
+          "$ref": "#/$defs/assetChunkReceipt"
+        }
+      ]
+    },
+    "hostRpcResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "snapshot"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/workspaceSnapshotPage"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "list"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/filePage"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "read"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/versionedFile"
+                },
+                {
+                  "$ref": "#/$defs/versionedFileChunk"
+                }
+              ]
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "prepare"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/preparedChange"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "requestSource"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/versionedFile"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "describeProviders"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/providerDescriptor"
+              },
+              "maxItems": 256
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "acquireProvider"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/providerLease"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "providerCall"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/providerResult"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "releaseProvider"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "type": "null"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "beginAsset"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/assetUploadReceipt"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "appendAsset"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/assetChunkReceipt"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "const": "prepareAsset"
+            },
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "$ref": "#/$defs/preparedChange"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "result",
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": "atlas.host/v1"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "epoch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "enum": [
+                "snapshot",
+                "list",
+                "read",
+                "prepare",
+                "requestSource",
+                "describeProviders",
+                "acquireProvider",
+                "providerCall",
+                "releaseProvider",
+                "beginAsset",
+                "appendAsset",
+                "prepareAsset"
+              ]
+            },
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "$ref": "#/$defs/hostError"
+            },
+            "type": {
+              "const": "atlas.host.response"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "callId",
+            "epoch",
+            "method",
+            "ok",
+            "error",
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "hostRpcEvent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/workspaceChanged"
+        }
+      ]
+    },
+    "durableAck": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "journalSequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "acknowledgedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "operationId",
+        "workspaceId",
+        "journalSequence",
+        "acknowledgedAt"
+      ],
+      "additionalProperties": false
+    },
+    "boardLane": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "cardIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "maxLength": 128
+          },
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "cardIds"
+      ],
+      "additionalProperties": false
+    },
+    "timelineRange": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "additionalProperties": false
+    },
+    "timelineEntry": {
+      "type": "object",
+      "properties": {
+        "itemId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "itemId",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "timeline": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "$ref": "#/$defs/timelineRange"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/timelineEntry"
+          },
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "range",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "providerGrant": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/providerCapability"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "maxItems": 512
+        }
+      },
+      "required": [
+        "capability"
+      ],
+      "additionalProperties": false
+    },
+    "providerOpenParams": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "requestedSnapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/providerGrant"
+          },
+          "maxItems": 64
+        },
+        "deadline": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "workspaceId",
+        "requestedSnapshot",
+        "grants",
+        "deadline"
+      ],
+      "additionalProperties": false
+    },
+    "providerOpenResult": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "actualSnapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "handle",
+        "actualSnapshot",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "providerCloseParams": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "additionalProperties": false
+    },
+    "providerCancelParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
     "board": {
       "type": "object",
       "properties": {
@@ -831,6 +4621,519 @@
         "assets"
       ],
       "additionalProperties": false
+    },
+    "assetUploadStart": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "baseWorkspaceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "operationId",
+        "workspaceId",
+        "baseWorkspaceRevision",
+        "path",
+        "sha256",
+        "totalBytes",
+        "contentType"
+      ],
+      "additionalProperties": false
+    },
+    "assetChunk": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 1398104,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      },
+      "required": [
+        "uploadId",
+        "offset",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "assetUploadReceipt": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "nextOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10485760
+        },
+        "expiresAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "uploadId",
+        "operationId",
+        "workspaceId",
+        "path",
+        "totalBytes",
+        "nextOffset",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "assetChunkReceipt": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "nextOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10485760
+        },
+        "receivedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10485760
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "durableAck": {
+          "$ref": "#/$defs/durableAck"
+        }
+      },
+      "required": [
+        "uploadId",
+        "nextOffset",
+        "receivedBytes",
+        "totalBytes",
+        "durableAck"
+      ],
+      "additionalProperties": false
+    },
+    "beginAssetParams": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/assetUploadStart"
+        }
+      },
+      "required": [
+        "asset"
+      ],
+      "additionalProperties": false
+    },
+    "appendAssetParams": {
+      "$ref": "#/$defs/assetChunk"
+    },
+    "prepareAssetParams": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "change": {
+          "$ref": "#/$defs/changeIntent"
+        }
+      },
+      "required": [
+        "uploadId",
+        "change"
+      ],
+      "additionalProperties": false
+    },
+    "pluginProviderListQuery": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "maxItems": 128
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "maxItems": 64
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "required": []
+    },
+    "pluginProviderGetNodesQuery": {
+      "type": "object",
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeRef"
+          },
+          "maxItems": 500
+        }
+      },
+      "required": [
+        "refs"
+      ],
+      "additionalProperties": false
+    },
+    "pluginProviderNeighborsQuery": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ]
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "from",
+        "direction",
+        "depth",
+        "limit"
+      ],
+      "additionalProperties": false
+    },
+    "pluginProviderDiffQuery": {
+      "type": "object",
+      "properties": {
+        "previousSnapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
+      "required": [
+        "previousSnapshot"
+      ],
+      "additionalProperties": false
+    },
+    "pluginProviderRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "listNodes"
+            },
+            "params": {
+              "$ref": "#/$defs/pluginProviderListQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "listEdges"
+            },
+            "params": {
+              "$ref": "#/$defs/pluginProviderListQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "getNodes"
+            },
+            "params": {
+              "$ref": "#/$defs/pluginProviderGetNodesQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "neighbors"
+            },
+            "params": {
+              "$ref": "#/$defs/pluginProviderNeighborsQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "const": "diff"
+            },
+            "params": {
+              "$ref": "#/$defs/pluginProviderDiffQuery"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "bundleManifestFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "additionalProperties": false
+    },
+    "bundleManifest": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "atlas.bundle/v1"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bundleManifestFile"
+          },
+          "maxItems": 99999
+        }
+      },
+      "required": [
+        "schema",
+        "workspaceId",
+        "name",
+        "sourceRevision",
+        "files"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotFileMetadata": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "$ref": "#/$defs/workspaceId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456
+        },
+        "encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ]
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "revision",
+        "contentType",
+        "updatedAt",
+        "byteLength",
+        "encoding"
+      ],
+      "additionalProperties": false
+    },
+    "workspaceSnapshotFile": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/versionedFile"
+        },
+        {
+          "$ref": "#/$defs/snapshotFileMetadata"
+        }
+      ]
     }
   },
   "$ref": "#/$defs/board"

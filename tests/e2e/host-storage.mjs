@@ -1,0 +1,383 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { unzipSync, zipSync } from 'fflate';
+
+const SOURCE_PATH = 'notes/scene.md';
+const SOURCE_V1 = '# Scene\n\n保存した本文です。\n';
+const SOURCE_V2 = '# Scene\n\n復旧後にCommitした本文です。\n';
+const MAX_BUNDLE_ARCHIVE_BYTES = 512 * 1024 * 1024;
+
+function hostileBundles(bundle) {
+  const entries = unzipSync(bundle);
+  const manifest = JSON.parse(Buffer.from(entries['manifest.json']).toString('utf8'));
+  const archive = (values, changedManifest = manifest) => zipSync({
+    ...values, 'manifest.json': Buffer.from(JSON.stringify(changedManifest)),
+  });
+  const traversal = structuredClone(manifest);
+  traversal.files[0].path = '../escape.md';
+  const wrongHash = structuredClone(manifest);
+  wrongHash.files[0].sha256 = '0'.repeat(64);
+  const duplicate = archive({ ...entries, 'workspace/notes/scenf.md': entries[`workspace/${SOURCE_PATH}`] });
+  // ZIP objects cannot express duplicate keys. Change equal-length local and central
+  // filenames after compression to exercise the actual duplicate-entry guard.
+  const duplicateBytes = Buffer.from(duplicate);
+  const oldName = Buffer.from('workspace/notes/scenf.md');
+  const newName = Buffer.from(`workspace/${SOURCE_PATH}`);
+  let offset = 0;
+  while ((offset = duplicateBytes.indexOf(oldName, offset)) !== -1) {
+    newName.copy(duplicateBytes, offset); offset += oldName.length;
+  }
+  const bomb = Buffer.from(bundle);
+  for (let index = 0; index <= bomb.length - 46; index++) {
+    if (bomb.readUInt32LE(index) === 0x02014b50) {
+      bomb.writeUInt32LE(257 * 1024 * 1024, index + 24); break;
+    }
+  }
+  return [
+    ['invalid-zip', Buffer.from('not a ZIP archive')],
+    ['unknown-version', archive(entries, { ...manifest, schema: 'atlas.bundle/v999' })],
+    ['hash-mismatch', archive(entries, wrongHash)],
+    ['path-traversal', archive({ ...entries, 'workspace/../escape.md': Buffer.from('escape') }, traversal)],
+    ['duplicate-entry', duplicateBytes],
+    ['declared-expansion-bomb', bomb],
+  ].map(([kind, bytes]) => [kind, Buffer.from(bytes)]);
+}
+
+async function newContext(browser) {
+  return browser.newContext({
+    acceptDownloads: true,
+    locale: 'ja-JP',
+    viewport: { width: 1440, height: 1000 }
+  });
+}
+
+async function openHost(page, baseUrl) {
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('heading', { name: 'Scriptorium Atlas' }).waitFor();
+  await page.getByLabel('Workspace名').waitFor();
+}
+
+async function createEmptyWorkspace(page, name) {
+  await page.getByLabel('Workspace名').fill(name);
+  await page.getByRole('button', { name: '空のWorkspaceを作成' }).click();
+  await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
+  const workspaceId = await page.getByLabel('開く').inputValue();
+  assert.ok(workspaceId, 'newly created Workspace must receive a persistent ID');
+  return workspaceId;
+}
+
+async function openSourcePanel(page) {
+  const summary = page.getByText('Workspaceのファイル・Source', { exact: true });
+  const isOpen = await summary.evaluate(node => node.parentElement?.hasAttribute('open'));
+  if (!isOpen) await summary.click();
+}
+
+async function fillSource(page, path, content) {
+  await openSourcePanel(page);
+  const pathInput = page.getByLabel('相対Path');
+  if (await pathInput.inputValue() !== path) await pathInput.fill(path);
+  await page.getByLabel('Source', { exact: true }).fill(content);
+}
+
+async function prepareSource(page, path, content) {
+  await fillSource(page, path, content);
+  await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
+  const article = page.locator('section[aria-label="変更の承認"] article').last();
+  await article.waitFor();
+  await article.getByText(content, { exact: true }).waitFor();
+  return article;
+}
+
+async function approveSource(page, article) {
+  await article.getByRole('button', { name: 'この変更を承認してCommit' }).click();
+  await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
+}
+
+async function reopenWorkspace(page, workspaceId) {
+  const workspaceSelect = page.getByLabel('開く');
+  await workspaceSelect.selectOption(workspaceId);
+  await page.waitForFunction(id => {
+    const select = document.querySelector('section[aria-label="Workspace"] select');
+    return select?.value === id;
+  }, workspaceId);
+  assert.equal(await workspaceSelect.inputValue(), workspaceId, 'the requested Workspace must be selected before waiting for its recovery state');
+  await page.getByRole('status').filter({
+    hasText: /(?:Workspaceを開きました。|復旧したJournal操作: \d+件。|COMMIT_UNKNOWN:)/,
+  }).waitFor();
+}
+
+async function selectSource(page, path) {
+  await openSourcePanel(page);
+  await page.getByRole('button', { name: path, exact: true }).click();
+}
+
+async function revisionText(page, path) {
+  await openSourcePanel(page);
+  return page.locator('li').filter({ has: page.getByRole('button', { name: path, exact: true }) }).locator('span').innerText();
+}
+
+export async function runHostStorageCases({ browser, baseUrl, profile, record }) {
+  await record('Q02-empty-workspace-create-edit-reload', async () => {
+    const context = await newContext(browser);
+    try {
+      const page = await context.newPage();
+      await openHost(page, baseUrl);
+      const workspaceId = await createEmptyWorkspace(page, `Q02 ${profile} empty workspace`);
+      await openSourcePanel(page);
+      assert.equal(await page.locator('details').filter({ hasText: 'Workspaceのファイル・Source' }).locator('li').count(), 0,
+        'a newly created Workspace must not acquire a demo file');
+
+      const proposal = await prepareSource(page, SOURCE_PATH, SOURCE_V1);
+      await approveSource(page, proposal);
+      const initialRevision = await revisionText(page, SOURCE_PATH);
+      assert.match(initialRevision, /revision [a-f0-9]{12}/);
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByLabel('開く').waitFor();
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
+      assert.equal(await revisionText(page, SOURCE_PATH), initialRevision);
+      const renamed = `Q02 ${profile} 名前変更`;
+      await page.getByLabel('Workspace名').fill(renamed);
+      await page.getByRole('button', { name: '名前を変更', exact: true }).click();
+      await page.getByLabel('開く').getByRole('option', { name: renamed, exact: true }).waitFor({ state: 'attached' });
+      await page.getByRole('button', { name: '閉じる', exact: true }).click();
+      assert.equal(await page.getByLabel('開く').inputValue(), '');
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
+      await approveSource(page, await prepareSource(page, SOURCE_PATH, SOURCE_V2));
+      const editedRevision = await revisionText(page, SOURCE_PATH);
+      assert.notEqual(editedRevision, initialRevision);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await reopenWorkspace(page, workspaceId);
+      assert.equal(await page.getByLabel('開く').getByRole('option', { selected: true }).innerText(), renamed);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V2);
+      assert.equal(await revisionText(page, SOURCE_PATH), editedRevision);
+      return { workspaceId, path: SOURCE_PATH, initialRevision, editedRevision, renamed, closedAndReopened: true, bytes: Buffer.byteLength(SOURCE_V2) };
+    } finally {
+      await context.close();
+    }
+  });
+
+  await record('Q03-bundle-export-import-roundtrip-and-invalid-import-preserves-workspace', async () => {
+    const sourceContext = await newContext(browser);
+    let bundle;
+    let revision;
+    try {
+      const page = await sourceContext.newPage();
+      await openHost(page, baseUrl);
+      await createEmptyWorkspace(page, `Q03 export ${profile}`);
+      const proposal = await prepareSource(page, SOURCE_PATH, SOURCE_V1);
+      await approveSource(page, proposal);
+      revision = await revisionText(page, SOURCE_PATH);
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByRole('button', { name: 'Bundleをexport' }).click()
+      ]);
+      const downloadedPath = await download.path();
+      assert.ok(downloadedPath, 'browser download must produce an artifact');
+      bundle = await readFile(downloadedPath);
+      assert.ok(bundle.byteLength > 0 && bundle.byteLength <= MAX_BUNDLE_ARCHIVE_BYTES,
+        'compressed ZIP artifact must fit the separate 512 MiB archive limit');
+    } finally {
+      await sourceContext.close();
+    }
+
+    const importContext = await newContext(browser);
+    try {
+      const page = await importContext.newPage();
+      await openHost(page, baseUrl);
+      const workspaceId = await createEmptyWorkspace(page, `Q03 existing ${profile}`);
+      const baseline = await prepareSource(page, 'notes/preserve.md', '既存Workspaceを保持します。\n');
+      await approveSource(page, baseline);
+
+      await page.getByLabel('Bundleをimport').setInputFiles({
+        name: 'atlas-workspace.zip',
+        mimeType: 'application/zip',
+        buffer: bundle
+      });
+      await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
+      assert.equal(await revisionText(page, SOURCE_PATH), revision,
+        'the source SHA-256 revision must survive the ZIP export/import roundtrip');
+
+      const rejected = [];
+      for (const [kind, buffer] of hostileBundles(bundle)) {
+        await page.getByLabel('Bundleをimport').setInputFiles({ name: `${kind}.zip`, mimeType: 'application/zip', buffer });
+        await page.getByRole('alert').waitFor();
+        await selectSource(page, SOURCE_PATH);
+        assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1, `${kind} must preserve source bytes`);
+        assert.equal(await revisionText(page, SOURCE_PATH), revision, `${kind} must preserve the source revision`);
+        rejected.push({ kind, archiveBytes: buffer.byteLength, sha256: createHash('sha256').update(buffer).digest('hex') });
+      }
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, 'notes/preserve.md');
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), '既存Workspaceを保持します。\n',
+        'a rejected import must preserve a pre-existing Workspace');
+
+      return {
+        archiveBytes: bundle.byteLength,
+        archiveSha256: createHash('sha256').update(bundle).digest('hex'),
+        sourceRevision: revision,
+        rejected,
+        invalidImportPreservedWorkspace: true
+      };
+    } finally {
+      await importContext.close();
+    }
+  });
+
+  await record('Q05-pending-draft-recovers-after-forced-page-reload', async () => {
+    const context = await newContext(browser);
+    try {
+      const page = await context.newPage();
+      await openHost(page, baseUrl);
+      const workspaceId = await createEmptyWorkspace(page, `Q05 recovery ${profile}`);
+      const proposal = await prepareSource(page, SOURCE_PATH, SOURCE_V1);
+      assert.ok(await proposal.isVisible());
+      assert.equal(await proposal.locator('details pre').nth(1).innerText(), SOURCE_V1);
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByLabel('開く').waitFor();
+      await reopenWorkspace(page, workspaceId);
+      await page.getByRole('status').filter({ hasText: '復旧したJournal操作: 1件' }).waitFor();
+      const recovered = page.locator('section[aria-label="変更の承認"] article').last();
+      assert.equal(await recovered.locator('details pre').nth(1).innerText(), SOURCE_V1,
+        'the durable prepared journal must restore the exact proposed UTF-8 content');
+      await approveSource(page, recovered);
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByLabel('開く').waitFor();
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1);
+      return { workspaceId, recoveredDraftBytes: Buffer.byteLength(SOURCE_V1), committedAfterRecovery: true };
+    } finally {
+      await context.close();
+    }
+  });
+
+  await record('Q01-profile-plugin-presence-and-host-origin-storage-isolation', async () => {
+    const context = await newContext(browser);
+    try {
+      const page = await context.newPage();
+      await openHost(page, baseUrl);
+      await createEmptyWorkspace(page, `Q01 profile ${profile}`);
+
+      const expected = {
+        atlas: { atlas: true, story: false },
+        story: { atlas: false, story: true },
+        combined: { atlas: true, story: true }
+      }[profile];
+      for (const [plugin, present] of Object.entries(expected)) {
+        const title = plugin === 'atlas' ? 'Atlas Plugin' : 'Story Knowledge Plugin';
+        const panel = page.locator(`section[aria-label="${title}"]`);
+        assert.equal(await panel.count(), present ? 1 : 0, `${profile} profile ${plugin} panel presence`);
+        if (!present) continue;
+
+        await panel.getByText('接続中', { exact: true }).waitFor();
+        const iframe = panel.locator('iframe');
+        const src = await iframe.getAttribute('src');
+        assert.ok(src);
+        const pluginOrigin = new URL(src, baseUrl).origin;
+        assert.notEqual(pluginOrigin, new URL(baseUrl).origin, 'Plugin UI must run on a distinct origin');
+        const pluginFrame = page.frames().find(frame => frame.url().startsWith(pluginOrigin));
+        assert.ok(pluginFrame, `${plugin} frame must have loaded from ${pluginOrigin}`);
+        await pluginFrame.waitForLoadState('domcontentloaded');
+        const isolation = await pluginFrame.evaluate(async () => {
+          let parentIndexedDb = 'readable';
+          try { void window.parent.indexedDB; } catch (error) { parentIndexedDb = error instanceof Error ? error.name : String(error); }
+          let databases = [];
+          if (typeof indexedDB.databases === 'function') databases = (await indexedDB.databases()).flatMap(database => database.name ? [database.name] : []);
+          return { parentIndexedDb, databases };
+        });
+        assert.equal(isolation.parentIndexedDb, 'SecurityError', 'a Plugin must not access the Host frame IndexedDB object');
+        assert.ok(!isolation.databases.includes('scriptorium-atlas-v1'), 'Host database must not exist in the Plugin origin');
+      }
+
+      const hostDatabases = await page.evaluate(async () => {
+        if (typeof indexedDB.databases !== 'function') return null;
+        return (await indexedDB.databases()).flatMap(database => database.name ? [database.name] : []);
+      });
+      assert.ok(hostDatabases?.includes('scriptorium-atlas-v1'), 'Workspace IndexedDB must be owned by the Host origin');
+      return { profile, expectedPanels: expected, hostDatabases };
+    } finally {
+      await context.close();
+    }
+  });
+
+  await record('Q05-indexeddb-denial-fails-closed', async () => {
+    const context = await newContext(browser);
+    try {
+      await context.addInitScript(() => {
+        IDBFactory.prototype.open = function () {
+          throw new DOMException('Injected E2E storage denial', 'SecurityError');
+        };
+      });
+      const page = await context.newPage();
+      await openHost(page, baseUrl);
+      await page.getByRole('alert').filter({ hasText: 'READ_ONLY:' }).waitFor();
+      assert.equal(await page.getByRole('button', { name: '空のWorkspaceを作成' }).isDisabled(), true,
+        'Workspace creation must remain unavailable when IndexedDB cannot open');
+      return { failure: 'IndexedDB SecurityError', creationDisabled: true };
+    } finally {
+      await context.close();
+    }
+  });
+
+  await record('Q05-quota-aborted-commit-preserves-source-and-recoverable-draft', async () => {
+    const context = await newContext(browser);
+    try {
+      const page = await context.newPage();
+      await openHost(page, baseUrl);
+      const workspaceId = await createEmptyWorkspace(page, `Q05 quota ${profile}`);
+      let proposal = await prepareSource(page, SOURCE_PATH, SOURCE_V1);
+      await approveSource(page, proposal);
+
+      await selectSource(page, SOURCE_PATH);
+      proposal = await prepareSource(page, SOURCE_PATH, SOURCE_V2);
+      await page.evaluate(() => {
+        const originalPut = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (...args) {
+          if (this.name === 'files' && this.transaction.mode === 'readwrite') {
+            throw new DOMException('Injected E2E storage quota', 'QuotaExceededError');
+          }
+          return originalPut.apply(this, args);
+        };
+      });
+      await proposal.getByRole('button', { name: 'この変更を承認してCommit' }).click();
+      await page.getByRole('alert').filter({ hasText: 'Browser storage quota was exceeded.' }).waitFor();
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByLabel('開く').waitFor();
+      await reopenWorkspace(page, workspaceId);
+      await page.getByRole('status').filter({ hasText: '復旧したJournal操作: 1件' }).waitFor();
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V1,
+        'the atomic failure must preserve the previously committed source');
+      const recovered = page.locator('section[aria-label="変更の承認"] article').last();
+      assert.equal(await recovered.locator('details pre').nth(1).innerText(), SOURCE_V2,
+        'the rejected commit must retain its prepared proposal for recovery');
+      await approveSource(page, recovered);
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByLabel('開く').waitFor();
+      await reopenWorkspace(page, workspaceId);
+      await selectSource(page, SOURCE_PATH);
+      assert.equal(await page.getByLabel('Source', { exact: true }).inputValue(), SOURCE_V2);
+      return {
+        workspaceId,
+        failedCommit: 'QUOTA_EXCEEDED',
+        oldSourcePreservedUntilRetry: true,
+        preparedDraftRecoveredAndCommitted: true
+      };
+    } finally {
+      await context.close();
+    }
+  });
+}
