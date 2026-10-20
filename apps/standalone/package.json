@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build:atlas": "ATLAS_PROFILE=atlas vite build",
     "build:story": "ATLAS_PROFILE=story vite build",

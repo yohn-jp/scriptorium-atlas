@@ -38,7 +38,10 @@ export async function acquireProvider(owner: string, providerId: string, workspa
     await connection.call({method:'close',params:{handle:response.result.handle}},Date.now()+5000).catch(()=>{});
     throw new Error(owners.has(owner)?'OVERLOADED':'CANCELED');
   }
-  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.providerRevision !== `story-v1:${revisionHash}` || response.result.actualSnapshot.epoch !== connection.epoch) throw new Error('SNAPSHOT_STALE');
+  if (response.result.actualSnapshot.workspaceId !== workspace.workspaceId || response.result.actualSnapshot.sourceRevision !== workspace.sourceRevision || response.result.actualSnapshot.providerRevision !== `story-v1:${revisionHash}` || response.result.actualSnapshot.epoch !== connection.epoch) {
+    await connection.call({method:'close',params:{handle:response.result.handle}},Date.now()+5000).catch(()=>{});
+    throw new Error('SNAPSHOT_STALE');
+  }
   const lease: ProviderLease = { leaseId: crypto.randomUUID(), providerId, snapshot: response.result.actualSnapshot, capabilities: response.result.capabilities };
   leases.set(lease.leaseId, {owner, providerId, handle: response.result.handle, connection, lease});
   return lease;
@@ -50,6 +53,7 @@ export async function callProvider(owner: string, leaseId: string, request: Plug
   const routed = {...request, params: {...request.params, handle: entry.handle}};
   assertContract('providerRequest', routed);
   const response = await entry.connection.call(routed, Date.now() + 5000);
+  if (leases.get(leaseId) !== entry || !owners.has(owner) || connections.get(entry.providerId) !== entry.connection) throw new Error('CANCELED');
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerResult', response.result);
   if (response.result.snapshot.workspaceId !== entry.lease.snapshot.workspaceId || response.result.snapshot.sourceRevision !== entry.lease.snapshot.sourceRevision || response.result.snapshot.providerRevision !== entry.lease.snapshot.providerRevision || response.result.snapshot.epoch !== entry.lease.snapshot.epoch) throw new Error('SNAPSHOT_STALE');
