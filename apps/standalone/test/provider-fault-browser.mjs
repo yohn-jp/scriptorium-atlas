@@ -56,7 +56,12 @@ try {
   }
   await openSourcePanel();
   await page.getByLabel('相対Path').fill('bible/characters/provider.yaml');
-  await page.getByLabel('Source', { exact: true }).fill('id: char-a\ntype: character\nname: 故障試験の人物\n');
+  await page.getByLabel('Source', { exact: true }).fill('id: char-a\ntype: character\nname: 故障試験の人物\nappears: char-b\n');
+  await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
+  await page.locator('section[aria-label="変更の承認"] article').getByRole('button', { name: 'この変更を承認してCommit' }).click();
+  await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
+  await page.getByLabel('相対Path').fill('bible/characters/second.yaml');
+  await page.getByLabel('Source', { exact: true }).fill('id: char-b\ntype: character\nname: 参照先の人物\n');
   await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
   await page.locator('section[aria-label="変更の承認"] article').getByRole('button', { name: 'この変更を承認してCommit' }).click();
   await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
@@ -99,6 +104,27 @@ try {
   assert.equal(nodes.ok, true, JSON.stringify(nodes));
   assert.equal(nodes.result.items[0].ref.localId, 'char-a');
   assert.equal(nodes.result.items[0].source.path, 'bible/characters/provider.yaml');
+  const paging = await atlas.evaluate(async leaseId => {
+    const call = (method, params) => globalThis.__providerHostCall('providerCall', { leaseId, request: { method, params } });
+    const first = await call('listNodes', { limit: 1 });
+    const second = await call('listNodes', { limit: 1, cursor: first.result.nextCursor });
+    const refs = ['char-a', 'missing'].map(localId => ({ providerId: 'scriptorium.story-knowledge', localId }));
+    const partial = await call('getNodes', { refs });
+    const neighbors = await call('neighbors', { from: refs[0], depth: 1, direction: 'out', limit: 10 });
+    return { first, second, partial, neighbors };
+  }, initial.result.leaseId);
+  for (const reply of Object.values(paging)) {
+    assert.equal(reply.ok, true, JSON.stringify(reply));
+    assert.deepEqual(reply.result.snapshot, initial.result.snapshot);
+  }
+  assert.equal(paging.first.result.complete, true, 'complete describes source coverage; nextCursor describes pagination');
+  assert.ok(paging.first.result.nextCursor);
+  assert.equal(paging.second.result.nextCursor, null);
+  assert.equal(paging.second.result.complete, true);
+  assert.deepEqual([...paging.first.result.items, ...paging.second.result.items].map(node => node.ref.localId), ['char-a', 'char-b']);
+  assert.equal(paging.partial.result.complete, false);
+  assert.deepEqual(paging.partial.result.items.map(node => node.ref.localId), ['char-a']);
+  assert.equal(paging.neighbors.result.items[0].node.ref.localId, 'char-b');
   await story.evaluate(() => { globalThis.__providerDelayOpen = true; });
   await atlas.evaluate(params => {
     globalThis.__providerOpenResults = Promise.all(Array.from({ length: 4 }, () => globalThis.__providerHostCall('acquireProvider', params)));
@@ -161,5 +187,5 @@ try {
   assert.equal(disabledRequests, 0, 'disabled Plugins must not fetch heavy code or poll the network');
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
     queueDurationMs, createdWorkers, workersAfterLastLease: 0, disabledObservationMs: 5000, disabledRequests, fontPolicy,
-    cases: ['grant denial without Worker', 'static discovery', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
+    cases: ['grant denial without Worker', 'static discovery', 'real Provider page/cursor/getNodes partial/neighbors with exact snapshot', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }
