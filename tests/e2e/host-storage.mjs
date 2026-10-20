@@ -60,6 +60,10 @@ async function approveSource(page, article) {
 async function reopenWorkspace(page, workspaceId) {
   const workspaceSelect = page.getByLabel('開く');
   await workspaceSelect.selectOption(workspaceId);
+  await page.waitForFunction(id => {
+    const select = document.querySelector('section[aria-label="Workspace"] select');
+    return select?.value === id;
+  }, workspaceId);
   assert.equal(await workspaceSelect.inputValue(), workspaceId, 'the requested Workspace must be selected before waiting for its recovery state');
   await page.getByRole('status').filter({
     hasText: /(?:Workspaceを開きました。|復旧したJournal操作: \d+件。|COMMIT_UNKNOWN:)/,
