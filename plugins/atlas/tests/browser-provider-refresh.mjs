@@ -273,6 +273,36 @@ async function run() {
     await atlas.locator('.atlas-search-hit').waitFor({ state: 'detached' });
     report.cases.push('story-delete-diff-refresh-retains-stable-reference-as-unresolved');
 
+    await atlas.getByLabel('Providerスナップショットを検索').fill('');
+    await atlas.getByRole('button', { name: '＋ 手動ノード', exact: true }).click();
+    const manualName = `再同期後も残る手動ノード${randomUUID().slice(0, 5)}`;
+    await atlas.getByLabel('手動ノード名').fill(manualName);
+    await atlas.getByRole('button', { name: 'ノードを作成', exact: true }).click();
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    const manualNode = board.nodes.find((node) => node.label === manualName);
+    assert.ok(manualNode, 'A manual Atlas node should be saved before the Provider full-resync fallback.');
+
+    const storyPanel = page.locator('section[aria-label="Story Knowledge Plugin"]');
+    await storyPanel.getByRole('button', { name: 'Pluginを再起動' }).click();
+    await storyPanel.getByText('接続中', { exact: true }).waitFor({ state: 'visible', timeout: 20000 });
+    await story.getByRole('heading', { name: 'Story Knowledge', exact: true }).waitFor({ state: 'visible', timeout: 20000 });
+    await atlas.getByRole('button', { name: '接続中Providerを更新' }).click();
+    await atlas.locator('.atlas-status-inline').filter({ hasText: '全件再同期' }).waitFor({ state: 'visible', timeout: 30000 });
+    await flowNode.getByText(updatedName, { exact: true }).waitFor({ state: 'visible' });
+    await unresolvedNode.getByText(`${deletedName}（未解決）`, { exact: true }).waitFor({ state: 'visible' });
+    await atlas.locator(`.react-flow__node[data-id="${manualNode.id}"]`).getByText(manualName, { exact: true }).waitFor({ state: 'visible' });
+    board = await downloadBoard(page, atlas);
+    const nodeAfterResync = board.nodes.find((node) => node.id === originalNode.id);
+    const deletedAfterResync = board.nodes.find((node) => node.id === deletedNode.id);
+    const manualAfterResync = board.nodes.find((node) => node.id === manualNode.id);
+    const pinsAfterResync = board.views.find((view) => view.kind === 'graph')?.pins ?? [];
+    assert.deepEqual(nodeAfterResync?.position, positionBeforeRefresh, 'Provider restart and full resync should preserve the pinned Board node position.');
+    assert.ok(pinsAfterResync.some((pin) => pin.nodeId === originalNode.id && pin.mode === 'manual'), 'Provider restart and full resync should preserve the manual pin.');
+    assert.deepEqual(deletedAfterResync?.ref, deletedNode.ref, 'Full resync should retain the deleted entity as the same unresolved provider reference.');
+    assert.equal(manualAfterResync?.label, manualName, 'Full resync should preserve Atlas-owned manual nodes.');
+    report.cases.push('story-provider-restart-forces-full-resync-and-preserves-pins-manual-nodes-and-unresolved-refs');
+
     assert.deepEqual(dialogs, [], 'Provider refresh should not require native dialogs.');
     assert.deepEqual(pageErrors, [], 'Provider refresh should not cause uncaught page errors.');
     report.cases.push('no-native-dialogs-or-uncaught-page-errors');
