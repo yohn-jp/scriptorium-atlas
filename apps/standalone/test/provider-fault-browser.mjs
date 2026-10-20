@@ -18,6 +18,9 @@ try {
         if (!hostPort) {
           hostPort = this;
           hostPort.addEventListener('message', event => {
+            if (event.data?.type === 'atlas.workspace.changed') {
+              globalThis.__providerWorkspaceNotifications = (globalThis.__providerWorkspaceNotifications ?? 0) + 1;
+            }
             const pending = waiting.get(event.data?.callId);
             if (pending) { waiting.delete(event.data.callId); clearTimeout(pending.timer); pending.resolve(event.data); }
           });
@@ -112,9 +115,20 @@ try {
   assert.ok(scopedPages.list.result.nextCursor);
   assert.equal(scopedPages.second.result.nextCursor,null);
   for (const key of ['foreign','forged']) assert.equal(scopedPages[key].error.code,'INVALID_INPUT');
+  const notificationsBeforeGrant = await atlas.evaluate(() => globalThis.__providerWorkspaceNotifications ?? 0);
+  const storyFrame = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
+  const storyGrantPage = await storyFrame.evaluate(() => globalThis.__providerHostCall('list', {limit:1}));
+  assert.equal(storyGrantPage.ok, true);
+  assert.ok(storyGrantPage.result.nextCursor);
   await page.getByRole('checkbox', { name: 'AtlasへStory ProviderとSourceの読取りを許可', exact: true }).check();
+  await atlas.waitForFunction(before => (globalThis.__providerWorkspaceNotifications ?? 0) > before, notificationsBeforeGrant);
   const oldGrantCursor = await atlas.evaluate(cursor => globalThis.__providerHostCall('list',{limit:1,cursor}),scopedPages.list.result.nextCursor);
   assert.equal(oldGrantCursor.error.code,'INVALID_INPUT');
+  const newGrantPage = await atlas.evaluate(() => globalThis.__providerHostCall('list', {limit:1}));
+  assert.equal(newGrantPage.ok, true);
+  assert.match(newGrantPage.result.files[0].path, /^bible\//);
+  const unchangedStoryCursor = await storyFrame.evaluate(cursor => globalThis.__providerHostCall('list', {limit:1,cursor}), storyGrantPage.result.nextCursor);
+  assert.equal(unchangedStoryCursor.ok, true, 'Atlas grants must not invalidate Story inventory cursors.');
   let initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
   assert.equal(initial.ok, true, JSON.stringify(initial));
   const nodes = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall', {
@@ -222,7 +236,7 @@ try {
   assert.equal(disabledRequests, 0, 'disabled Plugins must not fetch heavy code or poll the network');
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
     queueDurationMs, createdWorkers, workersAfterLastLease: 0, disabledObservationMs: 5000, disabledRequests, fontPolicy,
-    scopedInventory: {restrictedRows:0,opaqueCursor:true,foreignMethodRejected:true,forgedCursorRejected:true,changedGrantRejected:true},
+    scopedInventory: {restrictedRows:0,opaqueCursor:true,foreignMethodRejected:true,forgedCursorRejected:true,changedGrantRejected:true,grantChangeNotified:true,storyCursorPreserved:true},
     crashedProviderWorker: {closed:true,errorCode:afterCrash.error.code,reopened:true},
     cases: ['grant denial without Worker', 'static discovery', 'real Provider page/cursor/getNodes partial/neighbors with exact snapshot', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }

@@ -22,6 +22,7 @@ export function PluginFrame(props: Props) {
   const latest = useRef(props); latest.current = props;
   const session = useMemo(() => ({nonce: crypto.randomUUID(), epoch: ++nextEpoch}), [reload]);
   const pluginId = props.plugin === 'atlas' ? 'scriptorium.atlas' : 'scriptorium.story-knowledge';
+  const atlasReadGrant = props.plugin === 'atlas' && props.storyGrant;
   const origin = `${location.protocol}//${location.hostname}:${Number(location.port) + (props.plugin === 'atlas' ? 1 : 2)}`;
   const src = `${origin}/frame.html?plugin=${props.plugin}&nonce=${session.nonce}&parentOrigin=${encodeURIComponent(location.origin)}`;
 
@@ -135,14 +136,14 @@ export function PluginFrame(props: Props) {
       const workspace = current.workspace;
       switch (request.method) {
         case 'snapshot': {
-          const scope = JSON.stringify(['snapshot', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, current.storyGrant]);
+          const scope = JSON.stringify(['snapshot', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, props.plugin === 'atlas' && current.storyGrant]);
           const {cursor:token,...query} = request.params;
           const cursor = cursors.decode(token,scope);
           const page = await current.host.getSnapshotPage(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
           return {...page,workspace:{...page.workspace,epoch:session.epoch},files:page.files.filter(file => canRead(file.path)),nextCursor:cursors.encode(page.nextCursor,scope)};
         }
         case 'list': {
-          const scope = JSON.stringify(['list', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, current.storyGrant, request.params.prefix ?? '']);
+          const scope = JSON.stringify(['list', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, props.plugin === 'atlas' && current.storyGrant, request.params.prefix ?? '']);
           const {cursor:token,...query} = request.params;
           const cursor = cursors.decode(token,scope);
           const page = await current.host.list(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
@@ -206,7 +207,7 @@ export function PluginFrame(props: Props) {
 
   useEffect(() => {
     port.current?.postMessage({type:'atlas.workspace.changed',workspaceId:props.workspace.workspaceId,sourceRevision:props.workspace.sourceRevision,epoch:session.epoch});
-  },[props.workspace.sourceRevision,props.workspace.workspaceId,session]);
+  },[props.workspace.sourceRevision,props.workspace.workspaceId,session,atlasReadGrant]);
 
   return <section className="plugin-panel" aria-label={props.plugin === 'atlas' ? 'Atlas Plugin' : 'Story Knowledge Plugin'}>
     <header><strong>{props.plugin === 'atlas' ? 'Atlas' : 'Story Knowledge'}</strong><span>{ready ? '接続中' : '未接続'}</span><button onClick={() => setVisible(value => !value)}>{visible ? 'UIを隠す' : 'UIを表示'}</button><button onClick={() => setReload(value => value+1)}>Pluginを再起動</button></header>
