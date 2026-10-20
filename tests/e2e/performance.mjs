@@ -193,7 +193,7 @@ export async function runPerformanceCases({ browser, baseUrl, archives, datasets
         samples.push({ elapsedMs: cold.elapsedMs, firstVisibleNode: cold.firstVisibleNode, resources: cold.resources });
         if (index === 0) {
           await connectStory(page, cold.atlas);
-          await cold.atlas.locator.locator('.atlas-status-inline').filter({ hasText: '1000 nodes and 2000 edges' }).waitFor({ timeout: 120_000 });
+          await cold.atlas.locator.locator('.atlas-status-inline').filter({ hasText: 'ノード 1000 件、エッジ 2000 件' }).waitFor({ timeout: 120_000 });
           const metrics = await readMetrics(page);
           const indexResult = metrics.find((item) => item.kind === 'response' && item.origin === cold.atlas.origin && item.operation === 'replace');
           assert.ok(indexResult, 'the real Graph Worker must build the 1k/2k snapshot');
@@ -232,7 +232,7 @@ export async function runPerformanceCases({ browser, baseUrl, archives, datasets
     try {
       const atlas = await atlasFrame(page);
       await connectStory(page, atlas);
-      await atlas.locator.locator('.atlas-status-inline').filter({ hasText: '10000 nodes and 20000 edges' }).waitFor({ timeout: 120_000 });
+      await atlas.locator.locator('.atlas-status-inline').filter({ hasText: 'ノード 10000 件、エッジ 20000 件' }).waitFor({ timeout: 120_000 });
       const metrics = await readMetrics(page);
       const indexResult = metrics.find((item) => item.kind === 'response' && item.origin === atlas.origin && item.operation === 'replace');
       assert.ok(indexResult, 'the production Graph Worker must index the imported snapshot');
