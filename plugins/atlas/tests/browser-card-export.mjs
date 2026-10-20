@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const testDirectory = fileURLToPath(new URL('.', import.meta.url));
@@ -14,7 +15,14 @@ const requireFromHost = createRequire(resolve(hostRoot, 'package.json'));
 const { chromium } = requireFromHost('@playwright/test');
 const serverScript = resolve(hostRoot, 'apps/standalone/scripts/serve.mjs');
 const browserPath = process.env.ATLAS_E2E_CHROMIUM;
-const report = { artifactRoot: resolve(hostRoot, 'dist/atlas'), cases: [], browser: null };
+const artifactPreviewDirectory = process.env.ATLAS_EXPORT_ARTIFACT_DIR ? resolve(process.env.ATLAS_EXPORT_ARTIFACT_DIR) : null;
+const report = {
+  artifactRoot: resolve(hostRoot, 'dist/atlas'),
+  artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null,
+  previewDirectory: artifactPreviewDirectory,
+  cases: [],
+  browser: null,
+};
 
 async function reservePorts() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -99,6 +107,10 @@ async function downloadText(page, button) {
   const path = await download.path();
   assert.ok(path, `Download ${download.suggestedFilename()} should have a readable temporary path.`);
   return { name: download.suggestedFilename(), content: await readFile(path, 'utf8') };
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function readPngDimensions(bytes) {
@@ -241,7 +253,19 @@ async function run() {
     }
     assert.match(svgDownload.content, /<image\b/u, 'SVG export should include the embedded image card.');
     const svgDimensions = readSvgDimensions(svgDownload.content);
-    report.cases.push({ id: 'svg-includes-canvas-and-card-content', filename: svgDownload.name, bytes: Buffer.byteLength(svgDownload.content), ...svgDimensions });
+    const svgBytes = Buffer.from(svgDownload.content, 'utf8');
+    if (artifactPreviewDirectory) {
+      await mkdir(artifactPreviewDirectory, { recursive: true });
+      await writeFile(join(artifactPreviewDirectory, 'atlas-card-export.svg'), svgBytes);
+    }
+    report.cases.push({
+      id: 'svg-includes-canvas-and-card-content',
+      filename: svgDownload.name,
+      bytes: svgBytes.byteLength,
+      sha256: sha256(svgBytes),
+      ...(artifactPreviewDirectory ? { preview: join(artifactPreviewDirectory, 'atlas-card-export.svg') } : {}),
+      ...svgDimensions,
+    });
 
     const pngPromise = page.waitForEvent('download');
     await atlas.getByRole('button', { name: 'PNG', exact: true }).click();
@@ -257,7 +281,18 @@ async function run() {
     assert.ok(widthDifference <= 0.05 && heightDifference <= 0.05,
       `PNG and SVG full-scene/card bounds should agree within 5%; PNG=${JSON.stringify(dimensions)}, SVG=${JSON.stringify(svgDimensions)}.`);
     assert.ok(pngBytes.byteLength > 10000, 'PNG export should contain rendered card and image content, not an empty scene.');
-    report.cases.push({ id: 'png-includes-card-bounds-and-image', filename: pngDownload.suggestedFilename(), bytes: pngBytes.byteLength, ...dimensions });
+    if (artifactPreviewDirectory) {
+      await mkdir(artifactPreviewDirectory, { recursive: true });
+      await writeFile(join(artifactPreviewDirectory, 'atlas-card-export.png'), pngBytes);
+    }
+    report.cases.push({
+      id: 'png-includes-card-bounds-and-image',
+      filename: pngDownload.suggestedFilename(),
+      bytes: pngBytes.byteLength,
+      sha256: sha256(pngBytes),
+      ...(artifactPreviewDirectory ? { preview: join(artifactPreviewDirectory, 'atlas-card-export.png') } : {}),
+      ...dimensions,
+    });
 
     assert.deepEqual(pageErrors, [], 'Atlas browser flow must not throw uncaught page errors.');
     report.cases.push('no-uncaught-page-errors');
