@@ -1,7 +1,9 @@
 import type { Asset, BoardDocument } from '@scriptorium-atlas/contracts';
+import { nodeKey } from '@scriptorium-atlas/graph';
 import type { CanvasExportElementSkeleton, CanvasExportFile, CanvasExportImageMimeType, CanvasExportOverlay } from '@scriptorium-atlas/canvas/io';
 import { imageDataUrl } from './host-utils.js';
 import { sanitizeImageBytes, verifyAssetBytes } from './asset-media.js';
+import type { ProviderSnapshot } from './provider-snapshot.js';
 
 export type AtlasCardAssetReader = (asset: Asset) => Promise<Uint8Array>;
 
@@ -61,7 +63,7 @@ function cardHeading(card: BoardDocument['cards'][number]): string {
   }
 }
 
-function cardBody(card: BoardDocument['cards'][number]): string {
+function cardBody(board: BoardDocument, card: BoardDocument['cards'][number], graph: ProviderSnapshot | null): string {
   const source = card.source ? `${card.source.path}\nリビジョン ${card.source.revision.slice(0, 12)}` : '';
   switch (card.kind) {
     case 'text':
@@ -69,8 +71,17 @@ function cardBody(card: BoardDocument['cards'][number]): string {
     case 'source':
       return [card.text, card.annotation, source].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
     case 'provider-node': {
+      const liveNode = card.nodeRef
+        ? graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const cachedNode = card.nodeRef
+        ? board.nodes.find((node) => node.ref && nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const connected = Boolean(card.nodeRef && graph?.providerIds.includes(card.nodeRef.providerId));
+      const state = connected ? liveNode ? '接続中' : '未解決' : '未接続（キャッシュ表示）';
+      const label = liveNode?.label ?? cachedNode?.label ?? card.text ?? card.nodeRef?.localId;
       const reference = card.nodeRef ? `${card.nodeRef.providerId}/${card.nodeRef.localId}` : '';
-      return [card.text ?? card.nodeRef?.localId, reference, card.annotation, source]
+      return [label, state, reference, card.annotation, source]
         .filter((value): value is string => Boolean(value?.trim())).join('\n\n');
     }
     case 'image':
@@ -158,6 +169,7 @@ function fitImageInCard(
 export async function buildAtlasCardExportOverlay(
   board: BoardDocument,
   readAsset: AtlasCardAssetReader,
+  graph: ProviderSnapshot | null = null,
 ): Promise<AtlasCardExportResult> {
   const elements: CanvasExportElementSkeleton[] = [];
   const files: CanvasExportFile[] = [];
@@ -168,7 +180,7 @@ export async function buildAtlasCardExportOverlay(
   for (const card of board.cards) {
     appendCardFrame(elements, card);
     if (card.kind !== 'image') {
-      appendCardText(elements, card, cardBody(card));
+      appendCardText(elements, card, cardBody(board, card, graph));
       continue;
     }
 
@@ -176,7 +188,7 @@ export async function buildAtlasCardExportOverlay(
     if (!asset) {
       unavailableImagePaths.push(card.assetId ?? card.id);
       appendCardText(elements, card, '画像アセットが見つかりません。');
-      if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
       continue;
     }
 
@@ -190,11 +202,11 @@ export async function buildAtlasCardExportOverlay(
       }
       const bounds = fitImageInCard(prepared, card);
       elements.push({ type: 'image', ...bounds, fileId: prepared.file.id });
-      if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
     } catch {
       unavailableImagePaths.push(asset.path);
       appendCardText(elements, card, `画像アセットを読み込めません: ${asset.path}`);
-      if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
+      if (card.source) appendCardText(elements, card, cardBody(board, card, graph), card.position.y + card.height - 30);
     }
   }
 

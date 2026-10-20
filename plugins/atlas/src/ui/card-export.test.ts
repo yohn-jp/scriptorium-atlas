@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Asset, BoardDocument } from '@scriptorium-atlas/contracts';
+import type { Asset, BoardDocument, SnapshotRef } from '@scriptorium-atlas/contracts';
 import { applyAtlasCommand, createEmptyAtlasBoard } from '../commands/model.js';
 import { sha256Hex } from './host-utils.js';
+import type { ProviderSnapshot } from './provider-snapshot.js';
 import { buildAtlasCardExportOverlay } from './card-export.js';
 
 const pngBytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/az8AAAAASUVORK5CYII='), (char) => char.charCodeAt(0));
@@ -90,5 +91,50 @@ describe('Atlas card image export overlay', () => {
     expect(result.overlay.files).toBeUndefined();
     expect(result.overlay.elements.some((element) => element.type === 'text' && element.text.includes(asset.path))).toBe(true);
     expect(result.overlay.elements.some((element) => element.type === 'text' && element.text.includes('documents/cover-note.md'))).toBe(true);
+  });
+
+  it('exports the live Provider label and state without changing the cached Board card', async () => {
+    const { board } = await boardWithEveryCard();
+    const providerCard = board.cards.find((card) => card.id === 'provider-card');
+    expect(providerCard?.kind).toBe('provider-node');
+    const snapshot: SnapshotRef = {
+      workspaceId: 'workspace-a', sourceRevision: 'source-1', providerRevision: 'provider-1', epoch: 1,
+    };
+    const graph: ProviderSnapshot = {
+      providerId: 'scriptorium.story',
+      providerIds: ['scriptorium.story'],
+      snapshot,
+      nodes: [{ ref: { providerId: 'scriptorium.story', localId: 'character-1' }, kind: 'story.character', label: 'Alice Updated' }],
+      edges: [],
+    };
+    const before = structuredClone(board);
+    const resolved = await buildAtlasCardExportOverlay(board, async () => pngBytes, graph);
+    const resolvedText = resolved.overlay.elements
+      .filter((element) => element.type === 'text')
+      .map((element) => element.type === 'text' ? element.text : '')
+      .join('\n');
+    expect(resolvedText).toContain('Alice Updated');
+    expect(resolvedText).toContain('接続中');
+    expect(resolvedText).not.toContain('Alice\n\n接続中');
+    expect(resolvedText).toContain('Provider annotation');
+    expect(board).toEqual(before);
+
+    const missingGraph: ProviderSnapshot = { ...graph, nodes: [] };
+    const unresolved = await buildAtlasCardExportOverlay(board, async () => pngBytes, missingGraph);
+    const unresolvedText = unresolved.overlay.elements
+      .filter((element) => element.type === 'text')
+      .map((element) => element.type === 'text' ? element.text : '')
+      .join('\n');
+    expect(unresolvedText).toContain('Alice');
+    expect(unresolvedText).toContain('未解決');
+
+    const disconnectedGraph: ProviderSnapshot = { ...graph, providerIds: [], nodes: [] };
+    const disconnected = await buildAtlasCardExportOverlay(board, async () => pngBytes, disconnectedGraph);
+    const disconnectedText = disconnected.overlay.elements
+      .filter((element) => element.type === 'text')
+      .map((element) => element.type === 'text' ? element.text : '')
+      .join('\n');
+    expect(disconnectedText).toContain('Alice');
+    expect(disconnectedText).toContain('未接続（キャッシュ表示）');
   });
 });

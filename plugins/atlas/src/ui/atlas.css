@@ -161,10 +161,14 @@
 .atlas-card-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 5px; padding: 6px; }
 .atlas-card-editor textarea { flex: 1; min-height: 42px; border: 0; background: transparent; color: #302a23; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .atlas-card-editor input { border: 0; border-top: 1px solid #e1d9cb; border-radius: 0; background: transparent; color: #494137; font-size: 10px; }
-.atlas-card-image { width: 100%; height: calc(100% - 30px); padding: 6px; object-fit: contain; }
-.atlas-card-unavailable { padding: 8px; color: var(--atlas-muted); font-size: 11px; }
+.atlas-card-image { flex: 1; min-height: 0; width: 100%; height: auto; padding: 6px; object-fit: contain; }
+.atlas-card-unavailable { flex: 1; min-height: 0; padding: 8px; color: var(--atlas-muted); font-size: 11px; }
 .atlas-card-provider { display: grid; gap: 4px; padding: 8px; overflow: auto; font-size: 11px; }
 .atlas-card-provider strong { font-size: 13px; }
+.atlas-card-provider-state { width: fit-content; padding: 1px 5px; border-radius: 10px; background: #e9eee9; color: #355246; font-size: 10px; }
+.atlas-card-provider-state.is-unresolved { background: #f8e8dc; color: #853e20; }
+.atlas-card-provider-state.is-disconnected { background: #eeeaf2; color: #5f536b; }
+.atlas-card-provider input { min-width: 0; border: 0; border-top: 1px solid #e1d9cb; border-radius: 0; background: transparent; color: #494137; font-size: 10px; }
 .atlas-card-source { margin: 0 6px 6px; padding: 4px 6px !important; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px !important; }
 .atlas-card-resize { position: absolute; right: -8px; bottom: -8px; width: 20px; height: 20px; padding: 0 !important; cursor: nwse-resize; touch-action: none; }
 .atlas-scene-readonly { height: 100%; overflow: auto; padding: 18px; background: var(--atlas-panel); }

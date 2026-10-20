@@ -154,12 +154,29 @@ async function downloadBoard(page, atlas) {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
+async function exportSvg(page, atlas) {
+  const download = page.waitForEvent('download');
+  await atlas.getByRole('button', { name: 'SVG', exact: true }).click();
+  const path = await (await download).path();
+  assert.ok(path, 'The Provider-card SVG export should have a readable temporary path.');
+  return readFile(path, 'utf8');
+}
+
 async function addProviderNode(page, atlas, name) {
   const search = atlas.getByLabel('Providerスナップショットを検索');
   await search.fill(name);
   const hit = atlas.locator('.atlas-search-hit').filter({ hasText: name }).first();
   await hit.waitFor({ state: 'visible' });
   await hit.getByRole('button', { name: 'ノードを追加' }).click();
+  await commitAtlasUntilClean(page, atlas);
+}
+
+async function addProviderCard(page, atlas, name) {
+  const search = atlas.getByLabel('Providerスナップショットを検索');
+  await search.fill(name);
+  const hit = atlas.locator('.atlas-search-hit').filter({ hasText: name }).first();
+  await hit.waitFor({ state: 'visible' });
+  await hit.getByRole('button', { name: 'カードを作成' }).click();
   await commitAtlasUntilClean(page, atlas);
 }
 
@@ -208,10 +225,15 @@ async function run() {
     }
     await addProviderNode(page, atlas, originalName);
     await addProviderNode(page, atlas, deletedName);
+    await addProviderCard(page, atlas, originalName);
+    await addProviderCard(page, atlas, deletedName);
     let board = await downloadBoard(page, atlas);
     const originalNode = board.nodes.find((node) => node.label === originalName);
     const deletedNode = board.nodes.find((node) => node.label === deletedName);
     assert.ok(originalNode?.ref && deletedNode?.ref, 'Both Story references should be saved on the Atlas board.');
+    const originalCard = board.cards.find((card) => card.nodeRef?.localId === originalNode.ref?.localId);
+    const deletedCard = board.cards.find((card) => card.nodeRef?.localId === deletedNode.ref?.localId);
+    assert.ok(originalCard && deletedCard, 'Both provider references should also be represented by Atlas cards.');
 
     await atlas.getByRole('button', { name: '全体を表示' }).click();
     const flowNode = atlas.locator(`.react-flow__node[data-id="${originalNode.id}"]`);
@@ -243,17 +265,44 @@ async function run() {
     const positionBeforeRefresh = { ...nodeBeforeRefresh.position };
     report.cases.push('story-provider-connected-and-reference-pinned-through-physical-drag');
 
+    const originalAnnotation = `人物メモ ${randomUUID().slice(0, 5)}`;
+    const deletedAnnotation = `削除後も残す注釈 ${randomUUID().slice(0, 5)}`;
+    await atlas.getByRole('tab', { name: /キャンバス/u }).last().click();
+    const originalCardElement = atlas.locator('.atlas-canvas-card.atlas-card-provider-node').filter({ hasText: `${originalNode.ref.providerId}/${originalNode.ref.localId}` });
+    const deletedCardElement = atlas.locator('.atlas-canvas-card.atlas-card-provider-node').filter({ hasText: `${deletedNode.ref.providerId}/${deletedNode.ref.localId}` });
+    await originalCardElement.getByLabel('カードの注釈').fill(originalAnnotation);
+    await originalCardElement.getByLabel('カードの注釈').press('Tab');
+    await deletedCardElement.getByLabel('カードの注釈').fill(deletedAnnotation);
+    await deletedCardElement.getByLabel('カードの注釈').press('Tab');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    assert.equal(board.cards.find((card) => card.id === originalCard.id)?.annotation, originalAnnotation);
+    assert.equal(board.cards.find((card) => card.id === deletedCard.id)?.annotation, deletedAnnotation);
+    await atlas.getByRole('tab', { name: /グラフ/u }).last().click();
+
     await editStoryCharacter(page, story, originalName, updatedName);
     await atlas.locator('.atlas-status-inline').filter({ hasText: '接続中Providerを更新してください' }).waitFor({ state: 'visible', timeout: 20000 });
     await atlas.getByRole('button', { name: '接続中Providerを更新' }).click();
     await atlas.locator('.atlas-status-inline').filter({ hasText: '差分適用' }).waitFor({ state: 'visible', timeout: 30000 });
     await flowNode.getByText(updatedName, { exact: true }).waitFor({ state: 'visible' });
+    await atlas.getByRole('tab', { name: /キャンバス/u }).last().click();
+    await originalCardElement.locator('strong').filter({ hasText: updatedName }).waitFor({ state: 'visible' });
+    await originalCardElement.locator('.atlas-card-provider-state').filter({ hasText: '接続中' }).waitFor({ state: 'visible' });
+    assert.equal(await originalCardElement.getByLabel('カードの注釈').inputValue(), originalAnnotation, 'Provider label refresh should leave the Atlas-owned card annotation unchanged.');
+    const updatedSvg = await exportSvg(page, atlas);
+    assert.ok(updatedSvg.includes(updatedName), 'PNG/SVG Card export should use the current resolved Provider label.');
+    assert.ok(updatedSvg.includes('接続中'), 'PNG/SVG Card export should include the visible connected state.');
+    assert.ok(updatedSvg.includes(originalAnnotation), 'PNG/SVG Card export should retain the Atlas-owned annotation.');
     board = await downloadBoard(page, atlas);
     const preservedNode = board.nodes.find((node) => node.id === originalNode.id);
     const graphViewAfterEdit = board.views.find((view) => view.kind === 'graph');
+    const preservedCard = board.cards.find((card) => card.id === originalCard.id);
     assert.deepEqual(preservedNode?.position, positionBeforeRefresh, 'Refreshing provider values should not move the pinned Board node.');
     assert.ok(graphViewAfterEdit?.pins?.some((pin) => pin.nodeId === originalNode.id && pin.mode === 'manual'), 'Provider refresh should preserve the saved manual pin.');
     assert.equal(preservedNode?.label, originalName, 'Refreshing provider data must not rewrite Atlas-owned saved labels.');
+    assert.equal(preservedCard?.text, originalName, 'Provider display updates should not rewrite the card’s Atlas-owned cached label.');
+    assert.equal(preservedCard?.annotation, originalAnnotation, 'Provider refresh should preserve the Atlas-owned card annotation.');
+    await atlas.getByRole('tab', { name: /グラフ/u }).last().click();
     await atlas.getByLabel('Providerスナップショットを検索').fill(updatedName);
     await atlas.locator('.atlas-search-hit').filter({ hasText: updatedName }).waitFor({ state: 'visible' });
     report.cases.push('story-edit-diff-refresh-updates-current-flow-label-and-preserves-board-pin');
@@ -265,10 +314,22 @@ async function run() {
     const unresolvedNode = atlas.locator(`.react-flow__node[data-id="${deletedNode.id}"]`);
     await unresolvedNode.waitFor({ state: 'visible' });
     await unresolvedNode.getByText(`${deletedName}（未解決）`, { exact: true }).waitFor({ state: 'visible' });
+    await atlas.getByRole('tab', { name: /キャンバス/u }).last().click();
+    await deletedCardElement.locator('.atlas-card-provider-state').filter({ hasText: '未解決' }).waitFor({ state: 'visible' });
+    await deletedCardElement.locator('strong').filter({ hasText: deletedName }).waitFor({ state: 'visible' });
+    assert.equal(await deletedCardElement.getByLabel('カードの注釈').inputValue(), deletedAnnotation, 'A missing Provider reference should keep its Atlas-owned card annotation.');
+    const unresolvedSvg = await exportSvg(page, atlas);
+    assert.ok(unresolvedSvg.includes(deletedName), 'An unresolved Card export should retain the cached Provider label.');
+    assert.ok(unresolvedSvg.includes('未解決'), 'An unresolved Card export should match the visible Provider state.');
+    assert.ok(unresolvedSvg.includes(deletedAnnotation), 'An unresolved Card export should retain the Atlas-owned annotation.');
     board = await downloadBoard(page, atlas);
     const retainedRef = board.nodes.find((node) => node.id === deletedNode.id);
+    const retainedCard = board.cards.find((card) => card.id === deletedCard.id);
     assert.deepEqual(retainedRef?.ref, deletedNode.ref, 'A deleted provider entity should remain on the Board as its original unresolved reference.');
     assert.equal(retainedRef?.label, deletedName, 'An unresolved provider reference should retain its saved Board label.');
+    assert.equal(retainedCard?.text, deletedName, 'An unresolved provider card should retain its Atlas-owned cached label.');
+    assert.equal(retainedCard?.annotation, deletedAnnotation, 'An unresolved provider card should retain its annotation.');
+    await atlas.getByRole('tab', { name: /グラフ/u }).last().click();
     await atlas.getByLabel('Providerスナップショットを検索').fill(deletedName);
     await atlas.locator('.atlas-search-hit').waitFor({ state: 'detached' });
     report.cases.push('story-delete-diff-refresh-retains-stable-reference-as-unresolved');
@@ -301,7 +362,22 @@ async function run() {
     assert.ok(pinsAfterResync.some((pin) => pin.nodeId === originalNode.id && pin.mode === 'manual'), 'Provider restart and full resync should preserve the manual pin.');
     assert.deepEqual(deletedAfterResync?.ref, deletedNode.ref, 'Full resync should retain the deleted entity as the same unresolved provider reference.');
     assert.equal(manualAfterResync?.label, manualName, 'Full resync should preserve Atlas-owned manual nodes.');
+    await atlas.getByRole('tab', { name: /キャンバス/u }).last().click();
+    await originalCardElement.locator('.atlas-card-provider-state').filter({ hasText: '接続中' }).waitFor({ state: 'visible' });
+    await deletedCardElement.locator('.atlas-card-provider-state').filter({ hasText: '未解決' }).waitFor({ state: 'visible' });
+    assert.equal(await deletedCardElement.getByLabel('カードの注釈').inputValue(), deletedAnnotation);
+    await atlas.getByRole('tab', { name: /グラフ/u }).last().click();
     report.cases.push('story-provider-restart-forces-full-resync-and-preserves-pins-manual-nodes-and-unresolved-refs');
+
+    await atlas.getByRole('button', { name: 'scriptorium.story-knowledgeを切断' }).click();
+    await atlas.locator('.atlas-status-inline').filter({ hasText: 'Providerを切断しました' }).waitFor({ state: 'visible' });
+    await atlas.getByRole('tab', { name: /キャンバス/u }).last().click();
+    await originalCardElement.locator('.atlas-card-provider-state').filter({ hasText: '未接続（キャッシュ表示）' }).waitFor({ state: 'visible' });
+    await originalCardElement.locator('strong').filter({ hasText: originalName }).waitFor({ state: 'visible' });
+    await deletedCardElement.locator('.atlas-card-provider-state').filter({ hasText: '未接続（キャッシュ表示）' }).waitFor({ state: 'visible' });
+    assert.equal(await originalCardElement.getByLabel('カードの注釈').inputValue(), originalAnnotation);
+    assert.equal(await deletedCardElement.getByLabel('カードの注釈').inputValue(), deletedAnnotation);
+    report.cases.push('provider-cards-show-cached-state-after-disconnect-without-changing-board-content');
 
     assert.deepEqual(dialogs, [], 'Provider refresh should not require native dialogs.');
     assert.deepEqual(pageErrors, [], 'Provider refresh should not cause uncaught page errors.');

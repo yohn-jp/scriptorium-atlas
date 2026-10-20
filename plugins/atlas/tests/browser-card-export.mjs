@@ -240,7 +240,15 @@ async function run() {
     assert.equal(await cards.count(), 4, 'All four Atlas card kinds should be visible in the Canvas overlay.');
     assert.equal(await atlas.getByRole('group', { name: 'テキストカード' }).getByLabel('カードのMarkdown本文').inputValue(), 'ATLAS_EXPORT_TEXT_MARKER');
     assert.equal(await atlas.getByRole('group', { name: 'ソースカード' }).getByLabel('カードのMarkdown本文').inputValue(), 'ATLAS_EXPORT_SOURCE_MARKER');
+    const editedImageAnnotation = 'ATLAS_EXPORT_IMAGE_ANNOTATION_EDIT';
+    await atlas.getByRole('group', { name: '画像カード' }).getByLabel('カードの注釈').fill(editedImageAnnotation);
+    await atlas.getByRole('group', { name: '画像カード' }).getByLabel('カードの注釈').press('Tab');
+    await commitPending(page, atlas);
+    const editedBoard = JSON.parse((await downloadText(page, atlas.getByRole('button', { name: '.atlas.jsonをエクスポート' }))).content);
+    assert.equal(editedBoard.cards.find((card) => card.id === imageCard.id)?.annotation, editedImageAnnotation,
+      'An image Card annotation edit should persist in the Atlas document.');
     report.cases.push('render-all-four-card-kinds-and-content');
+    report.cases.push('edit-and-commit-image-card-annotation');
 
     const importedBoard = JSON.parse((await downloadText(page, atlas.getByRole('button', { name: '.atlas.jsonをエクスポート' }))).content);
     assert.deepEqual(importedBoard.cards.map((card) => card.kind).sort(), ['image', 'provider-node', 'source', 'text']);
@@ -248,7 +256,7 @@ async function run() {
 
     const svgDownload = await downloadText(page, atlas.getByRole('button', { name: 'SVG', exact: true }));
     assert.match(svgDownload.content, /<svg\b/u, 'SVG export should contain an SVG document.');
-    for (const marker of ['ATLAS_EXPORT_TEXT_MARKER', 'ATLAS_EXPORT_SOURCE_MARKER', 'ATLAS_EXPORT_PROVIDER_MARKER', 'ATLAS_EXPORT_IMAGE_MARKER', 'documents/export-source.md']) {
+    for (const marker of ['ATLAS_EXPORT_TEXT_MARKER', 'ATLAS_EXPORT_SOURCE_MARKER', 'ATLAS_EXPORT_PROVIDER_LABEL', editedImageAnnotation, 'documents/export-source.md']) {
       assert.ok(svgDownload.content.includes(marker), `SVG export should include visible card text or source metadata: ${marker}`);
     }
     assert.match(svgDownload.content, /<image\b/u, 'SVG export should include the embedded image card.');

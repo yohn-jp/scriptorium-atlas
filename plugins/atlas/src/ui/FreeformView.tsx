@@ -3,6 +3,8 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CanvasEditor } from '@scriptorium-atlas/canvas/ui';
 import type { CanvasViewport } from '@scriptorium-atlas/canvas/ui';
 import type { BoardDocument, BoardView, SourceRef } from '@scriptorium-atlas/contracts';
+import { nodeKey } from '@scriptorium-atlas/graph';
+import type { ProviderSnapshot } from './provider-snapshot.js';
 import { applyAtlasCommand } from '../commands/model.js';
 
 export type FreeformViewProps = {
@@ -10,6 +12,7 @@ export type FreeformViewProps = {
   view: BoardView;
   sceneText: string;
   assets: ReadonlyMap<string, string>;
+  graph: ProviderSnapshot | null;
   focusCardId?: string | null;
   onBoardChange(board: BoardDocument): void;
   onSceneChange(sceneText: string): void;
@@ -25,6 +28,7 @@ export function FreeformView(props: FreeformViewProps) {
     board={props.board}
     viewport={viewport}
     assets={props.assets}
+    graph={props.graph}
     {...(props.focusCardId === undefined ? {} : { focusCardId: props.focusCardId })}
     onUpdate={(id, patch) => dispatch({ type: 'card.update', id, patch })}
     onDelete={(id) => dispatch({ type: 'card.delete', id })}
@@ -61,6 +65,7 @@ function CardOverlay({
   board,
   viewport,
   assets,
+  graph,
   focusCardId,
   onUpdate,
   onDelete,
@@ -71,6 +76,7 @@ function CardOverlay({
   board: BoardDocument;
   viewport: CanvasViewport;
   assets: ReadonlyMap<string, string>;
+  graph: ProviderSnapshot | null;
   focusCardId?: string | null;
   onUpdate(id: string, patch: { text?: string | null; annotation?: string | null; position?: { x: number; y: number }; width?: number; height?: number }): void;
   onDelete(id: string): void;
@@ -152,7 +158,17 @@ function CardOverlay({
       const point = positionFor(card);
       const size = sizeFor(card);
       const imageUrl = card.assetId ? assets.get(board.assets.find((asset) => asset.id === card.assetId)?.path ?? '') : undefined;
-      const linkedNode = card.nodeRef && board.nodes.find((node) => node.ref?.providerId === card.nodeRef!.providerId && node.ref?.localId === card.nodeRef!.localId);
+      const linkedNode = card.nodeRef
+        ? graph?.nodes.find((node) => nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const cachedNode = card.nodeRef
+        ? board.nodes.find((node) => node.ref && nodeKey(node.ref) === nodeKey(card.nodeRef!))
+        : undefined;
+      const providerConnected = Boolean(card.nodeRef && graph?.providerIds.includes(card.nodeRef.providerId));
+      const providerStateClass = linkedNode ? 'is-resolved' : providerConnected ? 'is-unresolved' : 'is-disconnected';
+      const providerState = providerConnected
+        ? linkedNode ? '接続中' : '未解決'
+        : '未接続（キャッシュ表示）';
       return <article
         className={`atlas-canvas-card atlas-card-${card.kind}${selectedId === card.id ? ' is-selected' : ''}`}
         key={card.id}
@@ -178,16 +194,21 @@ function CardOverlay({
           <button type="button" aria-label="カードを複製" onClick={() => onDuplicate(card.id)}>⧉</button>
           <button type="button" aria-label="カードを削除" onClick={() => onDelete(card.id)}>×</button>
         </header>
-        {card.kind === 'image' ? imageUrl
-          ? <img className="atlas-card-image" src={imageUrl} alt={card.annotation ?? 'Atlasの画像'} draggable={false} />
-          : <p className="atlas-card-unavailable">画像データを読み込めないか、見つかりません。</p>
+        {card.kind === 'image' ? <>
+          {imageUrl
+            ? <img className="atlas-card-image" src={imageUrl} alt={card.annotation ?? 'Atlasの画像'} draggable={false} />
+            : <p className="atlas-card-unavailable">画像データを読み込めないか、見つかりません。</p>}
+          <CardAnnotationEditor card={card} onUpdate={onUpdate} />
+        </>
           : card.kind === 'provider-node'
-            ? <div className="atlas-card-provider">
-                <strong>{linkedNode?.label ?? card.text ?? card.nodeRef?.localId ?? 'Providerノードが見つかりません'}</strong>
-                <small>{card.nodeRef?.providerId}/{card.nodeRef?.localId}</small>
-                {card.annotation && <p>{card.annotation}</p>}
-                {card.nodeRef && <button type="button" onClick={() => onNavigateToNode(card.nodeRef!)}>グラフで表示</button>}
-              </div>
+            ? <ProviderCardDetails
+                card={card}
+                label={linkedNode?.label ?? cachedNode?.label ?? card.text ?? card.nodeRef?.localId ?? 'Providerノードが見つかりません'}
+                state={providerState}
+                stateClass={providerStateClass}
+                onUpdate={onUpdate}
+                onNavigateToNode={onNavigateToNode}
+              />
             : <CardTextEditor card={card} onUpdate={onUpdate} />}
         {card.source && <button className="atlas-card-source" type="button" onClick={() => onSource(card.source!)}>
           {card.source.path} · {card.source.revision.slice(0, 12)} · 固定したリビジョンを開く
@@ -212,6 +233,48 @@ function CardOverlay({
       </article>;
     })}
   </div>;
+}
+
+function ProviderCardDetails({
+  card,
+  label,
+  state,
+  stateClass,
+  onUpdate,
+  onNavigateToNode,
+}: {
+  card: BoardDocument['cards'][number];
+  label: string;
+  state: string;
+  stateClass: string;
+  onUpdate(id: string, patch: { annotation?: string | null }): void;
+  onNavigateToNode(ref: NonNullable<BoardDocument['cards'][number]['nodeRef']>): void;
+}) {
+  return <div className="atlas-card-provider">
+    <strong>{label}</strong>
+    <small className={`atlas-card-provider-state ${stateClass}`} aria-label="Provider参照の状態">{state}</small>
+    <small>{card.nodeRef?.providerId}/{card.nodeRef?.localId}</small>
+    <CardAnnotationEditor card={card} onUpdate={onUpdate} />
+    {card.nodeRef && <button type="button" onClick={() => onNavigateToNode(card.nodeRef!)}>グラフで表示</button>}
+  </div>;
+}
+
+function CardAnnotationEditor({
+  card,
+  onUpdate,
+}: {
+  card: BoardDocument['cards'][number];
+  onUpdate(id: string, patch: { annotation?: string | null }): void;
+}) {
+  const [annotation, setAnnotation] = useState(card.annotation ?? '');
+  useEffect(() => setAnnotation(card.annotation ?? ''), [card.id, card.annotation]);
+  return <input
+    aria-label="カードの注釈"
+    value={annotation}
+    placeholder="注釈"
+    onChange={(event) => setAnnotation(event.currentTarget.value)}
+    onBlur={() => onUpdate(card.id, { annotation })}
+  />;
 }
 
 function CardTextEditor({

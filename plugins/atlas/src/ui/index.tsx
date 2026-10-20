@@ -1129,7 +1129,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         const file = filesRef.current.get(asset.path);
         if (!file) throw new Error(`画像アセット ${asset.path} はHostワークスペースにありません。`);
         return readFileBytes(host, file);
-      });
+      }, graph);
       const blob = await exportExcalidrawScene(sceneText, format, cardExport.overlay);
       downloadBlob(`${activeSession.board.boardId}.${format}`, blob);
       const missing = cardExport.unavailableImagePaths.length;
@@ -1288,6 +1288,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
                 view={activeView}
                 sceneText={activeSession.sceneText}
                 assets={assetUrls}
+                graph={graph}
                 onBoardChange={(next) => acceptBoard(activeSession.board.boardId, next)}
                 onSceneChange={(sceneText) => replaceSession(activeSession.board.boardId, { ...activeSession, sceneText })}
                 onDuplicateCard={duplicateCard}
