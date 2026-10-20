@@ -72,7 +72,17 @@ function instrumentWorkers() {
   const frameId = crypto.randomUUID();
   let workerNumber = 0;
   const workerIds = [];
+  let activeForceWorkerId = null;
+  let cancelClick = null;
   const NativeWorker = window.Worker;
+  window.addEventListener('click', (event) => {
+    const target = event.target;
+    const button = target instanceof Element ? target.closest('button') : null;
+    if (button?.textContent?.trim() !== 'レイアウトを中止') return;
+    const at = performance.now();
+    cancelClick = { at, workerId: activeForceWorkerId };
+    send({ kind: 'cancel-click-dispatched', workerId: activeForceWorkerId, origin: location.origin });
+  }, true);
   window.Worker = class MeasuredWorker extends NativeWorker {
     constructor(url, options) {
       super(url, options);
@@ -99,6 +109,7 @@ function instrumentWorkers() {
       const operation = message?.type ?? (message?.input?.kind ? `layout-${message.input.kind}` : null);
       const key = message?.id ?? message?.requestId;
       if (operation && key !== undefined) {
+        if (operation === 'layout-force') activeForceWorkerId = this.__atlasId;
         const nodeCount = Array.isArray(message.nodes) ? message.nodes.length : Array.isArray(message.input?.nodes) ? message.input.nodes.length : null;
         const edgeCount = Array.isArray(message.edges) ? message.edges.length : Array.isArray(message.input?.edges) ? message.input.edges.length : null;
         const details = operation === 'search' ? { query: message.options?.query ?? null }
@@ -116,7 +127,13 @@ function instrumentWorkers() {
     terminate() {
       if (!this.__atlasTerminated) {
         this.__atlasTerminated = true;
-        send({ kind: 'terminated', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin });
+        const isForceCancel = cancelClick?.workerId === this.__atlasId;
+        send({ kind: 'terminated', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin,
+          cancelDispatchToTerminationMs: isForceCancel ? performance.now() - cancelClick.at : null });
+        if (isForceCancel) {
+          cancelClick = null;
+          activeForceWorkerId = null;
+        }
       }
       return super.terminate();
     }
@@ -284,6 +301,10 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
   });
   const bounds = await editor.boundingBox();
   assert.ok(bounds && bounds.width >= 300 && bounds.height >= 300, `Freeform editor must have a usable viewport: ${JSON.stringify(bounds)}.`);
+  for (const point of [start, end]) {
+    assert.ok(point.x >= 0 && point.x <= bounds.width && point.y >= 0 && point.y <= bounds.height,
+      `Freeform ${pan ? 'pan' : 'object drag'} point must be inside the editor viewport: ${JSON.stringify({ point, bounds })}.`);
+  }
   const startPoint = { x: bounds.x + start.x, y: bounds.y + start.y };
   const endPoint = { x: bounds.x + end.x, y: bounds.y + end.y };
   const dragStarted = performance.now();
@@ -324,6 +345,18 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
         : { reason: 'This browser frame does not support PerformanceObserver longtask entries.' }) },
     notCheckedReasons: supported ? [] : ['This browser frame does not support PerformanceObserver longtask entries.'],
   };
+}
+
+function scenePointToEditorPoint(scenePoint, appState) {
+  const zoom = appState?.zoom?.value;
+  const scrollX = appState?.scrollX;
+  const scrollY = appState?.scrollY;
+  assert.ok(Number.isFinite(zoom) && zoom > 0, `Excalidraw scene must expose a positive zoom: ${JSON.stringify(appState?.zoom)}.`);
+  assert.ok(Number.isFinite(scrollX) && Number.isFinite(scrollY), 'Excalidraw scene must expose finite viewport scroll coordinates.');
+  // Excalidraw maps scene coordinates to its container viewport as
+  // (scene + scroll) * zoom + offset. The offset is the container origin,
+  // which cancels when coordinates are expressed relative to .excalidraw.
+  return { x: (scenePoint.x + scrollX) * zoom, y: (scenePoint.y + scrollY) * zoom };
 }
 
 async function exportInventoryFromCurrentHost(page, unzipSync) {
@@ -557,22 +590,34 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const beforeCancel = await readMetrics(page);
       assert.equal(beforeCancel.some((item) => item.kind === 'response' && item.workerId === requested.workerId), false,
         'Force calculation must still be in flight when cancellation is requested.');
-      const cancelStartedAt = await page.evaluate(() => performance.now());
+      const cancelClickCount = beforeCancel.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).length;
+      const automationClickStartedAt = await page.evaluate(() => performance.now());
       await atlas.locator.getByRole('button', { name: 'レイアウトを中止', exact: true }).click();
+      await page.waitForFunction(({ origin, count }) => (window.__atlasPerfStore ?? [])
+        .filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === origin).length > count,
+      { origin: atlas.origin, count: cancelClickCount }, { timeout: 5_000, polling: 5 });
+      const afterClickDispatch = await readMetrics(page);
+      const cancelClick = afterClickDispatch.filter((item) => item.kind === 'cancel-click-dispatched' && item.origin === atlas.origin).at(-1);
+      assert.equal(cancelClick?.workerId, requested.workerId, 'The physical Cancel click must target the in-flight Force Worker.');
       await page.waitForFunction((workerId) => (window.__atlasPerfStore ?? [])
         .some((item) => item.kind === 'terminated' && item.workerId === workerId), requested.workerId,
       { timeout: 2_000, polling: 5 });
       const afterCancel = await readMetrics(page);
       const termination = afterCancel.find((item) => item.kind === 'terminated' && item.workerId === requested.workerId);
       assert.ok(termination);
-      const cancellationAckMs = termination.receivedAt - cancelStartedAt;
-      assert.ok(cancellationAckMs >= 0 && cancellationAckMs <= 500,
-        `Production Force cancellation took ${cancellationAckMs}ms to terminate its Worker; limit is 500ms.`);
+      assert.ok(Number.isFinite(termination.cancelDispatchToTerminationMs), 'Force termination must be timed from the real frame click event to Worker.terminate().');
+      assert.ok(termination.cancelDispatchToTerminationMs >= 0 && termination.cancelDispatchToTerminationMs <= 500,
+        `Production Force cancellation took ${termination.cancelDispatchToTerminationMs}ms from the dispatched click to Worker.terminate(); limit is 500ms.`);
+      const automationClickStartToDispatchMs = cancelClick.receivedAt - automationClickStartedAt;
+      const clickDispatchToTerminationObservedMs = termination.receivedAt - cancelClick.receivedAt;
+      const automationClickStartToTerminationMs = termination.receivedAt - automationClickStartedAt;
       assert.equal(afterCancel.some((item) => item.kind === 'response' && item.workerId === requested.workerId), false,
         'The cancelled Force Worker must not return a stale layout result.');
       await atlas.locator.getByText('レイアウト計算を中止しました。', { exact: true }).waitFor();
       return { dataset: datasets.oneK, nodes: requested.nodeCount, edges: requested.edgeCount,
-        cancellationAckMs, cancellationAckLimitMs: 500, workerTerminated: true, staleResponseReceived: false };
+        cancelDispatchToTerminationMs: termination.cancelDispatchToTerminationMs, cancelDispatchToTerminationLimitMs: 500,
+        clickDispatchToTerminationObservedMs, automationClickStartToDispatchMs, automationClickStartToTerminationMs,
+        workerTerminated: true, staleResponseReceived: false };
     } finally { await context.close(); }
   });
 
@@ -644,9 +689,11 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.equal(visibleElements.length, expectedObjects, 'The benchmark must use the real Excalidraw scene, not Atlas cards.');
       const first = visibleElements[0];
       assert.equal(first.type, 'rectangle');
+      const initialAppState = initialScene.data.appState;
+      const dragStart = scenePointToEditorPoint({ x: first.x + 1, y: first.y + first.height / 2 }, initialAppState);
+      const dragEnd = scenePointToEditorPoint({ x: first.x + 29, y: first.y + first.height / 2 + 18 }, initialAppState);
       const drag = await runSampledGesture(page, atlas.frame, editor,
-        { x: first.x + first.width / 2, y: first.y + first.height / 2 },
-        { x: first.x + first.width / 2 + 28, y: first.y + first.height / 2 + 18 });
+        dragStart, dragEnd);
       const afterDrag = await downloadScene(page, atlas);
       const dragged = afterDrag.data.elements.find((element) => element.id === first.id && !element.isDeleted);
       assert.ok(dragged && (dragged.x !== first.x || dragged.y !== first.y), 'A real Excalidraw object must move through the pointer drag.');
@@ -720,7 +767,9 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       }
       return {
         dataset, activeSceneObjects: visibleElements.length,
-        objectDrag: { ...drag, objectId: first.id, from: { x: first.x, y: first.y }, to: { x: dragged.x, y: dragged.y } },
+        objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y },
+          viewportPointerFrom: dragStart, viewportPointerTo: dragEnd, sceneZoom: initialAppState.zoom.value,
+          sceneScroll: [initialAppState.scrollX, initialAppState.scrollY], hitTarget: 'rectangle stroke near its left border' },
         normalPan: { ...pan, scrollBefore: [afterDrag.data.appState?.scrollX, afterDrag.data.appState?.scrollY],
           scrollAfter: [afterPan.data.appState?.scrollX, afterPan.data.appState?.scrollY] },
         ...(commitEvidence ? { commitReloadManifestRevisionEquality: commitEvidence } : {}),
