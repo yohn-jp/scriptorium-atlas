@@ -135,14 +135,14 @@ export function PluginFrame(props: Props) {
       const workspace = current.workspace;
       switch (request.method) {
         case 'snapshot': {
-          const scope = JSON.stringify(['snapshot', workspace.sourceRevision, current.storyGrant]);
+          const scope = JSON.stringify(['snapshot', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, current.storyGrant]);
           const {cursor:token,...query} = request.params;
           const cursor = cursors.decode(token,scope);
           const page = await current.host.getSnapshotPage(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
           return {...page,workspace:{...page.workspace,epoch:session.epoch},files:page.files.filter(file => canRead(file.path)),nextCursor:cursors.encode(page.nextCursor,scope)};
         }
         case 'list': {
-          const scope = JSON.stringify(['list', workspace.sourceRevision, current.storyGrant, request.params.prefix ?? '']);
+          const scope = JSON.stringify(['list', workspace.workspaceId, workspace.sourceRevision, workspace.epoch, current.storyGrant, request.params.prefix ?? '']);
           const {cursor:token,...query} = request.params;
           const cursor = cursors.decode(token,scope);
           const page = await current.host.list(workspace, {...query,...(cursor === undefined ? {} : {cursor})});
