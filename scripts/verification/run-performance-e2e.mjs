@@ -137,12 +137,23 @@ try {
 
   const { runPerformanceCases } = await import('../../tests/e2e/performance.mjs');
   await runPerformanceCases({ browser, baseUrl, unzipSync, archives: { oneK: oneK.archive, tenK: tenK.archive, canvas100: canvas100.archive, canvas500: canvas500.archive }, datasets, record: async (id, run) => {
+    process.stderr.write(`[Q12] START ${id}\n`);
+    const startedAt = Date.now();
+    let status = 'FAIL';
     try {
       const evidence = await run();
       const unresolved = evidence.notCheckedReasons ?? [];
-      report.scenarios.push({ id, status: unresolved.length ? 'NOT_CHECKED' : 'PASS', ...(unresolved.length ? { notCheckedReasons: unresolved } : {}), evidence });
+      status = unresolved.length ? 'NOT_CHECKED' : 'PASS';
+      report.scenarios.push({ id, status, ...(unresolved.length ? { notCheckedReasons: unresolved } : {}), evidence });
     }
-    catch (error) { report.scenarios.push({ id, status: 'FAIL', error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }); }
+    catch (error) {
+      const partialTrace = error && typeof error === 'object' && 'partialTrace' in error ? error.partialTrace : undefined;
+      report.scenarios.push({ id, status: 'FAIL', error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        ...(partialTrace ? { partialTrace } : {}) });
+    } finally {
+      const elapsedMs = Date.now() - startedAt;
+      process.stderr.write(`[Q12] ${status} ${id} ${elapsedMs}ms\n`);
+    }
   } });
 } catch (error) {
   report.setupError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);

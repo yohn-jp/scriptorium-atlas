@@ -4,6 +4,60 @@ import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
 const STORY_PROVIDER_ID = 'scriptorium.story-knowledge';
+let activeScenarioTrace = null;
+
+function compactMetric(metric) {
+  const keys = ['kind', 'origin', 'workerId', 'workerUrl', 'operation', 'nodeCount', 'edgeCount', 'ok', 'errorCode',
+    'durationMs', 'receivedAt', 'query', 'totalMatches', 'resultCount', 'positionCount', 'finitePositionCount',
+    'fromLocalId', 'toLocalId', 'depth', 'direction', 'status', 'hops', 'cancelDispatchToTerminationMs'];
+  return Object.fromEntries(keys.filter((key) => metric[key] !== undefined).map((key) => [key, metric[key]]));
+}
+
+async function captureContextTrace(page, trace) {
+  const metrics = await page.evaluate(() => window.__atlasPerfStore ?? []);
+  const counts = {};
+  for (const metric of metrics) {
+    const key = `${metric.kind ?? 'unknown'}:${metric.operation ?? ''}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  const frames = await Promise.all(page.frames().map(async (frame) => {
+    let state;
+    try {
+      state = await frame.evaluate(() => ({
+        title: document.title,
+        visibleAlerts: [...document.querySelectorAll('[role="alert"]')].filter((item) => item.getClientRects().length)
+          .map((item) => item.textContent?.trim() ?? '').filter(Boolean).slice(0, 8),
+        visibleStatuses: [...document.querySelectorAll('[role="status"], .atlas-status-inline')].filter((item) => item.getClientRects().length)
+          .map((item) => item.textContent?.trim() ?? '').filter(Boolean).slice(0, 12),
+        providerSelects: [...document.querySelectorAll('select')].map((select) => ({
+          label: [...(select.labels ?? [])].map((label) => label.textContent?.trim() ?? '').join(' '),
+          value: select.value,
+          disabled: select.disabled,
+          options: [...select.options].slice(0, 8).map((option) => ({ value: option.value, label: option.textContent?.trim() ?? '' })),
+        })).slice(0, 8),
+        graphNodeCount: document.querySelectorAll('.react-flow__node').length,
+        bodyTail: document.body?.innerText?.slice(-1_200) ?? '',
+      }));
+    } catch (error) {
+      state = { captureError: error instanceof Error ? error.message : String(error) };
+    }
+    return { url: frame.url(), state };
+  }));
+  trace.snapshots.push({
+    capturedAt: new Date().toISOString(),
+    metricCount: metrics.length,
+    metricCounts: counts,
+    recentMetrics: metrics.slice(-120).map(compactMetric),
+    frames,
+  });
+}
+
+function markScenarioFailure(page, error) {
+  if (!activeScenarioTrace) return;
+  activeScenarioTrace.failureRequested = true;
+  activeScenarioTrace.failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  activeScenarioTrace.failurePage = page;
+}
 
 function instrumentWorkers() {
   const summarizeResponse = (operation, value) => {
@@ -157,14 +211,33 @@ const p95 = (values) => percentile(values, 0.95);
 async function createPage(browser, baseUrl, archive) {
   const context = await browser.newContext({ locale: 'ja-JP', viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
-  await page.addInitScript(instrumentWorkers);
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('heading', { name: 'Scriptorium Atlas' }).waitFor();
-  await page.getByLabel('Bundleをimport').setInputFiles({ name: 'atlas-perf.zip', mimeType: 'application/zip', buffer: archive });
-  await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor({ timeout: 120_000 });
-  const workspaceId = await page.getByLabel('開く').inputValue();
-  assert.ok(workspaceId);
-  return { context, page, workspaceId };
+  const originalClose = context.close.bind(context);
+  let capturedOnClose = false;
+  context.close = async (...args) => {
+    if (!capturedOnClose && activeScenarioTrace?.failureRequested && activeScenarioTrace.failurePage === page) {
+      capturedOnClose = true;
+      try {
+        await captureContextTrace(page, activeScenarioTrace);
+      } catch (error) {
+        activeScenarioTrace.captureErrors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    return originalClose(...args);
+  };
+  try {
+    await page.addInitScript(instrumentWorkers);
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('heading', { name: 'Scriptorium Atlas' }).waitFor();
+    await page.getByLabel('Bundleをimport').setInputFiles({ name: 'atlas-perf.zip', mimeType: 'application/zip', buffer: archive });
+    await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor({ timeout: 120_000 });
+    const workspaceId = await page.getByLabel('開く').inputValue();
+    assert.ok(workspaceId);
+    return { context, page, workspaceId };
+  } catch (error) {
+    markScenarioFailure(page, error);
+    await context.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function atlasFrame(page) {
@@ -375,9 +448,11 @@ async function reopenWorkspace(page, workspaceId) {
   assert.equal(await selector.inputValue(), workspaceId);
 }
 
-async function connectStory(page, atlas) {
+async function connectStory(page, atlas, { uiReadyTimeoutMs = 30_000 } = {}) {
   await page.getByLabel('AtlasへStory ProviderとSourceの読取りを許可').check();
-  await atlas.locator.getByLabel('Providerを選択').selectOption(STORY_PROVIDER_ID);
+  const providerSelect = atlas.locator.getByLabel('Providerを選択');
+  await providerSelect.waitFor({ state: 'visible', timeout: uiReadyTimeoutMs });
+  await providerSelect.selectOption(STORY_PROVIDER_ID);
   await atlas.locator.getByRole('button', { name: '選択したProviderを接続' }).click();
 }
 
@@ -519,7 +594,23 @@ async function measureTraversal(page, atlas, origin) {
 }
 
 export async function runPerformanceCases({ browser, baseUrl, unzipSync, archives, datasets, record }) {
-  await record('Q12-cold-1k-first-visible-and-force-layout', async () => {
+  const recordWithTrace = (id, run) => record(id, async () => {
+    const trace = { startedAt: new Date().toISOString(), snapshots: [], captureErrors: [] };
+    activeScenarioTrace = trace;
+    try {
+      return await run();
+    } catch (error) {
+      const wrapped = error instanceof Error ? error : new Error(String(error));
+      delete trace.failureRequested;
+      delete trace.failurePage;
+      wrapped.partialTrace = trace;
+      throw wrapped;
+    } finally {
+      activeScenarioTrace = null;
+    }
+  });
+
+  await recordWithTrace('Q12-cold-1k-first-visible-and-force-layout', async () => {
     const samples = [];
     let queryEvidence = null;
     for (let index = 0; index < 5; index += 1) {
@@ -560,6 +651,9 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
               positions: layout.positionCount, finitePositions: layout.finitePositionCount } : null, heap,
             notCheckedReasons: heap.status === 'NOT_CHECKED' ? [heap.reason] : [] };
         }
+      } catch (error) {
+        markScenarioFailure(page, error);
+        throw error;
       } finally { await context.close(); }
     }
     const times = samples.map((sample) => sample.elapsedMs);
@@ -575,7 +669,7 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       ...queryEvidence };
   });
 
-  await record('Q12-1k-force-layout-cancel-ack', async () => {
+  await recordWithTrace('Q12-1k-force-layout-cancel-ack', async () => {
     const { context, page } = await createPage(browser, baseUrl, archives.oneK);
     try {
       const atlas = await atlasFrame(page);
@@ -620,10 +714,13 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         cancelDispatchToTerminationMs: termination.cancelDispatchToTerminationMs, cancelDispatchToTerminationLimitMs: 500,
         clickDispatchToTerminationObservedMs, automationClickStartToDispatchMs, automationClickStartToTerminationMs,
         workerTerminated: true, staleResponseReceived: false };
+    } catch (error) {
+      markScenarioFailure(page, error);
+      throw error;
     } finally { await context.close(); }
   });
 
-  await record('Q12-10k-worker-index-search-traversal-and-disable', async () => {
+  await recordWithTrace('Q12-10k-worker-index-search-traversal-and-disable', async () => {
     const { context, page, workspaceId } = await createPage(browser, baseUrl, archives.tenK);
     try {
       const atlas = await atlasFrame(page);
@@ -634,7 +731,7 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
           if (url.origin === atlas.origin) atlasRequests.push({ at: Date.now(), path: url.pathname, resourceType: request.resourceType() });
         } catch { /* Ignore data and blob URLs. */ }
       });
-      await connectStory(page, atlas);
+      await connectStory(page, atlas, { uiReadyTimeoutMs: 120_000 });
       await atlas.locator.locator('.atlas-status-inline').filter({ hasText: 'ノード 10000 件、エッジ 20000 件' }).waitFor({ timeout: 120_000 });
       const metrics = await readMetrics(page);
       const indexResult = metrics.find((item) => item.kind === 'response' && item.origin === atlas.origin && item.operation === 'replace');
@@ -676,6 +773,9 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         notCheckedReasons: heap.status === 'NOT_CHECKED' ? [heap.reason] : [],
         disabledAtlasWorkers: { created: created.length, explicitlyTerminated: terminated.size, owningFrameClosed: frameClosed.size, active: active.length },
         disabledAtlasNetwork: { observationMs: 5_000, pluginOriginRequestsAfterDisable: postDisableRequests } };
+    } catch (error) {
+      markScenarioFailure(page, error);
+      throw error;
     } finally { await context.close(); }
   });
 
@@ -778,13 +878,16 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         notCheckedReasons,
         thresholds: { fpsP50AtLeast: 30, longTaskMs: 50, maximumConsecutive: 1 },
       };
+    } catch (error) {
+      markScenarioFailure(page, error);
+      throw error;
     } finally { await context.close(); }
   };
 
-  await record('Q12-freeform-100-object-pan-drag-frame-rate-and-long-tasks', () => measureFreeform({
+  await recordWithTrace('Q12-freeform-100-object-pan-drag-frame-rate-and-long-tasks', () => measureFreeform({
     archive: archives.canvas100, dataset: datasets.canvas100, expectedObjects: 100, verifyCommitReload: false,
   }));
-  await record('Q12-freeform-500-object-pan-drag-frame-rate-and-long-tasks-and-commit-reload', () => measureFreeform({
+  await recordWithTrace('Q12-freeform-500-object-pan-drag-frame-rate-and-long-tasks-and-commit-reload', () => measureFreeform({
     archive: archives.canvas500, dataset: datasets.canvas500, expectedObjects: 500, verifyCommitReload: true,
   }));
 }
