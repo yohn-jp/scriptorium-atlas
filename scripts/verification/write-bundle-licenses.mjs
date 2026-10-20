@@ -70,16 +70,21 @@ async function packageForModule(relativeModulePath, repoRoot) {
 
 async function listLicenseFiles(packageDirectory) {
   const paths = [];
-  async function walk(directory, depth) {
+  async function walkLicenseDirectory(directory) {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       const absolutePath = join(directory, entry.name);
-      if (entry.isFile() && THIRD_PARTY_NOTICE_NAMES.test(entry.name)) paths.push(absolutePath);
-      else if (entry.isDirectory() && depth < 2 && (depth === 0 || /^licenses?$/i.test(entry.name))) await walk(absolutePath, depth + 1);
+      if (entry.isFile()) paths.push(absolutePath);
+      else if (entry.isDirectory()) await walkLicenseDirectory(absolutePath);
     }
   }
-  await walk(packageDirectory, 0);
+  const entries = await readdir(packageDirectory, { withFileTypes: true });
+  for (const entry of entries) {
+    const absolutePath = join(packageDirectory, entry.name);
+    if (entry.isFile() && THIRD_PARTY_NOTICE_NAMES.test(entry.name)) paths.push(absolutePath);
+    else if (entry.isDirectory() && /^licenses?$/i.test(entry.name)) await walkLicenseDirectory(absolutePath);
+  }
   return paths.sort();
 }
 
@@ -166,7 +171,8 @@ async function includeFontAssets({ profile, outputDirectory, licensesRoot }) {
 
   for (const file of fontManifest.files) {
     assert.ok(typeof file.path === 'string' && typeof file.sha256 === 'string', 'font manifest contains a malformed asset entry');
-    const assetPath = join(fontDirectory, file.path);
+    const assetPath = resolve(fontDirectory, file.path);
+    assert.ok(!isAbsolute(file.path) && assetPath.startsWith(`${fontDirectory}${sep}`), `font asset path escapes the font directory: ${file.path}`);
     const content = await readFile(assetPath);
     assert.equal(content.byteLength, file.bytes, `font asset byte count mismatch for ${file.path}`);
     assert.equal(sha256(content), file.sha256, `font asset hash mismatch for ${file.path}`);
@@ -191,7 +197,10 @@ export async function bundleDependencyClosure({ repoRoot, closure }) {
   const includedByPackage = new Map();
   for (const originalPath of modulePaths(closure)) {
     const relativePath = repoRelativePath(originalPath, root);
-    if (!relativePath) continue;
+    if (!relativePath) {
+      assert.ok(!/(?:^|\/)node_modules\//.test(originalPath), `third-party module path is outside the repository: ${originalPath}`);
+      continue;
+    }
     const packageInfo = await packageForModule(relativePath, root);
     if (!packageInfo || packageInfo.name.startsWith(INTERNAL_PACKAGE_SCOPE)) continue;
     const key = `${packageInfo.name}@${packageInfo.version}`;

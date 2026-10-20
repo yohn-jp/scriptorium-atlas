@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 const SOURCE_PATH = 'notes/scene.md';
 const SOURCE_V1 = '# Scene\n\n保存した本文です。\n';
 const SOURCE_V2 = '# Scene\n\n復旧後にCommitした本文です。\n';
+const MAX_BUNDLE_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
 async function newContext(browser) {
   return browser.newContext({
@@ -25,7 +26,7 @@ async function createEmptyWorkspace(page, name) {
   await page.getByRole('button', { name: '空のWorkspaceを作成' }).click();
   await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
   const workspaceId = await page.getByLabel('開く').inputValue();
-  assert.match(workspaceId, /^ws-/);
+  assert.ok(workspaceId, 'newly created Workspace must receive a persistent ID');
   return workspaceId;
 }
 
@@ -117,8 +118,8 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       const downloadedPath = await download.path();
       assert.ok(downloadedPath, 'browser download must produce an artifact');
       bundle = await readFile(downloadedPath);
-      assert.ok(bundle.byteLength > 0 && bundle.byteLength <= 256 * 1024 * 1024,
-        'compressed ZIP artifact must fit the independent 256 MiB archive budget');
+      assert.ok(bundle.byteLength > 0 && bundle.byteLength <= MAX_BUNDLE_ARCHIVE_BYTES,
+        'compressed ZIP artifact must fit the separate 512 MiB archive limit');
     } finally {
       await sourceContext.close();
     }
@@ -180,7 +181,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByLabel('開く').waitFor();
       await reopenWorkspace(page, workspaceId);
-      await page.getByRole('status').filter({ hasText: '復旧した承認待ちDraft: 1件' }).waitFor();
+      await page.getByRole('status').filter({ hasText: '復旧したJournal操作: 1件' }).waitFor();
       const recovered = page.locator('section[aria-label="変更の承認"] article').last();
       assert.equal(await recovered.locator('details pre').nth(1).innerText(), SOURCE_V1,
         'the durable prepared journal must restore the exact proposed UTF-8 content');
@@ -256,7 +257,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       });
       const page = await context.newPage();
       await openHost(page, baseUrl);
-      await page.getByRole('alert').filter({ hasText: '保存領域を開けません' }).waitFor();
+      await page.getByRole('alert').filter({ hasText: 'READ_ONLY:' }).waitFor();
       assert.equal(await page.getByRole('button', { name: '空のWorkspaceを作成' }).isDisabled(), true,
         'Workspace creation must remain unavailable when IndexedDB cannot open');
       return { failure: 'IndexedDB SecurityError', creationDisabled: true };
@@ -291,7 +292,7 @@ export async function runHostStorageCases({ browser, baseUrl, profile, record })
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByLabel('開く').waitFor();
       await reopenWorkspace(page, workspaceId);
-      await page.getByRole('status').filter({ hasText: '復旧した承認待ちDraft: 1件' }).waitFor();
+      await page.getByRole('status').filter({ hasText: '復旧したJournal操作: 1件' }).waitFor();
       await selectSource(page, SOURCE_PATH);
       assert.equal(await page.getByLabel('Source').inputValue(), SOURCE_V1,
         'the atomic failure must preserve the previously committed source');

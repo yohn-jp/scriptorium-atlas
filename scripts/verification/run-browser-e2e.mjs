@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { currentHead, hashTree } from './artifact-evidence.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const profileNames = ['atlas', 'story', 'combined'];
@@ -16,34 +17,6 @@ const caseIds = [
   'Q05-indexeddb-denial-fails-closed',
   'Q05-quota-aborted-commit-preserves-source-and-recoverable-draft'
 ];
-
-async function hashTree(directory) {
-  const files = [];
-  async function walk(current) {
-    const entries = await readdir(current, { withFileTypes: true });
-    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
-    for (const entry of entries) {
-      const absolute = join(current, entry.name);
-      if (entry.isDirectory()) await walk(absolute);
-      else if (entry.isFile()) files.push(absolute);
-    }
-  }
-  await walk(directory);
-  files.sort((left, right) => {
-    const leftPath = relative(directory, left);
-    const rightPath = relative(directory, right);
-    return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
-  });
-  const digest = createHash('sha256');
-  let bytes = 0;
-  for (const file of files) {
-    const content = await readFile(file);
-    const path = relative(directory, file).split('\\').join('/');
-    bytes += content.byteLength;
-    digest.update(path).update('\0').update(String(content.byteLength)).update('\0').update(content);
-  }
-  return { sha256: digest.digest('hex'), files: files.length, bytes };
-}
 
 async function reserveBasePort() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -79,11 +52,22 @@ function spawnServer(profile, basePort) {
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  let output = '';
+  const outputDigest = createHash('sha256');
+  let outputBytes = 0;
   const exited = new Promise(resolveExit => child.once('exit', (code, signal) => resolveExit({ exitStatus: code, signal })));
-  child.stdout.setEncoding('utf8').on('data', chunk => { output = (output + chunk).slice(-12000); });
-  child.stderr.setEncoding('utf8').on('data', chunk => { output = (output + chunk).slice(-12000); });
-  return { child, argv: [process.execPath, ...argv], exited, get output() { return output; } };
+  const capture = stream => stream.on('data', chunk => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    outputDigest.update(bytes);
+    outputBytes += bytes.byteLength;
+  });
+  capture(child.stdout);
+  capture(child.stderr);
+  return {
+    child,
+    argv: [process.execPath, ...argv],
+    exited,
+    get outputEvidence() { return { bytes: outputBytes, sha256: outputDigest.copy().digest('hex') }; }
+  };
 }
 
 async function waitForServer(server, baseUrl) {
@@ -132,18 +116,10 @@ async function inspectArtifact(profile) {
   }
 }
 
-function repoHead() {
-  try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
-}
-
 const report = {
   schemaVersion: 'atlas.browser-e2e-evidence/v1',
   purpose: 'Host storage and profile-origin E2E subset. These checks do not establish Q01-Q15 as a whole.',
-  headSha: repoHead(),
+  headSha: currentHead(repoRoot),
   exactCli: process.env.ATLAS_E2E_EXACT_CLI ?? `${process.argv[0]} ${process.argv.slice(1).join(' ')}`,
   argv: process.argv,
   environment: {
@@ -163,7 +139,7 @@ const report = {
 let browser;
 let browserError;
 try {
-  const { chromium } = await import('playwright');
+  const { chromium } = await import('@playwright/test');
   const executablePath = process.env.ATLAS_E2E_CHROMIUM;
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   report.environment.browser = {
@@ -187,6 +163,7 @@ if (browserError) {
     const artifact = await inspectArtifact(profile);
     report.profiles.push({
       profile,
+      exactCli: report.exactCli,
       artifact: artifact && { sha256: artifact.sha256, files: artifact.files, bytes: artifact.bytes },
       cases: notCheckedCases(`Chromium could not launch: ${browserError}`),
       server: null
@@ -196,6 +173,7 @@ if (browserError) {
   const { runHostStorageCases } = await import('../../tests/e2e/host-storage.mjs');
   for (const profile of requestedProfiles.filter(name => profileNames.includes(name))) {
     const profileReport = { profile, artifact: null, cases: [], server: null };
+    profileReport.exactCli = report.exactCli;
     report.profiles.push(profileReport);
     const artifact = await inspectArtifact(profile);
     if (!artifact) {
@@ -215,7 +193,7 @@ if (browserError) {
         profileReport.server = {
           argv: server.argv,
           ready: false,
-          output: server.output,
+          outputEvidence: server.outputEvidence,
           shutdown: await stopServer(server)
         };
         server = undefined;
@@ -245,7 +223,7 @@ if (browserError) {
         profileReport.server = {
           ...(profileReport.server ?? {}),
           argv: server.argv,
-          output: server.output,
+          outputEvidence: server.outputEvidence,
           shutdown: await stopServer(server)
         };
       }
@@ -259,6 +237,13 @@ if (browserError) {
 }
 
 await browser?.close();
+for (const profile of report.profiles) {
+  const cases = profile.cases ?? [];
+  if (cases.some(test => test.status === 'FAIL')) profile.status = 'FAIL';
+  else if (cases.length === 0 || cases.some(test => test.status === 'NOT_CHECKED')) profile.status = 'NOT_CHECKED';
+  else profile.status = 'PASS';
+  profile.exitStatus = profile.status === 'PASS' ? 0 : profile.status === 'FAIL' ? 1 : 2;
+}
 const allCases = report.profiles.flatMap(profile => profile.cases ?? []);
 if (invalidProfiles.length || allCases.some(test => test.status === 'FAIL')) report.suiteStatus = 'FAIL';
 else if (allCases.length === 0 || allCases.some(test => test.status === 'NOT_CHECKED')) report.suiteStatus = 'NOT_CHECKED';

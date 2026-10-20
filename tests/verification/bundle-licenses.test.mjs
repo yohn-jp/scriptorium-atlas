@@ -8,14 +8,19 @@ import { writeBundleLicenses } from '../../scripts/verification/write-bundle-lic
 
 async function fixture({ withLicense = true } = {}) {
   const root = await mkdtemp(join(os.tmpdir(), 'atlas-bundle-license-test-'));
-  const dependencyDirectory = join(root, 'node_modules', '@sample', 'dep');
+  const dependencyDirectory = join(root, 'node_modules', '.pnpm', '@sample+dep@2.3.4', 'node_modules', '@sample', 'dep');
   const outputDirectory = join(root, 'dist', 'story');
   await mkdir(dependencyDirectory, { recursive: true });
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(join(dependencyDirectory, 'package.json'), JSON.stringify({ name: '@sample/dep', version: '2.3.4', license: 'MIT' }));
   await writeFile(join(dependencyDirectory, 'index.js'), 'export const value = 1;\n');
   if (withLicense) await writeFile(join(dependencyDirectory, 'LICENSE'), 'Exact upstream license text.\n');
-  return { root, outputDirectory, module: 'node_modules/@sample/dep/index.js' };
+  return {
+    root,
+    outputDirectory,
+    module: 'node_modules/.pnpm/@sample+dep@2.3.4/node_modules/@sample/dep/index.js',
+    dependencyDirectory
+  };
 }
 
 test('writes exact bundled dependency legal text with a verifiable digest', async () => {
@@ -30,7 +35,7 @@ test('writes exact bundled dependency legal text with a verifiable digest', asyn
     assert.equal(result.packageCount, 1);
     const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'));
     const [license] = manifest.packages[0].licenseFiles;
-    const original = await readFile(join(setup.root, 'node_modules/@sample/dep/LICENSE'));
+    const original = await readFile(join(setup.dependencyDirectory, 'LICENSE'));
     const copied = await readFile(join(setup.outputDirectory, 'licenses', license.output));
     assert.deepEqual(copied, original);
     assert.equal(license.sha256, createHash('sha256').update(original).digest('hex'));
