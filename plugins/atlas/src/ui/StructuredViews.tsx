@@ -109,6 +109,7 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
   const entryById = new Map(timeline.entries.map((entry) => [entry.itemId, entry.value]));
   const [start, setStart] = useState(String(timeline.range.start));
   const [end, setEnd] = useState(String(timeline.range.end));
+  const [pendingAxis, setPendingAxis] = useState<TimelineAxis | null>(null);
 
   useEffect(() => { setStart(String(timeline.range.start)); setEnd(String(timeline.range.end)); }, [view.id, timeline.range.start, timeline.range.end]);
 
@@ -129,11 +130,21 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
   };
 
   const changeAxis = (nextAxis: TimelineAxis) => {
+    if (nextAxis === axis) {
+      setPendingAxis(null);
+      return;
+    }
     if (nextAxis !== axis && timeline.entries.some((entry) => entry.value !== null)) {
-      const accepted = window.confirm('軸を変更すると、入力済みの値は「不明」に戻ります。続行しますか？');
-      if (!accepted) return;
+      setPendingAxis(nextAxis);
+      return;
     }
     commit({ axis: nextAxis, values: new Map(allItems.map((item) => [item.id, null])) });
+  };
+
+  const confirmAxisChange = () => {
+    if (!pendingAxis) return;
+    commit({ axis: pendingAxis, values: new Map(allItems.map((item) => [item.id, null])) });
+    setPendingAxis(null);
   };
 
   const saveRange = () => {
@@ -147,7 +158,7 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
     <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>値は明示的に設定します。空欄は「不明」です。Atlasは並び順から日付を推測しません。</p></div></div>
     <div className="atlas-timeline-controls">
       <label>軸
-        <select value={axis} onChange={(event) => changeAxis(event.currentTarget.value as TimelineAxis)}>
+        <select value={pendingAxis ?? axis} onChange={(event) => changeAxis(event.currentTarget.value as TimelineAxis)}>
           <option value="unknown">不明</option><option value="generic.time">一般時刻（エポックms）</option><option value="story.time">物語内時刻（エポックms）</option><option value="story.scene-order">物語のシーン順（順序番号）</option>
         </select>
       </label>
@@ -155,6 +166,11 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
       <label>範囲の終了<input type="number" value={end} onChange={(event) => setEnd(event.currentTarget.value)} onBlur={saveRange} /></label>
       <button type="button" onClick={saveRange}>範囲を適用</button>
     </div>
+    {pendingAxis && <div className="atlas-axis-confirm" role="group" aria-label="タイムライン軸変更の確認">
+      <p>軸を変更すると、入力済みの値は「不明」に戻ります。{pendingAxis}へ変更しますか？</p>
+      <button type="button" onClick={confirmAxisChange}>値を不明に戻して軸を変更</button>
+      <button type="button" onClick={() => setPendingAxis(null)}>キャンセル</button>
+    </div>}
     <div className="atlas-timeline-rows">
       {allItems.map((item) => {
         const value = entryById.get(item.id) ?? null;

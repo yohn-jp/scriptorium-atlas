@@ -188,6 +188,9 @@
 .atlas-timeline-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-bottom: 16px; padding: 10px; border: 1px solid var(--atlas-line); border-radius: 8px; background: var(--atlas-panel); }
 .atlas-timeline-controls label { display: grid; gap: 3px; color: var(--atlas-muted); font-size: 10px; }
 .atlas-timeline-controls input { width: 130px; }
+.atlas-axis-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -6px 0 14px; padding: 10px; border: 1px solid #b58c42; border-radius: 8px; background: #fbf1d9; color: #5c4725; }
+.atlas-axis-confirm p { flex: 1 1 260px; margin: 0; font-size: 12px; }
+.atlas-axis-confirm button { color: #4e4027; }
 .atlas-timeline-rows { display: grid; gap: 7px; }
 .atlas-timeline-row { display: grid; grid-template-columns: minmax(150px, 240px) minmax(80px, 1fr) 130px; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--atlas-line); border-radius: 8px; background: var(--atlas-panel); }
 .atlas-timeline-item { min-width: 0; display: grid; }

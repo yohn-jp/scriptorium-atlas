@@ -20,3 +20,5 @@ ATLAS_E2E_CHROMIUM=/path/to/chromium \
 ATLAS_ARTIFACT_HEAD=<built-host-commit> \
 node plugins/atlas/tests/browser-graph-history.mjs
 ```
+
+`browser-structured-views.mjs` exercises Kanban lane and card ordering, assignment, explicit timeline axis confirmation/cancellation with unknown values, storyboard ordering, Host commit, and reload persistence using an imported board fixture.
