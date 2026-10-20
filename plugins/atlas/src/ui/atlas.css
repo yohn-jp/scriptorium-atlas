@@ -232,6 +232,12 @@
   .atlas-graph-layout { grid-template-columns: minmax(0, 1fr) 260px; }
 }
 
+@media (max-width: 900px) {
+  .atlas-view-header { align-items: flex-start; flex-direction: column; }
+  .atlas-view-tabs, .atlas-view-actions { width: 100%; }
+  .atlas-view-actions { padding: 0 0 7px; }
+}
+
 @media (max-width: 760px) {
   .atlas-plugin { min-width: 390px; overflow: auto; }
   .atlas-app-header { align-items: flex-start; flex-direction: column; gap: 8px; }

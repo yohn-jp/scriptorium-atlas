@@ -13,7 +13,8 @@ const requireFromHost = createRequire(resolve(hostRoot, 'package.json'));
 const { chromium } = requireFromHost('@playwright/test');
 const serverScript = resolve(hostRoot, 'apps/standalone/scripts/serve.mjs');
 const browserPath = process.env.ATLAS_E2E_CHROMIUM;
-const report = { artifactRoot: resolve(hostRoot, 'dist/atlas'), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, cases: [], browser: null };
+const profile = process.env.ATLAS_PROFILE ?? 'atlas';
+const report = { artifactRoot: resolve(hostRoot, `dist/${profile}`), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, profile, cases: [], browser: null };
 
 async function reservePorts() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -140,7 +141,7 @@ function makeViewFixture(board) {
 async function run() {
   const basePort = await reservePorts();
   const baseUrl = `http://127.0.0.1:${basePort}`;
-  const server = spawn(process.execPath, [serverScript, 'atlas'], {
+  const server = spawn(process.execPath, [serverScript, profile], {
     cwd: hostRoot,
     env: { ...process.env, ATLAS_HOST_PORT: String(basePort), ATLAS_PLUGIN_PORT: String(basePort + 1), ATLAS_STORY_PORT: String(basePort + 2) },
     stdio: 'ignore',
@@ -157,7 +158,8 @@ async function run() {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('dialog', async (dialog) => { dialogs.push(dialog.type()); await dialog.dismiss(); });
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-    await page.getByLabel('Workspace名').fill(`Atlas views ${randomUUID()}`);
+    const workspaceName = `Atlas views ${randomUUID()}`;
+    await page.getByLabel('Workspace名').fill(workspaceName);
     await page.getByRole('button', { name: '空のWorkspaceを作成' }).click();
 
     const atlas = page.frameLocator('iframe[title="Atlas"]');
@@ -175,7 +177,8 @@ async function run() {
     await commitUntilClean(page, atlas);
     report.cases.push('import-and-commit-board-with-lanes-timeline-and-story-order');
 
-    await atlas.getByRole('tab', { name: /ボード/u }).click();
+    const boardViewTab = atlas.getByRole('tab', { name: /^ボード ボード$/u });
+    await boardViewTab.click();
     const laneLabels = atlas.getByLabel('レーン名');
     await laneLabels.nth(1).fill('準備');
     await laneLabels.nth(1).press('Tab');
@@ -204,7 +207,7 @@ async function run() {
     await commitUntilClean(page, atlas);
     report.cases.push('kanban-lane-rename-add-reorder-card-order-and-assign');
 
-    await atlas.getByRole('tab', { name: /タイムライン/u }).click();
+    await atlas.getByRole('tab', { name: /^タイムライン タイムライン$/u }).click();
     const axis = atlas.getByLabel('軸');
     await axis.selectOption('story.scene-order');
     const axisConfirmation = atlas.getByRole('group', { name: 'タイムライン軸変更の確認' });
@@ -223,7 +226,7 @@ async function run() {
     await commitUntilClean(page, atlas);
     report.cases.push('timeline-axis-confirm-cancel-and-explicit-unknown-values');
 
-    await atlas.getByRole('tab', { name: /ストーリーボード/u }).click();
+    await atlas.getByRole('tab', { name: /^ストーリーボード ストーリーボード$/u }).click();
     const storyRows = atlas.locator('.atlas-storyboard-card');
     assert.deepEqual(await storyRows.locator('strong').allTextContents(), ['シーンA', 'シーンB']);
     await storyRows.first().getByRole('button', { name: 'シーンを後ろへ移動' }).click();
@@ -244,9 +247,10 @@ async function run() {
     report.cases.push('exported-document-preserves-lanes-unknown-values-and-story-order');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByLabel('開く').selectOption({ label: workspaceName });
     const reloadedAtlas = page.frameLocator('iframe[title="Atlas"]');
     await reloadedAtlas.locator('.atlas-board-tab').filter({ hasText: 'Q07 Structured Acceptance' }).click();
-    await reloadedAtlas.getByRole('tab', { name: /タイムライン/u }).waitFor({ state: 'visible' });
+    await reloadedAtlas.getByRole('tab', { name: /^タイムライン タイムライン$/u }).waitFor({ state: 'visible' });
     const reloadedBoard = await downloadBoard(page, reloadedAtlas);
     const reloadedTimeline = reloadedBoard.views.find((view) => view.kind === 'timeline');
     const reloadedStory = reloadedBoard.views.find((view) => view.kind === 'storyboard');
