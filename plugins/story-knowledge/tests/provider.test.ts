@@ -152,6 +152,36 @@ function page(files: WorkspaceSnapshotPage["files"], nextCursor: string | null, 
 }
 
 describe("Story Graph Provider host boundary", () => {
+  it("returns a contract-valid empty edge page for disconnected Story characters", async () => {
+    const firstFile: VersionedFile = {
+      workspaceId: WORKSPACE.workspaceId,
+      path: "bible/characters/a.yaml",
+      revision: "revision-character-a",
+      content: "id: char-a\ntype: character\nname: A\n",
+      encoding: "utf8",
+      contentType: "text/yaml",
+      updatedAt: "2026-10-21T00:00:00.000Z",
+    };
+    const secondFile: VersionedFile = {
+      ...firstFile,
+      path: "bible/characters/b.yaml",
+      revision: "revision-character-b",
+      content: "id: char-b\ntype: character\nname: B\n",
+    };
+    const { host } = createHost([page([firstFile, secondFile], null, true)]);
+    const worker = new FakeStoryWorker();
+    const provider = createStoryProvider(host, { createWorker: () => worker });
+    const opened = await provider.dispatch(openedRequest(await providerRevision(WORKSPACE.sourceRevision))) as ProviderOpenResult;
+
+    const nodes = await provider.dispatch({ method: "listNodes", params: { handle: opened.handle, limit: 500 } }) as ProviderPage;
+    expect(nodes.items.map((node) => node.ref.localId)).toEqual(["char-a", "char-b"]);
+
+    const edges = await provider.dispatch({ method: "listEdges", params: { handle: opened.handle, limit: 500 } }) as GraphEdgePage;
+    expect(edges).toEqual({ snapshot: opened.actualSnapshot, items: [], nextCursor: null, complete: true });
+
+    provider.dispose();
+  });
+
   it("does not spawn a worker before open; pages Host input and serves a pinned lease until close", async () => {
     const revision = `rev-${"a".repeat(64)}`;
     const sourceFile: VersionedFile = {
