@@ -45,7 +45,7 @@ try {
 }
 
 async function findChromium(playwrightChromium) {
-  const candidates = [process.env.CHROMIUM_PATH, playwrightChromium.executablePath()];
+  const candidates = [process.env.ATLAS_E2E_CHROMIUM, process.env.CHROMIUM_PATH, playwrightChromium.executablePath()];
   const cache = join(homedir(), '.cache', 'ms-playwright');
   try {
     for (const entry of await readdir(cache)) {
@@ -60,5 +60,5 @@ async function findChromium(playwrightChromium) {
       if ((await stat(candidate)).isFile()) return candidate;
     } catch { /* Try the next installed Chromium path. */ }
   }
-  throw new Error(`Chromium was not found. Set CHROMIUM_PATH or install the browser at ${playwrightChromium.executablePath()}`);
+  throw new Error(`Chromium was not found. Set ATLAS_E2E_CHROMIUM or CHROMIUM_PATH, or install the browser at ${playwrightChromium.executablePath()}`);
 }

@@ -71,7 +71,7 @@ async function runSize(nodeCount) {
       error: error?.name === 'AbortError' ? undefined : String(error),
     };
   }
-  forceCancellation.elapsedMs = performance.now() - layoutStart;
+  forceCancellation.elapsedMs = round(performance.now() - layoutStart);
   layoutClient.close();
 
   return {
