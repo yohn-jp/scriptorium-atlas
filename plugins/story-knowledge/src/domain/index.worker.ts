@@ -208,6 +208,7 @@ async function respond(request: StoryIndexWorkerRequest): Promise<StoryIndexWork
         return { id: request.id, ok: true, result: storyDiff(state.projection, previous, request.handle, request.params) as GraphDeltaPage };
       }
       case "close": {
+        if (staging?.handle === request.handle) staging = undefined;
         const key = leases.get(request.handle);
         leases.delete(request.handle);
         if (key && snapshots.has(key)) {
