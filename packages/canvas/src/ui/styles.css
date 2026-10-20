@@ -58,6 +58,17 @@
   cursor: pointer;
 }
 
+@media (max-width: 600px) {
+  .atlas-canvas-accessibility:not([open]) {
+    top: auto;
+    bottom: 0.5rem;
+    left: 50%;
+    width: max-content;
+    max-width: calc(100% - 1rem);
+    transform: translateX(-50%);
+  }
+}
+
 .atlas-canvas-accessibility :focus-visible {
   outline: 3px solid #2563eb;
   outline-offset: 2px;

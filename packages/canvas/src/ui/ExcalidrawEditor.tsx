@@ -27,6 +27,7 @@ type ExcalidrawLinkEvent = CustomEvent<{
 }>;
 
 function activateHistoryButtonWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
   if (event.repeat || (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar")) return;
   if (!(event.target instanceof Element)) return;
 
