@@ -135,14 +135,14 @@ async function waitResponses(page, origin, operation, count) {
 
 async function connectStory(page, atlas) {
   await page.getByLabel('AtlasへStory ProviderとSourceの読取りを許可').check();
-  await atlas.locator.getByLabel('Provider').selectOption(STORY_PROVIDER_ID);
-  await atlas.locator.getByRole('button', { name: 'Connect selected provider' }).click();
+  await atlas.locator.getByLabel('Providerを選択').selectOption(STORY_PROVIDER_ID);
+  await atlas.locator.getByRole('button', { name: '選択したProviderを接続' }).click();
 }
 
 async function searchThirty(page, atlas, origin) {
   const before = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'search').length;
   const queries = Array.from({ length: 30 }, (_, index) => ['計測対象', 'benchmark', `group-${String(index % 100).padStart(2, '0')}`, 'character'][index % 4]);
-  const search = atlas.locator.getByLabel('Search provider snapshot');
+  const search = atlas.locator.getByLabel('Providerスナップショットを検索');
   for (let index = 0; index < queries.length; index += 1) {
     await search.fill(queries[index]);
     await waitResponses(page, origin, 'search', before + index + 1);
@@ -152,17 +152,17 @@ async function searchThirty(page, atlas, origin) {
 }
 
 async function addProviderNode(atlas, id) {
-  await atlas.locator.getByLabel('Search provider snapshot').fill(id);
+  await atlas.locator.getByLabel('Providerスナップショットを検索').fill(id);
   const hit = atlas.locator.locator('.atlas-search-results .atlas-search-hit').first();
   await hit.waitFor({ state: 'visible', timeout: 30_000 });
-  await hit.getByRole('button', { name: 'Add node' }).click();
+  await hit.getByRole('button', { name: 'ノードを追加' }).click();
 }
 
 async function measureTraversal(page, atlas, origin) {
   await addProviderNode(atlas, 'perf-node-00000');
   await addProviderNode(atlas, 'perf-node-00001');
-  const from = atlas.locator.getByLabel('Use as path start');
-  const to = atlas.locator.getByLabel('Path destination');
+  const from = atlas.locator.getByLabel('経路の始点');
+  const to = atlas.locator.getByLabel('経路の終点');
   const ids = await from.locator('option').evaluateAll((items) => items.slice(1).map((option) => option.value));
   assert.equal(ids.length, 2);
   await from.selectOption(ids[0]);
@@ -171,9 +171,9 @@ async function measureTraversal(page, atlas, origin) {
   const startNeighbors = before.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'neighbors').length;
   const startPaths = before.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'shortestPath').length;
   for (let index = 0; index < 30; index += 1) {
-    await atlas.locator.getByRole('button', { name: 'Both 3', exact: true }).click();
+    await atlas.locator.getByRole('button', { name: '双方向 3段', exact: true }).click();
     await waitResponses(page, origin, 'neighbors', startNeighbors + index + 1);
-    await atlas.locator.getByRole('button', { name: 'Find shortest path', exact: true }).click();
+    await atlas.locator.getByRole('button', { name: '最短経路を検索', exact: true }).click();
     await waitResponses(page, origin, 'shortestPath', startPaths + index + 1);
   }
   const after = await readMetrics(page);
@@ -203,7 +203,7 @@ export async function runPerformanceCases({ browser, baseUrl, archives, datasets
           const searches = await searchThirty(page, cold.atlas, cold.atlas.origin);
           assert.equal(searches.measured, 30, 'the 1k search benchmark must complete all 30 queries');
           const before = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === cold.atlas.origin && item.operation === 'layout-force').length;
-          await cold.atlas.locator.getByRole('button', { name: 'Force', exact: true }).click();
+          await cold.atlas.locator.getByRole('button', { name: '力学レイアウト', exact: true }).click();
           await waitResponses(page, cold.atlas.origin, 'layout-force', before + 1);
           const layout = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === cold.atlas.origin && item.operation === 'layout-force')[before];
           assert.ok(layout, 'the production Layout Worker must complete the 1k Force request');
@@ -268,11 +268,11 @@ export async function runPerformanceCases({ browser, baseUrl, archives, datasets
     const { context, page } = await createPage(browser, baseUrl, archive);
     try {
       const atlas = await atlasFrame(page);
-      await atlas.locator.getByRole('tab', { name: /Canvas/ }).click();
+      await atlas.locator.getByRole('tab', { name: 'キャンバス', exact: true }).click();
       const cards = atlas.locator.locator('.atlas-canvas-card');
       assert.equal(await cards.count(), expectedCards);
       const card = cards.first();
-      const move = card.getByRole('button', { name: 'Move card' });
+      const move = card.getByRole('button', { name: 'カードを移動', exact: true });
       await move.scrollIntoViewIfNeeded();
       const box = await move.boundingBox();
       assert.ok(box);
