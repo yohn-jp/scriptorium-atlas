@@ -290,6 +290,17 @@ async function createHostSource(page, story, path, content) {
   await waitForStoryReady(story);
 }
 
+function createAliasBombYaml() {
+  let previousAnchor = "a0";
+  const lines = ["id: alias-bomb", "type: character", "name: Alias Bomb", "base: &a0 [x]"];
+  for (let level = 1; level <= 12; level += 1) {
+    const nextAnchor = `a${level}`;
+    lines.push(`${nextAnchor}: &${nextAnchor} [*${previousAnchor}, *${previousAnchor}]`);
+    previousAnchor = nextAnchor;
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 async function runAcceptance({ browser, baseUrl }) {
   const context = await browser.newContext({ locale: "ja-JP", viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -600,6 +611,19 @@ async function runAcceptance({ browser, baseUrl }) {
     });
     await createHostSource(page, reloadedStory, "bible/characters/broken.yaml", "id: [unterminated\ntype: character\nname: broken\n");
     await createHostSource(page, reloadedStory, "bible/characters/duplicate.yaml", `id: ${characterIdentity}\ntype: character\nname: Duplicate acceptance fixture\n`);
+    await createHostSource(page, reloadedStory, "manuscript/unclosed-frontmatter.md", "---\nid: manuscript-unclosed\ntype: manuscript\ntitle: Unclosed\n本文はfrontmatter内に残っています。\n");
+    await createHostSource(page, reloadedStory, "bible/characters/unsupported-tag.yaml", "id: custom-tag\ntype: character\nname: Custom Tag\nmetadata: !custom value\n");
+    await createHostSource(page, reloadedStory, "bible/characters/alias-bomb.yaml", createAliasBombYaml());
+    await createHostSource(page, reloadedStory, "plot/volumes/missing-volume/chapters/missing-chapter/scenes/scene-diagnostic.yaml", [
+      "id: scene-diagnostic",
+      "type: scene",
+      "name: Missing chapter and POV target",
+      "volume: missing-volume",
+      "chapter: missing-chapter",
+      "pov: missing-character",
+      "",
+    ].join("\n"));
+    await createHostSource(page, reloadedStory, "plot/threads/thread-diagnostic.yaml", "id: thread-diagnostic\ntype: thread\nname: Missing Scene target\nplanted: scene-missing\n");
     const diagnosticTab = reloadedStory.getByRole("button", { name: /^診断/ });
     await diagnosticTab.click();
     const diagnosticTable = reloadedStory.locator("table").filter({ has: reloadedStory.getByRole("columnheader", { name: "Code", exact: true }) });
@@ -609,6 +633,21 @@ async function runAcceptance({ browser, baseUrl }) {
     const duplicateRows = diagnosticTable.getByRole("row").filter({ hasText: "duplicate-entity-id" });
     const duplicateDiagnosticRows = await duplicateRows.count();
     assert.ok(duplicateDiagnosticRows >= 2, "Both duplicate ID sources must receive diagnostics.");
+    const unclosedFrontmatterRow = diagnosticTable.getByRole("row").filter({ hasText: "unclosed-frontmatter.md" });
+    await unclosedFrontmatterRow.waitFor({ state: "visible" });
+    assert.match(await unclosedFrontmatterRow.innerText(), /frontmatter-unclosed/u);
+    const unsupportedTagRow = diagnosticTable.getByRole("row").filter({ hasText: "unsupported-tag.yaml" }).filter({ hasText: "yaml-tag-unsupported" });
+    await unsupportedTagRow.waitFor({ state: "visible" });
+    assert.match(await unsupportedTagRow.innerText(), /yaml-tag-unsupported/u);
+    const aliasBombRow = diagnosticTable.getByRole("row").filter({ hasText: "alias-bomb.yaml" });
+    await aliasBombRow.waitFor({ state: "visible" });
+    assert.match(await aliasBombRow.innerText(), /yaml-conversion-failed/u);
+    const missingChapterRow = diagnosticTable.getByRole("row").filter({ hasText: "hierarchy-chapter-missing" }).filter({ hasText: "scene-diagnostic.yaml" });
+    await missingChapterRow.waitFor({ state: "visible" });
+    const danglingTargetRows = diagnosticTable.getByRole("row").filter({ hasText: "relation-target-dangling" });
+    const danglingTargetTexts = await danglingTargetRows.allInnerTexts();
+    assert.ok(danglingTargetTexts.some((value) => value.includes("missing-character")), "Missing POV targets must produce the canonical dangling-target diagnostic.");
+    assert.ok(danglingTargetTexts.some((value) => value.includes("scene-missing")), "Missing Scene targets must produce the canonical dangling-target diagnostic.");
     const normalDetail = await chooseEntity(reloadedStory, names.normal);
     const normalNameInput = normalDetail.getByLabel("表示名");
     await normalNameInput.waitFor({ state: "visible" });
@@ -624,6 +663,16 @@ async function runAcceptance({ browser, baseUrl }) {
       id: "malformed-yaml-and-duplicate-id-diagnostics-preserve-normal-entities",
       status: "PASS",
       evidence: { malformedPath: "bible/characters/broken.yaml", duplicateId: characterIdentity, duplicateDiagnosticRows, normalEntityEditable: names.normal },
+    });
+    evidence.cases.push({
+      id: "unclosed-frontmatter-unsupported-tag-and-alias-bomb-diagnostics-preserve-normal-entity",
+      status: "PASS",
+      evidence: { unclosedFrontmatter: "frontmatter-unclosed", unsupportedYamlTag: "yaml-tag-unsupported", exponentialAliasBomb: "yaml-conversion-failed", normalEntityEditable: names.normal },
+    });
+    evidence.cases.push({
+      id: "missing-scene-pov-and-chapter-reference-diagnostics",
+      status: "PASS",
+      evidence: { missingSceneTarget: "relation-target-dangling", missingPovTarget: "relation-target-dangling", missingChapter: "hierarchy-chapter-missing" },
     });
 
     const storyMain = reloadedStory.locator("main.story-knowledge");
@@ -750,6 +799,152 @@ async function runKeyboardAcceptance(browser, baseUrl) {
   }
 }
 
+async function runChromiumCompositionAcceptance(browser, baseUrl) {
+  const context = await browser.newContext({ locale: "ja-JP", viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const prefix = `Story Chromium IME ${Date.now().toString(36)}`;
+  const initialName = `${prefix} 編集対象`;
+  const finalName = `${prefix} 日本語編集済み`;
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: "Scriptorium Atlas", exact: true }).waitFor();
+    await page.getByLabel("Workspace名").fill(`${prefix} workspace`);
+    await page.getByRole("button", { name: "空のWorkspaceを作成" }).click();
+    await page.getByRole("status").filter({ hasText: "Workspaceを開きました。" }).waitFor();
+
+    const panel = page.locator('section[aria-label="Story Knowledge Plugin"]');
+    await panel.getByText("接続中", { exact: true }).waitFor();
+    const story = page.frameLocator('section[aria-label="Story Knowledge Plugin"] iframe');
+    await waitForStoryReady(story);
+    await createEntity(page, story, { type: "character", name: initialName });
+    const detail = await chooseEntity(story, initialName, "character");
+    const input = detail.getByLabel("表示名");
+    const heading = detail.getByRole("heading", { name: `人物: ${initialName}`, exact: true });
+    const iframeSrc = await panel.locator("iframe").getAttribute("src");
+    assert.ok(iframeSrc, "The Story iframe must expose its configured source.");
+    const storyOrigin = new URL(iframeSrc, baseUrl).origin;
+    const frame = page.frames().find((candidate) => candidate.url().startsWith(`${storyOrigin}/frame.html`));
+    assert.ok(frame, "The Story iframe must be loaded before Chromium composition is tested.");
+
+    await page.bringToFront();
+    await input.fill("");
+    await input.click();
+    assert.equal(await input.evaluate((element) => document.activeElement === element), true,
+      "The editable Story name field must own focus before Chromium composition begins.");
+    const outerFocus = await page.evaluate(() => ({
+      hasFocus: document.hasFocus(),
+      activeIsStoryIframe: document.activeElement === document.querySelector('section[aria-label="Story Knowledge Plugin"] iframe'),
+    }));
+    assert.deepEqual(outerFocus, { hasFocus: true, activeIsStoryIframe: true },
+      "The Host page must focus the Story iframe before Chromium receives composition input.");
+    assert.equal(await frame.evaluate(() => document.hasFocus()), true,
+      "The focused Story frame must report document focus before Chromium composition begins.");
+    await input.evaluate((element) => {
+      const events = [];
+      const store = (event) => events.push({
+        type: event.type,
+        ...(event instanceof KeyboardEvent ? { key: event.key, isComposing: event.isComposing, keyCode: event.keyCode } : {}),
+        ...(event instanceof InputEvent || event instanceof CompositionEvent ? { data: event.data } : {}),
+      });
+      for (const type of ["compositionstart", "compositionupdate", "compositionend", "keydown", "input", "blur"]) element.addEventListener(type, store, true);
+      window.__storyChromiumCompositionEvents = events;
+    });
+
+    const cdp = await context.newCDPSession(page);
+    try {
+      const composedName = "にほんご候補";
+      await cdp.send("Input.imeSetComposition", { text: composedName, selectionStart: composedName.length, selectionEnd: composedName.length });
+      try {
+        await frame.waitForFunction(() => window.__storyChromiumCompositionEvents?.some((event) => event.type === "compositionupdate"), null, { timeout: 5000 });
+      } catch (error) {
+        const state = await frame.evaluate(() => ({
+          focused: document.hasFocus(),
+          activeElement: document.activeElement && {
+            tagName: document.activeElement.tagName,
+            type: "type" in document.activeElement ? document.activeElement.type : undefined,
+            value: "value" in document.activeElement ? document.activeElement.value : undefined,
+            ariaLabel: document.activeElement.getAttribute("aria-label"),
+          },
+          events: window.__storyChromiumCompositionEvents ?? [],
+        }));
+        const hostFocus = await page.evaluate(() => ({
+          focused: document.hasFocus(),
+          activeTag: document.activeElement?.tagName,
+          activeTitle: document.activeElement?.getAttribute("title"),
+        }));
+        throw new Error(`${error.message}; Story focus/input state: ${JSON.stringify(state)}; Host focus state: ${JSON.stringify(hostFocus)}`);
+      }
+      await page.keyboard.press("Enter");
+      const candidateValue = await input.inputValue();
+      const firstCompositionEvents = await frame.evaluate(() => window.__storyChromiumCompositionEvents ?? []);
+      assert.ok(firstCompositionEvents.some((event) => event.type === "compositionstart"), `Chromium must send compositionstart; events: ${JSON.stringify(firstCompositionEvents)}`);
+      assert.ok(firstCompositionEvents.some((event) => event.type === "compositionupdate"), `Chromium must send compositionupdate; events: ${JSON.stringify(firstCompositionEvents)}`);
+      const imeEnter = firstCompositionEvents.find((event) => event.type === "keydown" && event.key === "Enter");
+      assert.ok(imeEnter && (imeEnter.isComposing === true || imeEnter.keyCode === 229), `Composition Enter must retain IME state; events: ${JSON.stringify(firstCompositionEvents)}`);
+      assert.equal(candidateValue, composedName, "Chromium must commit the Japanese composition into Story's editable name field.");
+      assert.equal(await input.evaluate((element) => document.activeElement === element), true, "Composition Enter must leave Story's name field focused.");
+      assert.equal(await preview(story).count(), 0, "Composition Enter must not submit a Story edit proposal.");
+      await heading.waitFor({ state: "visible" });
+
+      // The CDP candidate remains a preedit after the composition Enter in
+      // headless Chromium. Cancel that test candidate before checking a normal
+      // Enter submission from the same field.
+      await cdp.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
+      await input.fill("");
+      await input.click();
+      await page.keyboard.insertText(finalName);
+      assert.equal(await input.inputValue(), finalName, "Japanese keyboard text must enter Story's editable name after the composition check.");
+      await page.keyboard.press("Control+z");
+      assert.equal(await input.inputValue(), "", "Control+Z must undo the Japanese text entered after composition.");
+      await page.keyboard.insertText(finalName);
+      assert.equal(await input.inputValue(), finalName, "The Japanese edit can be entered again after Undo.");
+      const editPreviewButton = detail.getByRole("button", { name: "編集案をプレビュー" });
+      const tabsToEditPreview = await tabUntilFocused(page, editPreviewButton, "Story edit preview button after Chromium composition");
+      await page.keyboard.press("Enter");
+      await preview(story).waitFor({ state: "visible" });
+      await preview(story).getByText("内容を確認", { exact: true }).first().click();
+      const previewText = await preview(story).innerText();
+      assert.ok(previewText.includes(finalName), `Normal Enter after the composition check must preview ${finalName}; preview was ${JSON.stringify(previewText)}.`);
+      const submitButton = preview(story).getByRole("button", { name: "HostのReviewへ変更案を提出" });
+      const tabsToSubmit = await tabUntilFocused(page, submitButton, "Story Host Review submission button after Chromium composition");
+      await page.keyboard.press("Enter");
+      await story.getByRole("status").filter({ hasText: "HostのReviewへ変更案を提出しました" }).waitFor({ state: "visible" });
+      const proposalButton = page.locator('section[aria-label="変更の承認"] article').last().getByRole("button", { name: "この変更を承認してCommit" });
+      const tabsToCommit = await tabUntilFocused(page, proposalButton, "Host author Commit button after Chromium composition");
+      await page.keyboard.press("Enter");
+      await page.getByRole("status").filter({ hasText: "ローカルCommit完了:" }).waitFor({ state: "visible" });
+      await waitForStoryReady(story);
+      await story.getByRole("heading", { name: `人物: ${finalName}`, exact: true }).waitFor({ state: "visible" });
+      const committedSource = await page.getByRole("status").filter({ hasText: "ローカルCommit完了:" }).innerText();
+      const compositionEvents = await frame.evaluate(() => window.__storyChromiumCompositionEvents ?? []);
+      return {
+        id: "story-chromium-ime-composition-enter-and-host-commit",
+        status: "PASS",
+        evidence: {
+          initialName,
+          committedName: finalName,
+          compositionEnterKeptFocus: true,
+          compositionEnterDidNotSubmit: true,
+          compositionEndObserved: compositionEvents.some((event) => event.type === "compositionend"),
+          keyboardUndo: true,
+          tabsToEditPreview,
+          tabsToSubmit,
+          tabsToCommit,
+          normalEnterSubmittedEdit: true,
+          hostCommitCompleted: committedSource.includes("ローカルCommit完了:"),
+          compositionEvents,
+          compositionInputMethod: "Chromium DevTools Input.imeSetComposition plus physical Enter",
+        },
+      };
+    } finally {
+      await cdp.detach();
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   await stat(resolve(PROFILE_ROOT, "index.html"));
   const basePort = EXTERNAL_BASE_URL ? undefined : await reserveBasePort();
@@ -770,8 +965,13 @@ async function main() {
       assert.equal(response.ok, true, `Combined Host at ${baseUrl} must be reachable.`);
     }
     browser = await chromium.launch({ headless: true, ...(BROWSER_PATH ? { executablePath: BROWSER_PATH } : {}) });
-    evidence = await runAcceptance({ browser, baseUrl });
-    evidence.cases.push(await runKeyboardAcceptance(browser, baseUrl));
+    if (process.env.ATLAS_E2E_IME_ONLY === "1") {
+      evidence = { cases: [await runChromiumCompositionAcceptance(browser, baseUrl)] };
+    } else {
+      evidence = await runAcceptance({ browser, baseUrl });
+      evidence.cases.push(await runKeyboardAcceptance(browser, baseUrl));
+      evidence.cases.push(await runChromiumCompositionAcceptance(browser, baseUrl));
+    }
     report = {
       schemaVersion: "atlas.story-ui-browser-acceptance/v1",
       profile: PROFILE_NAME,

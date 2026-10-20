@@ -91,6 +91,45 @@ describe("Story source parsing and fidelity", () => {
     expect(traversal.diagnostics.some((item) => item.code === "source-path-invalid")).toBe(true);
   });
 
+  it("rejects unclosed Markdown frontmatter and unsupported YAML tags as read-only diagnostics", () => {
+    const unclosedMarkdown = parseStorySourceFile(file(
+      "manuscript/unclosed.md",
+      "---\nid: manuscript-unclosed\ntype: manuscript\ntitle: Unclosed\n本文はまだfrontmatter内です。\n",
+    ));
+    expect(unclosedMarkdown.entity).toBeUndefined();
+    expect(unclosedMarkdown.diagnostics.map((item) => item.code)).toContain("frontmatter-unclosed");
+
+    const unsupportedTag = parseStorySourceFile(file(
+      "bible/characters/unsupported-tag.yaml",
+      "id: custom-tag\ntype: character\nname: Custom Tag\nmetadata: !custom value\n",
+    ));
+    expect(unsupportedTag.entity).toBeUndefined();
+    expect(unsupportedTag.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "yaml-tag-unsupported", severity: "error" }),
+    ]));
+  });
+
+  it("bounds explicit YAML aliases and rejects exponential alias expansion", () => {
+    const repeatedAliases = Array.from({ length: 101 }, () => "*scalar").join(", ");
+    const tooManyAliases = parseStorySourceFile(file(
+      "bible/characters/too-many-aliases.yaml",
+      `id: too-many-aliases\ntype: character\nname: Too Many Aliases\nscalar: &scalar value\naliases: [${repeatedAliases}]\n`,
+    ));
+    expect(tooManyAliases.entity).toBeUndefined();
+    expect(tooManyAliases.diagnostics.map((item) => item.code)).toContain("yaml-alias-limit");
+
+    let previousAnchor = "a0";
+    const bombLines = ["id: alias-bomb", "type: character", "name: Alias Bomb", "base: &a0 [x]"];
+    for (let level = 1; level <= 12; level += 1) {
+      const nextAnchor = `a${level}`;
+      bombLines.push(`${nextAnchor}: &${nextAnchor} [*${previousAnchor}, *${previousAnchor}]`);
+      previousAnchor = nextAnchor;
+    }
+    const aliasBomb = parseStorySourceFile(file("bible/characters/alias-bomb.yaml", `${bombLines.join("\n")}\n`));
+    expect(aliasBomb.entity).toBeUndefined();
+    expect(aliasBomb.diagnostics.map((item) => item.code)).toContain("yaml-conversion-failed");
+  });
+
   it("reports duplicate IDs and does not use last-wins identity", async () => {
     const index = await buildStoryIndex(snapshot([
       file("bible/characters/first.yaml", yamlEntity("same-id", "character", "tags: [first]\n")),
@@ -147,6 +186,46 @@ describe("Story index and source-safe operations", () => {
       pointer: ["appears", 0],
     });
     expect(index.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+  });
+
+  it("keeps legitimate circular relations and reports missing Scene and POV targets", async () => {
+    const cyclic = await buildStoryIndex(snapshot([
+      file("bible/characters/a.yaml", yamlEntity("char-a", "character", "related: char-b\n")),
+      file("bible/characters/b.yaml", yamlEntity("char-b", "character", "related: char-a\n")),
+    ]));
+    expect(cyclic.relations).toHaveLength(2);
+    expect(cyclic.relations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromId: "char-a", toId: "char-b", kind: "related" }),
+      expect.objectContaining({ fromId: "char-b", toId: "char-a", kind: "related" }),
+    ]));
+    expect(cyclic.references.every((reference) => reference.publishable)).toBe(true);
+    expect(cyclic.diagnostics).toEqual([]);
+    const protectedCycleDelete = planDeleteStoryEntity(cyclic, "char-a");
+    expect(protectedCycleDelete.allowed).toBe(false);
+    if (protectedCycleDelete.allowed) throw new Error("Expected an incoming edge to protect a node in a relation cycle.");
+    expect(protectedCycleDelete.code).toBe("INCOMING_REFERENCES");
+    const safeCycleCascade = planDeleteStoryEntity(cyclic, "char-a", { cascade: true });
+    expect(safeCycleCascade.allowed).toBe(true);
+    if (!safeCycleCascade.allowed) throw new Error(safeCycleCascade.reason);
+    expect(safeCycleCascade.change.writes).toHaveLength(2);
+
+    const missingTargets = await buildStoryIndex(snapshot([
+      file("plot/volumes/vol-1/volume.yaml", yamlEntity("vol-1", "volume")),
+      file("plot/volumes/vol-1/chapters/ch-missing/scenes/scene-diagnostic.yaml", yamlEntity("scene-diagnostic", "scene", [
+        "volume: vol-1",
+        "chapter: ch-missing",
+        "pov: char-missing",
+        "",
+      ].join("\n"))),
+      file("plot/threads/thread-diagnostic.yaml", yamlEntity("thread-diagnostic", "thread", "planted: scene-missing\n")),
+    ]));
+    const chapterDiagnostic = missingTargets.diagnostics.find((item) => item.code === "hierarchy-chapter-missing");
+    expect(chapterDiagnostic).toMatchObject({ path: "plot/volumes/vol-1/chapters/ch-missing/scenes/scene-diagnostic.yaml", entityId: "scene-diagnostic", severity: "warning" });
+    expect(missingTargets.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "relation-target-dangling", path: "plot/volumes/vol-1/chapters/ch-missing/scenes/scene-diagnostic.yaml", entityId: "scene-diagnostic", field: "pov", severity: "warning" }),
+      expect.objectContaining({ code: "relation-target-dangling", path: "plot/threads/thread-diagnostic.yaml", entityId: "thread-diagnostic", field: "planted", severity: "warning" }),
+    ]));
+    expect(missingTargets.referencesComplete).toBe(true);
   });
 
   it("protects incoming references by default and plans explicit multi-file cascade atomically", async () => {
