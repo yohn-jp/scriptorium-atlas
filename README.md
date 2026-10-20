@@ -2,7 +2,7 @@
 
 **汎用Graph/CanvasであるAtlasと、単独でも利用できるStory Knowledgeを、同一モノレポの独立プラグインとして開発する。**
 
-**状態:** Standalone V1を実装・検証中。全F/Qの最終判定は[検証台帳](docs/implementation/VERIFICATION.md)を参照。Scriptorium本番SDKへの統合は含まない。
+**状態:** Standalone V1を実装。F01–F31／Q01–Q15の検証結果・再現方法は[検証台帳](docs/implementation/VERIFICATION.md)を参照。Scriptorium本番SDKへの統合は含まない。
 
 ## 起動
 
