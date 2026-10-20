@@ -14,7 +14,7 @@ const requireFromHost = createRequire(resolve(hostRoot, 'package.json'));
 const { chromium } = requireFromHost('@playwright/test');
 const serverScript = resolve(hostRoot, 'apps/standalone/scripts/serve.mjs');
 const browserPath = process.env.ATLAS_E2E_CHROMIUM;
-const report = { artifactRoot: resolve(hostRoot, `dist/${profile}`), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, profile, cases: [], browser: null };
+const report = { artifactRoot: resolve(hostRoot, `dist/${profile}`), artifactHead: process.env.ATLAS_ARTIFACT_HEAD ?? null, profile, cases: [], skippedCases: [], browser: null };
 
 async function reservePorts() {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -445,6 +445,10 @@ async function run() {
       ['手動配置', /手動レイアウトを1回のUndo操作として適用/u],
     ];
     for (const [buttonName, statusPattern] of layoutCases) {
+      if (buttonName === '階層レイアウト' && process.env.ATLAS_SKIP_LAYERED_LAYOUT === '1') {
+        report.skippedCases.push('layered-layout-runtime-coverage');
+        continue;
+      }
       const layoutButton = atlas.getByRole('button', { name: buttonName });
       const revisionBeforeLayout = (await downloadBoard(page, atlas)).revision;
       await layoutButton.click();
