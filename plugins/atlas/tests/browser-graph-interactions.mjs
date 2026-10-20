@@ -348,6 +348,20 @@ async function run() {
       throw error;
     }
     report.graphRevealDiagnostic.afterNodeClick = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+    await graphFrame.waitForFunction((targetNodeId) => {
+      const target = [...document.querySelectorAll('.react-flow__node')].find((element) => element.getAttribute('data-id') === targetNodeId);
+      return target?.classList.contains('selected') === true;
+    }, secondNode.id, { timeout: 2000 });
+    report.graphRevealDiagnostic.afterSelectedWait = await captureGraphRevealDiagnostic(graphFrame, secondNode.id);
+    assert.ok(
+      report.graphRevealDiagnostic.afterSelectedWait.trustedPointerTargets.some((event) =>
+        event.stage === 'graph-node-two-click' && event.type === 'click' && event.trusted === true && event.nodeId === secondNode.id),
+      'The second graph node should be selected by a trusted pointer click on that node.',
+    );
+    assert.ok(
+      report.graphRevealDiagnostic.afterSelectedWait.selectedNodeIds.includes(secondNode.id),
+      'The second graph node must be selected before the neighbor query starts.',
+    );
     await setGraphInputStage(graphFrame, 'neighbor-button-click');
     try {
       await atlas.getByRole('button', { name: '出力方向 2段' }).click();
