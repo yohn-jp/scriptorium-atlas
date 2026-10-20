@@ -62,7 +62,7 @@ function cardHeading(card: BoardDocument['cards'][number]): string {
 }
 
 function cardBody(card: BoardDocument['cards'][number]): string {
-  const source = card.source ? `${card.source.path}\nリビジョン ${card.source.revision}` : '';
+  const source = card.source ? `${card.source.path}\nリビジョン ${card.source.revision.slice(0, 12)}` : '';
   switch (card.kind) {
     case 'text':
       return [card.text, card.annotation].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
@@ -109,6 +109,7 @@ function appendCardFrame(
     label: {
       text: cardHeading(card),
       fontSize: 12,
+      strokeColor: '#302a23',
       textAlign: 'left',
       verticalAlign: 'middle',
     },
