@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import '@xyflow/react/dist/style.css';
 import '@scriptorium-atlas/canvas/ui.css';
@@ -47,6 +47,7 @@ import { FreeformView } from './FreeformView.js';
 import { buildAtlasCardExportOverlay } from './card-export.js';
 import { GraphCanvas } from './GraphCanvas.js';
 import { StructuredViews } from './StructuredViews.js';
+import { initialWorkspaceRefreshStatus, reduceWorkspaceRefreshStatus } from './workspace-refresh.js';
 import {
   applyRemoteBaseline,
   isSessionDirty,
@@ -110,7 +111,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
-  const [fatalError, setFatalError] = useState('');
+  const [refreshStatus, dispatchRefreshStatus] = useReducer(reduceWorkspaceRefreshStatus, initialWorkspaceRefreshStatus);
+  const fatalError = refreshStatus.fatalError;
   const [prepared, setPrepared] = useState<PreparedOperation | null>(null);
   const preparedRef = useRef<PreparedOperation | null>(prepared);
   const preparingRef = useRef(false);
@@ -175,6 +177,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
   const refreshWorkspace = useCallback(async (initial = false): Promise<AtlasInventory> => {
     const sequence = ++refreshSequenceRef.current;
+    dispatchRefreshStatus({ type: 'started', sequence });
     if (initial) setLoading(true);
     else setRefreshing(true);
     try {
@@ -252,27 +255,30 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         if (id) { activeBoardIdRef.current = id; setActiveBoardId(id); setActiveViewId(next.get(id)!.board.views[0]?.id ?? null); }
       }
       if (initial && next.size === 0 && inventory.invalid.length === 0) setNotice('Atlasボードを作成して始めましょう。変更はHostのレビューに送信されます。');
+      dispatchRefreshStatus({ type: 'succeeded', sequence });
       return inventory;
+    } catch (error) {
+      dispatchRefreshStatus({
+        type: 'failed',
+        sequence,
+        message: `${initial ? 'Hostワークスペースを読み込めませんでした' : 'Hostワークスペースを更新できませんでした'}: ${errorMessage(error)}`,
+      });
+      throw error;
     } finally {
       if (sequence === refreshSequenceRef.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [host, publishFiles, publishPrepared, publishSessions, publishStagedAsset]);
+  }, [host, dispatchRefreshStatus, publishFiles, publishPrepared, publishSessions, publishStagedAsset]);
 
   useEffect(() => {
-    let live = true;
-    void refreshWorkspace(true).catch((error) => {
-      if (!live) return;
-      setFatalError(`Hostワークスペースを読み込めませんでした: ${errorMessage(error)}`);
-      setLoading(false);
-    });
+    void refreshWorkspace(true).catch(() => undefined);
     const unsubscribe = host.subscribeWorkspace(() => {
-      void refreshWorkspace().catch((error) => setFatalError(`Hostワークスペースを更新できませんでした: ${errorMessage(error)}`));
+      // Host changes, including grant updates, invalidate opaque inventory cursors; start again at page one.
+      void refreshWorkspace().catch(() => undefined);
     });
     return () => {
-      live = false;
       unsubscribe();
       refreshSequenceRef.current += 1;
       graphWorkerRef.current?.close();
@@ -433,8 +439,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       setActiveViewId(board.views[0]?.id ?? null);
       setFocusCardId(null);
       setNotice(`${session.path}をローカル下書きとして作成しました。準備ができたらHostレビュー用に変更を送ってください。`);
-    } catch (error) { setFatalError(`ボードを作成できませんでした: ${errorMessage(error)}`); }
-  }, [makeLocalSession, publishSessions]);
+    } catch (error) { dispatchRefreshStatus({ type: 'set-error', message: `ボードを作成できませんでした: ${errorMessage(error)}` }); }
+  }, [dispatchRefreshStatus, makeLocalSession, publishSessions]);
 
   const createView = useCallback((kind: View['kind']) => {
     if (!activeSession) return;
@@ -1160,7 +1166,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       <div className="atlas-header-actions">
         <button type="button" onClick={() => void createBoard()}>＋ 新しいボード</button>
         <button type="button" onClick={() => boardImportRef.current?.click()}>ボードをインポート</button>
-        <button type="button" onClick={() => void refreshWorkspace()} disabled={refreshing}>{refreshing ? '更新中…' : 'Hostファイルを更新'}</button>
+        <button type="button" onClick={() => void refreshWorkspace().catch(() => undefined)} disabled={refreshing}>{refreshing ? '更新中…' : 'Hostファイルを更新'}</button>
         <span className={`atlas-save-indicator ${prepared ? 'is-pending' : dirty ? 'is-dirty' : 'is-clean'}`} role="status">
           {prepared ? '準備済み・Hostコミット待ち' : dirty ? 'ローカル下書きに変更あり' : 'Hostの基準状態を読み込み済み'}
         </span>
@@ -1168,7 +1174,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       <input ref={boardImportRef} className="atlas-hidden-input" type="file" accept=".atlas.json,application/json" onChange={(event) => void importBoard(event)} />
     </header>
 
-    {fatalError && <div className="atlas-alert atlas-alert-error" role="alert">{fatalError}<button type="button" onClick={() => setFatalError('')}>閉じる</button></div>}
+    {fatalError && <div className="atlas-alert atlas-alert-error" role="alert">{fatalError}<button type="button" onClick={() => dispatchRefreshStatus({ type: 'clear-error' })}>閉じる</button></div>}
     {loading ? <div className="atlas-loading" role="status">Hostワークスペースのファイルを読み込んでいます…</div> : <div className="atlas-shell">
       <nav className="atlas-board-nav" aria-label="Atlasボード">
         <div className="atlas-nav-heading"><strong>ボード</strong><small>{sessions.size}</small></div>
