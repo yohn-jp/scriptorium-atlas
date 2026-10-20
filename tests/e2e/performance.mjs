@@ -342,6 +342,24 @@ async function coldReopen(context, page, workspaceId) {
 
 async function readMetrics(page) { return page.evaluate(() => window.__atlasPerfStore ?? []); }
 
+async function readResizeObserverVisibleCounter(frame) {
+  return frame.evaluate(() => {
+    const notice = document.querySelector('[data-resize-notification-count]');
+    if (!notice) return { present: false, visible: false, count: null, text: null, updatedAt: null };
+    const style = getComputedStyle(notice);
+    const visible = notice.getClientRects().length > 0 && style.display !== 'none'
+      && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+    const time = notice.querySelector('time');
+    return {
+      present: true,
+      visible,
+      count: Number(notice.getAttribute('data-resize-notification-count')),
+      text: notice.textContent?.trim() ?? '',
+      updatedAt: time?.dateTime ?? null,
+    };
+  });
+}
+
 function nativeResizeObserverNotificationEvidence(metrics, origin) {
   const notifications = metrics.filter((item) => item.kind === 'native-resize-observer-notification' && item.origin === origin);
   const events = notifications.map((item) => ({
@@ -1438,7 +1456,20 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.ok(traversal.shortestPath.p95Ms <= 500, `10k path p95 ${traversal.shortestPath.p95Ms}ms exceeds 500ms`);
       const heap = await readHeap(atlas.frame);
       const resizeObserverBeforeDisable = nativeResizeObserverNotificationEvidence(await readMetrics(page), atlas.origin);
+      const resizeObserverVisibleCounterBeforeIdle = await readResizeObserverVisibleCounter(atlas.frame);
       const atlasHostUsabilityBeforeDisable = await assertQ12GraphHostUsable(page, atlas, workspaceId);
+      const activeIdleStartedAt = Date.now();
+      await page.waitForTimeout(1_000);
+      const activeIdleEndedAt = Date.now();
+      const activeIdleMetrics = await readMetrics(page);
+      const resizeObserverAfterActiveIdle = nativeResizeObserverNotificationEvidence(activeIdleMetrics, atlas.origin);
+      const resizeObserverVisibleCounterAfterIdle = await readResizeObserverVisibleCounter(atlas.frame);
+      const resizeObserverEventsDuringActiveIdle = resizeObserverAfterActiveIdle.events
+        .filter((event) => event.eventEpochMs >= activeIdleStartedAt);
+      const atlasHostUsabilityAfterActiveIdle = await assertQ12GraphHostUsable(page, atlas, workspaceId);
+      const visibleCounterDeltaDuringActiveIdle = resizeObserverVisibleCounterBeforeIdle.count !== null
+        && resizeObserverVisibleCounterAfterIdle.count !== null
+        ? resizeObserverVisibleCounterAfterIdle.count - resizeObserverVisibleCounterBeforeIdle.count : null;
       const disabledAt = Date.now();
       await page.getByLabel('Atlasを有効化').uncheck();
       await page.locator('section[aria-label="Atlas Plugin"]').waitFor({ state: 'detached' });
@@ -1462,13 +1493,25 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
         shortestPath: { ...traversal.shortestPath, limitP95Ms: 500 }, heap,
         nativeResizeObserverNotifications: {
           beforeDisable: resizeObserverBeforeDisable,
+          activeWhileEnabled: {
+            durationMs: activeIdleEndedAt - activeIdleStartedAt,
+            startedAtEpochMs: activeIdleStartedAt,
+            beforeIdleVisibleDOMCounter: resizeObserverVisibleCounterBeforeIdle,
+            afterIdleVisibleDOMCounter: resizeObserverVisibleCounterAfterIdle,
+            visibleDOMCounterDelta: visibleCounterDeltaDuringActiveIdle,
+            beforeIdleMetricCount: resizeObserverBeforeDisable.count,
+            afterIdleMetricCount: resizeObserverAfterActiveIdle.count,
+            notificationCountDelta: resizeObserverEventsDuringActiveIdle.length,
+            eventsDuringIdle: resizeObserverEventsDuringActiveIdle,
+          },
           afterQuietWindow: resizeObserverAfterQuietWindow,
           quietWindowMs: 5_000,
           quietWindowStartedAtEpochMs: quietWindowStartedAt,
           notificationCountDeltaDuringQuietWindow: resizeObserverEventsDuringQuietWindow.length,
           eventsDuringQuietWindow: resizeObserverEventsDuringQuietWindow,
         },
-        hostUsability: { beforeDisable: atlasHostUsabilityBeforeDisable, afterDisable: hostUsabilityAfterDisable },
+        hostUsability: { beforeDisable: atlasHostUsabilityBeforeDisable,
+          afterActiveIdle: atlasHostUsabilityAfterActiveIdle, afterDisable: hostUsabilityAfterDisable },
         notCheckedReasons: heap.status === 'NOT_CHECKED' ? [heap.reason] : [],
         disabledAtlasWorkers: { created: created.length, explicitlyTerminated: terminated.size, owningFrameClosed: frameClosed.size, active: active.length },
         disabledAtlasNetwork: { observationMs: 5_000, pluginOriginRequestsAfterDisable: postDisableRequests } };
