@@ -61,6 +61,9 @@ export async function callProvider(owner: string, leaseId: string, request: Plug
   if (leases.get(leaseId) !== entry || !owners.has(owner) || connections.get(entry.providerId) !== entry.connection) throw new Error('CANCELED');
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerResult', response.result);
+  assertContract(request.method === 'listEdges' ? 'graphEdgePage'
+    : request.method === 'neighbors' ? 'neighborPage'
+    : request.method === 'diff' ? 'graphDeltaPage' : 'providerPage', response.result);
   if (response.result.snapshot.workspaceId !== entry.lease.snapshot.workspaceId || response.result.snapshot.sourceRevision !== entry.lease.snapshot.sourceRevision || response.result.snapshot.providerRevision !== entry.lease.snapshot.providerRevision || response.result.snapshot.epoch !== entry.lease.snapshot.epoch) throw new Error('SNAPSHOT_STALE');
   try {
     assertProviderResultScope({providerId:entry.providerId,snapshot:entry.lease.snapshot,grants:entry.connection.grants,

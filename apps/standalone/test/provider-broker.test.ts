@@ -15,6 +15,7 @@ function fixture(providerId: string) {
   let openGate: Promise<void> | undefined;
   let queryGate: Promise<void> | undefined;
   let wrongSnapshot = false;
+  let emptyPage = false;
   const connection: FrameProviderConnection = {
     epoch: 7, workspaceId: workspace.workspaceId,
     snapshot: async value => ({workspaceId:value.workspaceId,sourceRevision:value.sourceRevision,epoch:7,providerRevision:`${providerId}:r1`}),
@@ -30,7 +31,7 @@ function fixture(providerId: string) {
       } else if (request.method === 'close') result = null;
       else {
         await queryGate;
-        result = { snapshot, items: [{ ref: { providerId, localId: 'alice' }, kind: 'test.entity', label: providerId }], nextCursor: null, complete: true };
+        result = { snapshot, items: emptyPage ? [] : [{ ref: { providerId, localId: 'alice' }, kind: 'test.entity', label: providerId }], nextCursor: null, complete: true };
       }
       return { type: 'atlas.provider.response', protocolVersion: 'atlas.graph/v1', requestId: crypto.randomUUID(), providerId,
         epoch: 7, method: request.method, ok: true, result, ...('handle' in request.params ? { handle: request.params.handle } : {}) } as ProviderRpcResponse;
@@ -43,6 +44,7 @@ function fixture(providerId: string) {
     blockOpen: (gate: Promise<void>) => { openGate = gate; },
     blockQuery: (gate: Promise<void>) => { queryGate = gate; },
     staleOpen: () => { wrongSnapshot = true; },
+    emptyPage: () => { emptyPage = true; },
     cleanup: () => { releaseOwner(owner); unregister(); }
   };
 }
@@ -59,6 +61,20 @@ test('broker isolates provider-local IDs and never exposes another owner lease',
     assert.equal(a.requests.at(-1)?.params.handle, 'private-handle');
     assert.throws(() => registerProvider('test.provider-a', a.connection), /重複/);
   } finally { a.cleanup(); b.cleanup(); }
+});
+
+test('broker accepts empty pages and validates results against the requested method', async () => {
+  const f = fixture('test.method-result');
+  try {
+    const lease = await acquireProvider(f.owner, 'test.method-result', workspace);
+    await assert.rejects(callProvider(f.owner, lease.leaseId, { method: 'listEdges', params: {} }), /Invalid Atlas contract: graphEdgePage/);
+    f.emptyPage();
+    for (const method of ['listNodes', 'listEdges'] as const) {
+      const result = await callProvider(f.owner, lease.leaseId, { method, params: {} });
+      assert.deepEqual(result.items, []);
+      assert.equal(result.complete, true);
+    }
+  } finally { f.cleanup(); }
 });
 
 test('late open after owner shutdown closes the handle instead of publishing a lease', async () => {
