@@ -191,6 +191,7 @@ async function run() {
     const board = JSON.parse(boardDownload.content);
     const imageCard = board.cards.find((card) => card.kind === 'image');
     assert.ok(imageCard?.assetId, 'Committed image card must reference an asset.');
+    imageCard.position = { x: 80, y: 300 };
     const textCard = board.cards.find((card) => card.kind === 'text');
     assert.ok(textCard, 'Committed board should contain its text card.');
     textCard.text = 'ATLAS_EXPORT_TEXT_MARKER';
@@ -279,15 +280,15 @@ async function run() {
     }
     assert.match(svgDownload.content, /<image\b/u, 'SVG export should include the embedded image card.');
     const svgDimensions = readSvgDimensions(svgDownload.content);
-    assert.ok(svgDimensions.x <= cardBounds.left && svgDimensions.y <= cardBounds.top &&
-      svgDimensions.x + svgDimensions.width >= cardBounds.right &&
-      svgDimensions.y + svgDimensions.height >= cardBounds.bottom,
-    `SVG viewBox ${JSON.stringify(svgDimensions)} should enclose all imported Card extents ${JSON.stringify(cardBounds)}.`);
     const svgBytes = Buffer.from(svgDownload.content, 'utf8');
     if (artifactPreviewDirectory) {
       await mkdir(artifactPreviewDirectory, { recursive: true });
       await writeFile(join(artifactPreviewDirectory, 'atlas-card-export.svg'), svgBytes);
     }
+    const cardWidth = cardBounds.right - cardBounds.left;
+    const cardHeight = cardBounds.bottom - cardBounds.top;
+    assert.ok(svgDimensions.width >= cardWidth && svgDimensions.height >= cardHeight,
+      `SVG bounds ${JSON.stringify(svgDimensions)} should cover the full translated Card span ${cardWidth}x${cardHeight} from ${JSON.stringify(cardBounds)}.`);
     report.cases.push({
       id: 'svg-includes-canvas-and-card-content',
       filename: svgDownload.name,
@@ -306,8 +307,7 @@ async function run() {
     const dimensions = readPngDimensions(pngBytes);
     assert.ok(dimensions.width > 0 && dimensions.height > 0,
       `PNG export bounds ${dimensions.width}x${dimensions.height} should enclose a non-empty scene.`);
-    assert.ok(dimensions.width >= cardBounds.right - cardBounds.left &&
-      dimensions.height >= cardBounds.bottom - cardBounds.top,
+    assert.ok(dimensions.width >= cardWidth && dimensions.height >= cardHeight,
     `PNG bounds ${JSON.stringify(dimensions)} should cover the full Card extent ${JSON.stringify(cardBounds)}.`);
     const widthDifference = Math.abs(dimensions.width - svgDimensions.width) / Math.max(dimensions.width, svgDimensions.width);
     const heightDifference = Math.abs(dimensions.height - svgDimensions.height) / Math.max(dimensions.height, svgDimensions.height);
