@@ -1,0 +1,50 @@
+{
+  "name": "@scriptorium-atlas/atlas",
+  "version": "1.0.0",
+  "description": "Standalone and host-rendered Atlas graph and canvas plugin",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": ["**/*.css"],
+  "files": ["dist", "README.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./metadata": {
+      "types": "./dist/metadata.d.ts",
+      "import": "./dist/metadata.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "import": "./dist/ui/index.js"
+    },
+    "./manifest.json": "./dist/manifest.json",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-css.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@scriptorium-atlas/canvas": "workspace:^",
+    "@scriptorium-atlas/contracts": "workspace:^",
+    "@scriptorium-atlas/graph": "workspace:^",
+    "@scriptorium-atlas/layout": "workspace:^",
+    "@scriptorium-atlas/persistence": "workspace:^",
+    "@xyflow/react": "12.12.0"
+  },
+  "peerDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
