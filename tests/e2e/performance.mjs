@@ -49,6 +49,14 @@ function instrumentWorkers() {
         complete: value?.complete ?? null,
       };
     }
+    if (operation === 'layout-force') {
+      const positions = Array.isArray(value?.positions) ? value.positions : [];
+      const finitePositionCount = positions.filter((item) => Number.isFinite(item?.position?.x) && Number.isFinite(item?.position?.y)).length;
+      return {
+        positionCount: positions.length,
+        finitePositionCount,
+      };
+    }
     return {};
   };
   const send = (metric) => {
@@ -84,7 +92,7 @@ function instrumentWorkers() {
           operation: start.operation, durationMs: performance.now() - start.time,
           nodeCount: start.nodeCount, edgeCount: start.edgeCount,
           ...start.details, ok: message?.ok ?? null, errorCode: message?.error?.code ?? null,
-          ...summarizeResponse(start.operation, message?.value) });
+          ...summarizeResponse(start.operation, message?.value ?? message?.result) });
       });
     }
     postMessage(message, ...transfer) {
@@ -506,11 +514,15 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
           await waitResponses(page, cold.atlas.origin, 'layout-force', before + 1);
           const layout = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === cold.atlas.origin && item.operation === 'layout-force')[before];
           assert.ok(layout, 'the production Layout Worker must complete the 1k Force request');
+          assert.equal(layout.ok, true, 'the production Layout Worker must return a successful 1k Force result');
           assert.equal(layout.nodeCount, 1_000);
           assert.equal(layout.edgeCount, 2_000);
+          assert.equal(layout.positionCount, 1_000, 'the 1k Force result must contain one position per node');
+          assert.equal(layout.finitePositionCount, 1_000, 'all 1k Force result positions must have finite x/y coordinates');
           const heap = await readHeap(cold.atlas.frame);
           queryEvidence = { graphIndex: indexResult ? { durationMs: indexResult.durationMs, nodes: indexResult.nodeCount, edges: indexResult.edgeCount } : null,
-            search: searches, forceLayout: layout ? { durationMs: layout.durationMs, nodes: layout.nodeCount, edges: layout.edgeCount } : null, heap,
+            search: searches, forceLayout: layout ? { durationMs: layout.durationMs, nodes: layout.nodeCount, edges: layout.edgeCount,
+              positions: layout.positionCount, finitePositions: layout.finitePositionCount } : null, heap,
             notCheckedReasons: heap.status === 'NOT_CHECKED' ? [heap.reason] : [] };
         }
       } finally { await context.close(); }
