@@ -17,7 +17,7 @@ function BoardCanvas() {
 }
 ```
 
-The Node-only `copyCanvasAssets(outputDirectory)` helper writes the exact pinned Excalidraw production fonts to `<outputDirectory>/fonts`, along with a `manifest.json` containing each file's SHA-256 and license mapping and a `THIRD_PARTY_NOTICES.md`. For example, a Vite `closeBundle` hook can dynamically import `@scriptorium-atlas/canvas/assets` for the `atlas` and `combined` profiles and call `copyCanvasAssets("dist/atlas")`. Do not import this Node-only helper from browser code.
+The Node-only `copyCanvasAssets(outputDirectory)` helper writes the exact pinned Excalidraw production fonts to `<outputDirectory>/fonts`, plus the exact MIT and OFL-1.1 license texts under `fonts/licenses/`. `manifest.json` records hashes for every font and license text and identifies each font family's source and license provenance; `THIRD_PARTY_NOTICES.md` lists the same paths, hashes, and sources. For example, a Vite `closeBundle` hook can dynamically import `@scriptorium-atlas/canvas/assets` for the `atlas` and `combined` profiles and call `copyCanvasAssets("dist/atlas")`. Do not import this Node-only helper from browser code.
 
 For a direct public-folder copy, the CLI does the same work:
 

@@ -12,7 +12,8 @@
     "README.md",
     "scripts/copy-fonts.mjs",
     "scripts/copy-canvas-assets.mjs",
-    "scripts/font-notices.md"
+    "scripts/font-notices.md",
+    "scripts/licenses"
   ],
   "exports": {
     ".": {
