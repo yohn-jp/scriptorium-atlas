@@ -1,0 +1,837 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yohn-jp/scriptorium-atlas/blob/main/docs/contracts/v1.schema.json",
+  "title": "Atlas V1 logical contracts",
+  "description": "Versioned shape validation; security, cross-reference, source identity and permission are enforced additionally by Host validators.",
+  "$defs": {
+    "nodeRef": {
+      "type": "object",
+      "properties": {
+        "providerId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "localId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "providerId",
+        "localId"
+      ],
+      "additionalProperties": false
+    },
+    "sourceRef": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "workspaceId",
+        "path",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotRef": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "providerRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sourceRevision",
+        "providerRevision",
+        "epoch"
+      ],
+      "additionalProperties": false
+    },
+    "position": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        },
+        "y": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "viewport": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        },
+        "y": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        },
+        "zoom": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 8
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "zoom"
+      ],
+      "additionalProperties": false
+    },
+    "graphNode": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "stale",
+            "unresolved"
+          ]
+        },
+        "meta": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ref",
+        "kind",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "graphEdge": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "from": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "to": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "directed": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "path",
+              "revision",
+              "field"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "ref",
+        "from",
+        "to",
+        "kind",
+        "directed"
+      ],
+      "additionalProperties": false
+    },
+    "pin": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "x": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        },
+        "y": {
+          "type": "number",
+          "minimum": -10000000,
+          "maximum": 10000000
+        },
+        "mode": {
+          "const": "manual"
+        }
+      },
+      "required": [
+        "nodeId",
+        "x",
+        "y",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "boardNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "origin": {
+          "enum": [
+            "manual",
+            "provider"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "ref": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "annotation": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192
+        },
+        "groupId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "kind",
+        "label",
+        "position"
+      ],
+      "additionalProperties": false
+    },
+    "boardEdge": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "meaning": {
+          "enum": [
+            "visual",
+            "semantic"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1024
+        },
+        "ref": {
+          "$ref": "#/$defs/nodeRef"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "to",
+        "meaning"
+      ],
+      "additionalProperties": false
+    },
+    "card": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "source",
+            "provider-node",
+            "image"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "height": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 65536
+        },
+        "nodeRef": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "assetId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "annotation": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "position",
+        "width",
+        "height"
+      ],
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10485760
+        },
+        "mime": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/svg+xml",
+            "application/octet-stream"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "sha256",
+        "bytes",
+        "mime"
+      ],
+      "additionalProperties": false
+    },
+    "view": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "kind": {
+          "enum": [
+            "graph",
+            "freeform",
+            "board",
+            "timeline",
+            "storyboard"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "viewport": {
+          "$ref": "#/$defs/viewport"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pin"
+          },
+          "maxItems": 100000
+        },
+        "visibleNodeIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "maxLength": 128
+          },
+          "maxItems": 100000
+        },
+        "laneIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "maxLength": 128
+          },
+          "maxItems": 10000
+        },
+        "cardOrder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "maxLength": 128
+          },
+          "maxItems": 100000
+        },
+        "axis": {
+          "enum": [
+            "story.time",
+            "story.scene-order",
+            "generic.time",
+            "unknown"
+          ]
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 256
+            },
+            "kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "maxItems": 64
+            },
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "maxItems": 64
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "viewport"
+      ],
+      "additionalProperties": false
+    },
+    "changeIntent": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "baseWorkspaceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 512
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "encoding": {
+                "enum": [
+                  "utf8",
+                  "base64"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "kind": {
+          "enum": [
+            "document",
+            "source",
+            "asset"
+          ]
+        }
+      },
+      "required": [
+        "operationId",
+        "workspaceId",
+        "baseWorkspaceRevision",
+        "reads",
+        "writes",
+        "message",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "providerPage": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/snapshotRef"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphNode"
+          },
+          "maxItems": 500
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "items",
+        "nextCursor",
+        "complete"
+      ],
+      "additionalProperties": false
+    },
+    "pluginDescriptor": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "atlas.plugin/v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "provides": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "version",
+        "provides",
+        "requires"
+      ],
+      "additionalProperties": false
+    },
+    "board": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "atlas.board/v1"
+        },
+        "boardId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/view"
+          },
+          "maxItems": 100
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/boardNode"
+          },
+          "maxItems": 100000
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/boardEdge"
+          },
+          "maxItems": 200000
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/card"
+          },
+          "maxItems": 100000
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset"
+          },
+          "maxItems": 10000
+        },
+        "extensions": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "schema",
+        "boardId",
+        "name",
+        "revision",
+        "views",
+        "nodes",
+        "edges",
+        "cards",
+        "assets"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$ref": "#/$defs/board"
+}

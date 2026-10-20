@@ -1,0 +1,116 @@
+{
+  "schema": "atlas.board/v1",
+  "boardId": "board-main",
+  "name": "創作計画",
+  "revision": 0,
+  "views": [
+    {
+      "id": "graph-view",
+      "kind": "graph",
+      "name": "Graph",
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1
+      },
+      "pins": [
+        {
+          "nodeId": "provider-character-a",
+          "x": 200,
+          "y": 120,
+          "mode": "manual"
+        }
+      ]
+    },
+    {
+      "id": "canvas-view",
+      "kind": "freeform",
+      "name": "Canvas",
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1
+      }
+    },
+    {
+      "id": "board-view",
+      "kind": "board",
+      "name": "Board",
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1
+      },
+      "laneIds": [
+        "lane-todo"
+      ],
+      "cardOrder": [
+        "card-1"
+      ]
+    },
+    {
+      "id": "timeline-view",
+      "kind": "timeline",
+      "name": "Timeline",
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1
+      },
+      "axis": "story.scene-order"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "manual-note",
+      "origin": "manual",
+      "kind": "generic.note",
+      "label": "調査メモ",
+      "position": {
+        "x": 20,
+        "y": 20
+      }
+    },
+    {
+      "id": "provider-character-a",
+      "origin": "provider",
+      "kind": "story.character",
+      "label": "人物A",
+      "position": {
+        "x": 200,
+        "y": 120
+      },
+      "ref": {
+        "providerId": "scriptorium.story-knowledge",
+        "localId": "character-a"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "visual-1",
+      "from": "manual-note",
+      "to": "provider-character-a",
+      "meaning": "visual",
+      "label": "着想"
+    }
+  ],
+  "cards": [
+    {
+      "id": "card-1",
+      "kind": "provider-node",
+      "position": {
+        "x": 120,
+        "y": 280
+      },
+      "width": 320,
+      "height": 160,
+      "text": "人物Aの関係",
+      "nodeRef": {
+        "providerId": "scriptorium.story-knowledge",
+        "localId": "character-a"
+      }
+    }
+  ],
+  "assets": []
+}
