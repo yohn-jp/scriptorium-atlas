@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Standalone and host-rendered Atlas graph and canvas plugin",
   "type": "module",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "sideEffects": [
     "**/*.css"
   ],

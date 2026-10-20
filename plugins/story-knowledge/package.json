@@ -2,7 +2,7 @@
   "name": "@scriptorium-atlas/story-knowledge",
   "version": "1.0.0",
   "description": "Standalone Story Knowledge plugin and Graph Provider for Scriptorium Atlas",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "sideEffects": false,
   "files": [

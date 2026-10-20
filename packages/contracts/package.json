@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Versioned public contracts for Scriptorium Atlas plugins and host",
   "type": "module",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "sideEffects": false,
   "files": [
     "dist",

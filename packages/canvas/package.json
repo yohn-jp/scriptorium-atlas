@@ -56,5 +56,6 @@
     "@types/react": "18.3.31",
     "typescript": "5.9.3"
   },
-  "description": "The Canvas package wraps the official Excalidraw React editor for Atlas."
+  "description": "The Canvas package wraps the official Excalidraw React editor for Atlas.",
+  "license": "UNLICENSED"
 }

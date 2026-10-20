@@ -1,5 +1,7 @@
 # Provenance
 
+No project license has been selected. The eight first-party package manifests use `UNLICENSED`; provisional MIT declarations and the generated first-party persistence MIT text were removed. This makes no new license grant for project code. Third-party dependency and font notices retain their upstream licenses and exact texts.
+
 ## Reference source
 
 Story compatibility work read the public `yohn-jp/scriptorium` source at `eaa52ce09e2e5217e55e68b139a578a313a5ea0b`: `modules/story/src/snapshot.ts`, `modules/story/src/domain/graph.ts`, and `LICENSE` (MIT, copyright yohn-jp 2026). The documented path/field inventory informs an independently implemented parser. No source code, manuscripts, credentials, or private data have been copied from that repository. Duplicate-ID overwrite, Markdown trimming, and lost relation provenance are explicitly excluded.

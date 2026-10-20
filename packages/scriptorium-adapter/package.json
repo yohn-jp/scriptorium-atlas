@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Fail-closed boundary for a future public Scriptorium Plugin SDK",
   "type": "module",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "sideEffects": false,
   "files": ["dist", "package.json", "README.md"],
   "exports": {
