@@ -4,7 +4,7 @@ import { validateContract, assertContract, type PluginHostClient, type ProviderR
 import { loaders, providerLoaders } from 'virtual:atlas-profile';
 import { createHostClient } from './rpc-client.js';
 
-type Endpoint = {dispatch(request: ProviderRequest, signal?: AbortSignal): Promise<unknown>};
+type Endpoint = {dispatch(request: ProviderRequest, signal?: AbortSignal): Promise<unknown>;dispose():void};
 type UiModule = { AtlasPlugin?: ComponentType<{host: PluginHostClient}>; StoryKnowledge?: ComponentType<{host: PluginHostClient}> };
 const params = new URLSearchParams(location.search);
 const plugin = params.get('plugin') ?? '';
@@ -12,10 +12,11 @@ const nonce = params.get('nonce') ?? '';
 const parentOrigin = params.get('parentOrigin') ?? '';
 const pluginId = plugin === 'atlas' ? 'scriptorium.atlas' : 'scriptorium.story-knowledge';
 
-async function serveProvider(port: MessagePort, host: PluginHostClient, epoch: number) {
+function serveProvider(port: MessagePort, host: PluginHostClient, epoch: number) {
   let endpoint: Promise<Endpoint> | undefined;
+  let active = true;
   const controllers = new Map<string, AbortController>();
-  port.addEventListener('message', event => {
+  const listener = (event: MessageEvent) => {
     if (!validateContract('providerRpcRequest', event.data)) return;
     const request = event.data;
     if (request.epoch !== epoch || request.providerId !== pluginId || plugin !== 'story') return;
@@ -38,6 +39,7 @@ async function serveProvider(port: MessagePort, host: PluginHostClient, epoch: n
           endpoint = load().then(module => (module as {createStoryProvider(host: PluginHostClient): Endpoint}).createStoryProvider(host));
         }
         const provider = await endpoint;
+        if (!active) throw new Error('CANCELED');
         const result = await provider.dispatch(request.payload, controller.signal);
         if (controller.signal.aborted) throw new Error('CANCELED');
         reply = { ...base, ok: true, result: result ?? null };
@@ -47,9 +49,35 @@ async function serveProvider(port: MessagePort, host: PluginHostClient, epoch: n
         const code = validateContract('hostErrorCode', candidate) ? candidate : 'PROVIDER_FAILED';
         reply = { ...base, ok: false, error: { code, message: String(err).slice(0, 2048), retryable: true } };
       } finally { clearTimeout(timeout); controllers.delete(request.requestId); }
-      port.postMessage(reply);
+      if (active) port.postMessage(reply);
     })();
-  });
+  };
+  port.addEventListener('message',listener);
+  return () => {
+    active = false;
+    port.removeEventListener('message',listener);
+    for (const controller of controllers.values()) controller.abort();
+    controllers.clear();
+    void endpoint?.then(provider => provider.dispose()).catch(() => undefined);
+  };
+}
+
+class FrameBoundary extends React.Component<{children: React.ReactNode}, {error:string}> {
+  override state = {error:''};
+  static getDerivedStateFromError(error:unknown) { return {error:String(error).slice(0,2048)}; }
+  private onError = (event: ErrorEvent) => this.setState({error:String(event.error ?? event.message).slice(0,2048)});
+  private onRejection = (event: PromiseRejectionEvent) => this.setState({error:String(event.reason).slice(0,2048)});
+  override componentDidMount() {
+    window.addEventListener('error',this.onError);
+    window.addEventListener('unhandledrejection',this.onRejection);
+  }
+  override componentWillUnmount() {
+    window.removeEventListener('error',this.onError);
+    window.removeEventListener('unhandledrejection',this.onRejection);
+  }
+  override render() {
+    return this.state.error ? <section role="alert"><h1>Pluginでエラーが発生しました</h1><p>{this.state.error}</p><p>Hostへ耐久記録していない下書きは、このPluginを再読込すると失われる可能性があります。</p><button onClick={() => location.reload()}>Pluginを再読込</button></section> : this.props.children;
+  }
 }
 
 function FrameApp({ port, epoch }: {port: MessagePort; epoch: number}) {
@@ -66,8 +94,8 @@ function FrameApp({ port, epoch }: {port: MessagePort; epoch: number}) {
       if (!component) throw new Error('Plugin UIがありません');
       if (active) setUi(() => component);
     }).catch(err => { if (active) setError(String(err)); });
-    if (plugin === 'story') void serveProvider(port, client.host, epoch);
-    return () => { active = false; client.close(); };
+    const stopProvider = plugin === 'story' ? serveProvider(port, client.host, epoch) : undefined;
+    return () => { active = false; stopProvider?.(); client.close(); };
   }, [client, port, epoch]);
   const Ui = ui;
   return error ? <p role="alert">{error}</p> : Ui ? <Ui host={client.host}/> : <p role="status">Pluginを読み込んでいます…</p>;
@@ -80,7 +108,7 @@ try {
   const start = (event: MessageEvent) => {
     if (event.source !== window.parent || event.origin !== parentOrigin || !validateContract('frameInit', event.data) || event.data.nonce !== nonce || event.ports.length !== 1) return;
     window.removeEventListener('message', start);
-    createRoot(document.getElementById('root')!).render(<FrameApp port={event.ports[0]!} epoch={event.data.epoch}/>);
+    createRoot(document.getElementById('root')!).render(<FrameBoundary><FrameApp port={event.ports[0]!} epoch={event.data.epoch}/></FrameBoundary>);
   };
   window.addEventListener('message', start);
   window.parent.postMessage({ type: 'atlas.frame.ready', pluginId, nonce }, parentOrigin);

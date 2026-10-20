@@ -68,6 +68,26 @@ try {
     const restarted = await connectedFrame();
     assert.ok(await restarted.evaluate(() => globalThis.__atlasFaultEpoch) > epoch);
   }
+  for (const fault of ['uncaught-exception','unhandled-rejection']) {
+    const frame = await connectedFrame();
+    const epoch = await frame.evaluate(() => globalThis.__atlasFaultEpoch);
+    await frame.evaluate(kind => {
+      setTimeout(() => {
+        if (kind === 'uncaught-exception') throw new Error('Injected frame exception');
+        void Promise.reject(new Error('Injected frame rejection'));
+      },0);
+    },fault);
+    await frame.getByRole('alert').filter({hasText:'Pluginでエラーが発生しました'}).waitFor();
+    assert.equal(await pending.getByText(source,{exact:true}).innerText(),source);
+    if (profile === 'combined') {
+      await page.frameLocator('iframe[title="Atlas"]').locator('body').waitFor();
+      assert.equal(await page.getByRole('region',{name:'Atlas Plugin',exact:true}).getByRole('alert').count(),0);
+    }
+    await frame.getByRole('button',{name:'Pluginを再読込',exact:true}).click();
+    const restarted = await connectedFrame();
+    assert.ok(await restarted.evaluate(() => globalThis.__atlasFaultEpoch) > epoch);
+    faults.push(fault);
+  }
   const beforeReload = await connectedFrame();
   const previousEpoch = await beforeReload.evaluate(() => globalThis.__atlasFaultEpoch);
   await beforeReload.evaluate(() => location.reload());
