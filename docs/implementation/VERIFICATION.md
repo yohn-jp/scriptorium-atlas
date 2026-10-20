@@ -1,8 +1,16 @@
 # Standalone V1 verification ledger
 
-F01–F31 remain implemented and required; Q01–Q15 retain their original contracts and budgets. Current implementation checks ran on the fully verified implementation/test snapshot `64c9d6a858dc16fa5dbc5dac39936ccbb001db70`. Historical and explicitly carried-forward evidence retains its recorded revision. The subsequent delivery commit changes documentation/evidence only; its identity and exact-HEAD reconfirmation will be published after validation in [PR #1](https://github.com/yohn-jp/scriptorium-atlas/pull/1). The commit does not embed its own SHA.
+F01–F31 and Q01–Q15 retain their original contracts and budgets. The table below describes the **historical** `64c9d6a858dc16fa5dbc5dac39936ccbb001db70` implementation/test snapshot, not this document's own commit. The merged delivery result and subsequent repair-branch certification status are reconciled in the next section. Do not treat earlier PASS evidence as a fresh test of modified code.
 
 The [compact evidence manifest](evidence/standalone-v1.json) retains environment, artifact/report hashes, counts, measured summaries and historical failures. No production Scriptorium SDK or Git integration is claimed. Raw logs/datasets remain outside Git.
+
+## Merged delivery identity / Q15 reconciliation (historical evidence)
+
+- The production implementation PR [#1](https://github.com/yohn-jp/scriptorium-atlas/pull/1) was merged to `main` as **`a760aaa094dcde9af09f0817fdc83b37b2784a6c`**. Its implemented/tested final head was **`d20f0886a56304f7d279b7650078d4e894ca3b64`**. These are different Git commits; merging did not constitute an additional independent test run.
+- The PR description explicitly reports exact-`d20f088` frozen install, strict typecheck, **157 unit PASS / 1 optional skip**, all three builds/closure, independent package consumers, Host/Atlas/Story/Canvas/storage/Provider-fault browser suites, and **canonical Q12 5 scenarios PASS**. These are **agent-reported** outcomes for that commit, not measurements repeated by this documentation change.
+- Submitted exact-`d20f088` Q12 report SHA-256: `082468a366e8f3496a79b5030d5accd7bc8dde13c8a9f1f3404ef7537af62da3`; delivery-summary SHA-256: `6dafadadba660ef4a10a039222792723df60ce00130185f218721b044d4bc07d`. Detailed run outputs were stored at `/data/atlas-v1-verification-tmp/delivery-d20f088/` on the original agent machine. They are **not** attached as durable, independently accessible GitHub artifacts. The compact [committed manifest](evidence/standalone-v1.json) remains anchored to `64c9d6a`; it must not be falsely described as an exact-`d20f088` artifact.
+- **Delivery Q15:** the implementation agent claimed PASS on `d20f088` and recorded that claim in PR #1; this file now explicitly points to that report instead of leaving a dangling “will be published” assertion. **Independent reproduction from durable source artifacts remains NOT_CHECKED**.
+- **Subsequent maintenance:** fixes to Provider partial-source consumption and IndexedDB point reads change runtime behavior. Before they can be treated as certified, tests and performance checks must be rerun at the maintenance PR's **actual final HEAD**. Earlier Q01–Q15 outcomes are history, not automatic maintenance-HEAD PASS. Required gates: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build:profiles`, profile closure, focused Provider/Host regression, actual browser partial-Story/combined, storage failure/recovery, and Q12. Record executed/not-executed/blocked separately.
 
 ## Environment and artifact identity
 
@@ -36,7 +44,7 @@ Hash method: `scripts/verification/artifact-evidence.mjs` hashes sorted POSIX-re
 | Q14 | PASS | Three closure/lazy/legal audits; 8 isolated pnpm archives, 25 public Node exports, 4 browser entries and a real editable Canvas/export consumer; Worker release verified |
 | Q15 | PASS (64c9 snapshot) | Fully verified implementation/test snapshot. The final delivery verdict comes from the exact-HEAD confirmation linked in PR after validation. |
 
-Delivery Q15 remains NOT_CHECKED until the exact-HEAD report linked from PR is published; that report supplies the delivery verdict without embedding a commit’s SHA inside itself. The table above certifies the recorded snapshot.
+The historical Q15 row certifies only snapshot `64c9d6a`; the delivery PR subsequently reported exact-HEAD Q15 as recorded above. This ledger does not independently certify the merged commit or the later maintenance branch.
 
 Frozen install, strict typecheck and unit suite passed: 157 tests, zero failures, one explicit optional ZIP-file generation skip. The ordinary maximum-count Export/Import test runs in this suite. The separately executed Python 3.13.15 oracle passed on the unchanged ZIP implementation: 100,000 total entries, 99,999 manifest payloads, all payload hashes/workspace revision/CRCs, nonempty tail. Archive size 14,682,752 bytes; SHA-256 `b6f577a073a19b215bc4769828eec3b9d6665863894d9941ae82b4073dc0226b`. Its source equality/carry-forward is explicit in the storage summary.
 
