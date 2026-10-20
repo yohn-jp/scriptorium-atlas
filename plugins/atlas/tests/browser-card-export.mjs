@@ -119,7 +119,7 @@ async function run() {
     await waitForServer(server, baseUrl);
     browser = await chromium.launch({ headless: true, ...(browserPath ? { executablePath: browserPath } : {}) });
     report.browser = { name: 'Chromium', version: browser.version(), executablePath: browserPath ?? 'Playwright bundled Chromium' };
-    const context = await browser.newContext({ acceptDownloads: true });
+    const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1600, height: 1200 } });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -197,6 +197,19 @@ async function run() {
     const canvasConfigurationError = await atlas.getByText(/configureExcalidrawAssets/u).textContent().catch(() => null);
     assert.equal(canvasConfigurationError, null,
       `Freeform CanvasEditor must mount before card visibility/export acceptance. ${canvasConfigurationError ?? ''}`);
+    const canvasLayout = await atlas.locator('.atlas-canvas-shell').evaluate((shell) => {
+      const height = (selector) => shell.querySelector(selector)?.getBoundingClientRect().height ?? 0;
+      return {
+        shell: shell.getBoundingClientRect().height,
+        freeform: height('.atlas-freeform-view'),
+        surface: height('.atlas-canvas-editor-surface'),
+        excalidraw: height('.excalidraw'),
+        overlay: height('.atlas-card-overlay'),
+      };
+    });
+    assert.ok(canvasLayout.excalidraw >= 240 && canvasLayout.overlay >= 240,
+      `Canvas and card overlay should fill the available scene area; measured ${JSON.stringify(canvasLayout)}.`);
+    report.cases.push({ id: 'canvas-editor-and-card-overlay-layout', ...canvasLayout });
     const cards = atlas.getByRole('group', { name: /カード$/ });
     await cards.first().waitFor({ state: 'visible' });
     await atlas.getByRole('group', { name: 'テキストカード' }).getByLabel('カードのMarkdown本文').waitFor({ state: 'visible' });

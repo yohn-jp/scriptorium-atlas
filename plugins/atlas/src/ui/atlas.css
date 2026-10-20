@@ -142,7 +142,8 @@
 .atlas-inspector details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 10px; }
 .atlas-key-hint { font-size: 10px; }
 
-.atlas-freeform-view { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; }
+.atlas-freeform-view { position: relative; width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.atlas-canvas-shell { position: relative; height: 100%; min-height: 0; overflow: hidden; }
 .atlas-freeform-toolbar { min-height: 34px; display: flex; align-items: center; gap: 12px; padding: 5px 10px; background: var(--atlas-panel); border-bottom: 1px solid var(--atlas-line); }
 .atlas-freeform-toolbar > span { font-weight: 650; }
 .atlas-freeform-canvas { position: relative; flex: 1; min-height: 0; }
