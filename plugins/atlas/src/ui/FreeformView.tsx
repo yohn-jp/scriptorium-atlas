@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CanvasEditor } from '@scriptorium-atlas/canvas/ui';
 import type { CanvasViewport } from '@scriptorium-atlas/canvas/ui';
+import type { CanvasViewportState } from '@scriptorium-atlas/canvas/ui';
+import { validateContract } from '@scriptorium-atlas/contracts';
 import type { BoardDocument, BoardView, SourceRef } from '@scriptorium-atlas/contracts';
 import { nodeKey } from '@scriptorium-atlas/graph';
 import type { ProviderSnapshot } from './provider-snapshot.js';
@@ -23,6 +25,40 @@ export type FreeformViewProps = {
 
 export function FreeformView(props: FreeformViewProps) {
   const dispatch = (command: Parameters<typeof applyAtlasCommand>[1]) => props.onBoardChange(applyAtlasCommand(props.board, command));
+  const latestBoard = useRef(props.board);
+  const latestOnBoardChange = useRef(props.onBoardChange);
+  const rejectedViewport = useRef<string | null>(null);
+  const [viewportResetEpoch, setViewportResetEpoch] = useState(0);
+  const [viewportNotice, setViewportNotice] = useState<string | null>(null);
+  latestBoard.current = props.board;
+  latestOnBoardChange.current = props.onBoardChange;
+  const savedViewport = props.view.viewport;
+  const canvasViewport: CanvasViewportState = {
+    scrollX: savedViewport.x / savedViewport.zoom,
+    scrollY: savedViewport.y / savedViewport.zoom,
+    zoom: savedViewport.zoom,
+  };
+  const saveCanvasViewport = useCallback((next: CanvasViewportState) => {
+    if (!Number.isFinite(next.scrollX) || !Number.isFinite(next.scrollY) || !Number.isFinite(next.zoom) || next.zoom <= 0) return;
+    const viewId = props.view.id;
+    const board = latestBoard.current;
+    const view = board.views.find((candidate) => candidate.id === viewId);
+    if (!view || view.kind !== 'freeform') return;
+    const viewport = { x: next.scrollX * next.zoom, y: next.scrollY * next.zoom, zoom: next.zoom };
+    if (!validateContract('viewport', viewport)) {
+      const signature = [next.scrollX, next.scrollY, next.zoom].map(String).join('|');
+      if (rejectedViewport.current !== signature) {
+        rejectedViewport.current = signature;
+        setViewportNotice('Canvasの表示位置がAtlasの保存範囲外です。最後に保存した表示位置へ戻しました。');
+        setViewportResetEpoch((epoch) => epoch + 1);
+      }
+      return;
+    }
+    rejectedViewport.current = null;
+    setViewportNotice(null);
+    if (view.viewport.x === viewport.x && view.viewport.y === viewport.y && view.viewport.zoom === viewport.zoom) return;
+    latestOnBoardChange.current(applyAtlasCommand(board, { type: 'view.viewport', viewId, viewport }));
+  }, [props.view.id]);
 
   const renderOverlay = (viewport: CanvasViewport) => <CardOverlay
     board={props.board}
@@ -41,11 +77,15 @@ export function FreeformView(props: FreeformViewProps) {
     <div className="atlas-freeform-toolbar atlas-toolbar">
       <span>{props.view.name}</span>
       <small>Canvasの図形はExcalidrawシーンに、カードはAtlasボードに保存されます。</small>
+      {viewportNotice && <small role="status">{viewportNotice}</small>}
     </div>
     <CanvasEditor
+      key={`${props.board.boardId}:${props.view.id}:${viewportResetEpoch}`}
       sceneText={props.sceneText}
       onChange={props.onSceneChange}
       className="atlas-freeform-canvas"
+      viewport={canvasViewport}
+      onViewportChange={saveCanvasViewport}
       renderOverlay={renderOverlay}
     />
   </div>;
