@@ -388,7 +388,55 @@ async function exportBundle(page, unzipSync) {
   };
 }
 
+async function positionCanvasWithinHostViewport(page, frame, editor) {
+  const atlasFrame = page.locator('iframe[title="Atlas"]');
+  await atlasFrame.evaluate((element) => element.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' }));
+  await editor.scrollIntoViewIfNeeded();
+  await Promise.all([
+    page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+    frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+  ]);
+}
+
+async function canvasViewportEvidence(page, frame, editor) {
+  const interactiveCanvas = frame.locator('canvas.excalidraw__canvas.interactive');
+  await interactiveCanvas.waitFor({ state: 'visible' });
+  const [editorBounds, canvasBounds, canvasFrameRect, hostScroll] = await Promise.all([
+    editor.boundingBox(),
+    interactiveCanvas.boundingBox(),
+    interactiveCanvas.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    }),
+    page.evaluate(() => ({ scrollX: window.scrollX, scrollY: window.scrollY,
+      documentScrollWidth: document.documentElement.scrollWidth, documentScrollHeight: document.documentElement.scrollHeight })),
+  ]);
+  const hostViewport = page.viewportSize();
+  assert.ok(hostViewport, 'The Host browser viewport must be available for Freeform gesture validation.');
+  assert.ok(editorBounds && editorBounds.width >= 300 && editorBounds.height >= 300,
+    `Freeform editor must have a usable viewport: ${JSON.stringify(editorBounds)}.`);
+  assert.ok(canvasBounds && canvasBounds.width >= 300 && canvasBounds.height >= 300,
+    `Freeform interactive canvas must have a usable viewport: ${JSON.stringify(canvasBounds)}.`);
+  return { hostViewport, hostScroll, editorRoot: editorBounds, interactiveCanvas: canvasBounds, interactiveCanvasFrameRect: canvasFrameRect };
+}
+
 async function runSampledGesture(page, frame, editor, start, end, { pan = false } = {}) {
+  await positionCanvasWithinHostViewport(page, frame, editor);
+  const viewport = await canvasViewportEvidence(page, frame, editor);
+  const bounds = viewport.interactiveCanvas;
+  for (const point of [start, end]) {
+    assert.ok(point.x >= 0 && point.x <= bounds.width && point.y >= 0 && point.y <= bounds.height,
+      `Freeform ${pan ? 'pan' : 'object drag'} point must be inside the interactive canvas viewport: ${JSON.stringify({ point, bounds })}.`);
+  }
+  const startPoint = { x: bounds.x + start.x, y: bounds.y + start.y };
+  const endPoint = { x: bounds.x + end.x, y: bounds.y + end.y };
+  for (const [label, point] of [['start', startPoint], ['end', endPoint]]) {
+    assert.ok(point.x >= 0 && point.x < viewport.hostViewport.width && point.y >= 0 && point.y < viewport.hostViewport.height,
+      `Freeform ${pan ? 'pan' : 'object drag'} ${label} must be inside the top-level Host viewport: ${JSON.stringify({ point, viewport })}.`);
+    assert.ok(point.x >= bounds.x && point.x <= bounds.x + bounds.width
+      && point.y >= bounds.y && point.y <= bounds.y + bounds.height,
+    `Freeform ${pan ? 'pan' : 'object drag'} ${label} must target the visible interactive canvas: ${JSON.stringify({ point, bounds })}.`);
+  }
   await frame.evaluate(() => {
     const intervals = [];
     const longTasks = [];
@@ -406,14 +454,6 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
     };
     requestAnimationFrame(tick);
   });
-  const bounds = await editor.boundingBox();
-  assert.ok(bounds && bounds.width >= 300 && bounds.height >= 300, `Freeform editor must have a usable viewport: ${JSON.stringify(bounds)}.`);
-  for (const point of [start, end]) {
-    assert.ok(point.x >= 0 && point.x <= bounds.width && point.y >= 0 && point.y <= bounds.height,
-      `Freeform ${pan ? 'pan' : 'object drag'} point must be inside the editor viewport: ${JSON.stringify({ point, bounds })}.`);
-  }
-  const startPoint = { x: bounds.x + start.x, y: bounds.y + start.y };
-  const endPoint = { x: bounds.x + end.x, y: bounds.y + end.y };
   const dragStarted = performance.now();
   if (pan) await page.mouse.click(startPoint.x, startPoint.y);
   await page.mouse.move(startPoint.x, startPoint.y);
@@ -444,6 +484,9 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
   if (supported) assert.ok(maxStreak <= 1, `Freeform ${pan ? 'pan' : 'drag'} produced ${maxStreak} consecutive Long Tasks over 50ms.`);
   return {
     gestureMs,
+    viewportEvidence: viewport,
+    pointerPageFrom: startPoint,
+    pointerPageTo: endPoint,
     animationFrameSamples: frameSample.intervals.length,
     frameIntervalP50Ms: intervalP50Ms,
     fpsP50,
@@ -454,15 +497,15 @@ async function runSampledGesture(page, frame, editor, start, end, { pan = false 
   };
 }
 
-function scenePointToEditorPoint(scenePoint, appState) {
+function scenePointToCanvasViewportPoint(scenePoint, appState) {
   const zoom = appState?.zoom?.value;
   const scrollX = appState?.scrollX;
   const scrollY = appState?.scrollY;
   assert.ok(Number.isFinite(zoom) && zoom > 0, `Excalidraw scene must expose a positive zoom: ${JSON.stringify(appState?.zoom)}.`);
   assert.ok(Number.isFinite(scrollX) && Number.isFinite(scrollY), 'Excalidraw scene must expose finite viewport scroll coordinates.');
   // Excalidraw maps scene coordinates to its container viewport as
-  // (scene + scroll) * zoom + offset. The offset is the container origin,
-  // which cancels when coordinates are expressed relative to .excalidraw.
+  // (scene + scroll) * zoom + offset. The offset is the interactive canvas
+  // origin, which cancels when coordinates are expressed relative to that canvas.
   return { x: (scenePoint.x + scrollX) * zoom, y: (scenePoint.y + scrollY) * zoom };
 }
 
@@ -855,25 +898,26 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       await atlas.locator.getByRole('tab', { name: /キャンバス/u }).last().click();
       const editor = atlas.locator.locator('.excalidraw');
       await editor.waitFor({ state: 'visible', timeout: 60_000 });
+      await positionCanvasWithinHostViewport(page, atlas.frame, editor);
+      const viewportBeforeScene = await canvasViewportEvidence(page, atlas.frame, editor);
       const initialScene = await downloadScene(page, atlas);
       const visibleElements = initialScene.data.elements.filter((element) => !element.isDeleted);
       assert.equal(visibleElements.length, expectedObjects, 'The benchmark must use the real Excalidraw scene, not Atlas cards.');
       const first = visibleElements[0];
       assert.equal(first.type, 'rectangle');
       const initialAppState = initialScene.data.appState;
-      const dragStart = scenePointToEditorPoint({ x: first.x + 1, y: first.y + first.height / 2 }, initialAppState);
-      const dragEnd = scenePointToEditorPoint({ x: first.x + 29, y: first.y + first.height / 2 + 18 }, initialAppState);
+      const dragStart = scenePointToCanvasViewportPoint({ x: first.x + 1, y: first.y + first.height / 2 }, initialAppState);
+      const dragEnd = scenePointToCanvasViewportPoint({ x: first.x + 29, y: first.y + first.height / 2 + 18 }, initialAppState);
       const drag = await runSampledGesture(page, atlas.frame, editor,
         dragStart, dragEnd);
       const afterDrag = await downloadScene(page, atlas);
       const dragged = afterDrag.data.elements.find((element) => element.id === first.id && !element.isDeleted);
       assert.ok(dragged && (dragged.x !== first.x || dragged.y !== first.y), 'A real Excalidraw object must move through the pointer drag.');
 
-      const bounds = await editor.boundingBox();
-      assert.ok(bounds);
+      const canvasBounds = (await canvasViewportEvidence(page, atlas.frame, editor)).interactiveCanvas;
       const pan = await runSampledGesture(page, atlas.frame, editor,
-        { x: bounds.width - 45, y: bounds.height - 55 },
-        { x: bounds.width - 165, y: bounds.height - 105 }, { pan: true });
+        { x: canvasBounds.width - 45, y: canvasBounds.height - 55 },
+        { x: canvasBounds.width - 165, y: canvasBounds.height - 105 }, { pan: true });
       const afterPan = await downloadScene(page, atlas);
       assert.notDeepEqual(
         [afterPan.data.appState?.scrollX, afterPan.data.appState?.scrollY],
@@ -938,8 +982,9 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       }
       return {
         dataset, activeSceneObjects: visibleElements.length,
+        viewportBeforeScene,
         objectDrag: { ...drag, objectId: first.id, sceneFrom: { x: first.x, y: first.y }, sceneTo: { x: dragged.x, y: dragged.y },
-          viewportPointerFrom: dragStart, viewportPointerTo: dragEnd, sceneZoom: initialAppState.zoom.value,
+          scenePointerFrom: dragStart, scenePointerTo: dragEnd, sceneZoom: initialAppState.zoom.value,
           sceneScroll: [initialAppState.scrollX, initialAppState.scrollY], hitTarget: 'rectangle stroke near its left border' },
         normalPan: { ...pan, scrollBefore: [afterDrag.data.appState?.scrollX, afterDrag.data.appState?.scrollY],
           scrollAfter: [afterPan.data.appState?.scrollX, afterPan.data.appState?.scrollY] },
