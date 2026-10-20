@@ -115,7 +115,7 @@ try {
   await page.getByRole('checkbox', { name: 'AtlasへStory ProviderとSourceの読取りを許可', exact: true }).check();
   const oldGrantCursor = await atlas.evaluate(cursor => globalThis.__providerHostCall('list',{limit:1,cursor}),scopedPages.list.result.nextCursor);
   assert.equal(oldGrantCursor.error.code,'INVALID_INPUT');
-  const initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
+  let initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
   assert.equal(initial.ok, true, JSON.stringify(initial));
   const nodes = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall', {
     leaseId, request: { method: 'listNodes', params: { limit: 100 } }
@@ -144,6 +144,22 @@ try {
   assert.equal(paging.partial.result.complete, false);
   assert.deepEqual(paging.partial.result.items.map(node => node.ref.localId), ['char-a']);
   assert.equal(paging.neighbors.result.items[0].node.ref.localId, 'char-b');
+  const producerWorker = page.workers().at(-1);
+  assert.ok(producerWorker, 'the production Provider must own a real Worker before crash injection');
+  await Promise.all([
+    producerWorker.waitForEvent('close',{timeout:5000}),
+    producerWorker.evaluate(() => { setTimeout(() => { throw new Error('Injected Provider Worker crash'); },0); }),
+  ]);
+  const afterCrash = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall',{
+    leaseId,request:{method:'listNodes',params:{limit:10}},
+  }),initial.result.leaseId);
+  assert.equal(afterCrash.ok,false,'a crashed Worker must not return cached results as current');
+  assert.equal(await page.locator('iframe[title="Atlas"]').count(),1);
+  await page.getByRole('region',{name:'Story Knowledge Plugin',exact:true}).getByRole('button',{name:'Pluginを再起動',exact:true}).click();
+  story = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
+  await story.waitForFunction(() => document.body.innerText.includes('ライブラリ'));
+  initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider',params),openParams);
+  assert.equal(initial.ok,true,JSON.stringify(initial));
   await story.evaluate(() => { globalThis.__providerDelayOpen = true; });
   await atlas.evaluate(params => {
     globalThis.__providerOpenResults = Promise.all(Array.from({ length: 4 }, () => globalThis.__providerHostCall('acquireProvider', params)));
@@ -207,5 +223,6 @@ try {
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
     queueDurationMs, createdWorkers, workersAfterLastLease: 0, disabledObservationMs: 5000, disabledRequests, fontPolicy,
     scopedInventory: {restrictedRows:0,opaqueCursor:true,foreignMethodRejected:true,forgedCursorRejected:true,changedGrantRejected:true},
+    crashedProviderWorker: {closed:true,errorCode:afterCrash.error.code,reopened:true},
     cases: ['grant denial without Worker', 'static discovery', 'real Provider page/cursor/getNodes partial/neighbors with exact snapshot', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }
