@@ -64,7 +64,7 @@ function composition(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [composition()],
+  plugins: [composition(), ...(profile === 'story' ? [] : [(await import('@scriptorium-atlas/canvas/assets')).excalidrawWorkerVitePlugin()])],
   define: { __ATLAS_PROFILE__: JSON.stringify(profile) },
   build: {
     modulePreload: { polyfill: false },

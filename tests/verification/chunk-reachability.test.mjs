@@ -9,6 +9,7 @@ test('accounts for annotated nested Worker URLs and resolves relative chunk path
     + 'new Worker(new URL("./sibling.js", import.meta.url));'
     + 'new Worker(new URL("https://other.invalid/assets/external.js", import.meta.url));';
   assert.deepEqual(collectWorkerImports(code, 'assets/parent.js', files), ['assets/child.js', 'assets/sibling.js']);
+  assert.deepEqual(collectWorkerImports('export const WorkerUrl = new URL("/assets/child.js", import.meta.url);', 'assets/worker-url.js', files), ['assets/child.js']);
 });
 
 test('follows nested dynamic imports and explicit Worker entries without making them eager', () => {
