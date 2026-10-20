@@ -19,6 +19,7 @@ import { nodeKey } from '@scriptorium-atlas/graph';
 import type { GraphWorkerClient } from '@scriptorium-atlas/graph/worker';
 import type { BoardView } from '@scriptorium-atlas/contracts';
 import { applyAtlasCommand, createAtlasId } from '../commands/model.js';
+import { applyNodeSelectionChanges, applyPositionChanges, sameIdOrder } from './graph-state.js';
 
 type FlowNode = Node<{ label: string; kind: string; origin: 'manual' | 'provider' | 'preview'; groupId?: string }>;
 type ProviderSnapshot = { snapshot: SnapshotRef; nodes: GraphNode[]; edges: import('@scriptorium-atlas/contracts').GraphEdge[]; providerId: string };
@@ -202,27 +203,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
 
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     if (changes.some((change) => change.type === 'position' && change.dragging)) handledDragPositions.current.clear();
-    setPositions((current) => {
-      const next = { ...current };
-      for (const change of changes) {
-        if (change.type === 'position' && change.position) {
-          if (change.dragging === false) delete next[change.id];
-          else next[change.id] = change.position;
-        }
-      }
-      return next;
-    });
-    setSelectedNodeIds((current) => {
-      let ids = [...current];
-      for (const change of changes) {
-        if (change.type === 'select') {
-          ids = change.selected ? [...new Set([...ids, change.id])] : ids.filter((id) => id !== change.id);
-        } else if (change.type === 'remove') {
-          ids = ids.filter((id) => id !== change.id);
-        }
-      }
-      return ids;
-    });
+    setPositions((current) => applyPositionChanges(current, changes));
+    setSelectedNodeIds((current) => applyNodeSelectionChanges(current, changes));
     const completedMoves = changes.flatMap((change) => change.type === 'position' && change.dragging === false && change.position
       ? [{ nodeId: change.id, position: change.position }]
       : []);
@@ -237,8 +219,12 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       .map((item) => ({ nodeId: item.id, position: livePositions.get(item.id) ?? (item.id === node.id ? node.position : positions[item.id] ?? item.position) }));
     persistNodePositions(positionsToSave);
     setPositions((current) => {
-      const next = { ...current };
-      for (const id of movingIds) delete next[id];
+      let next = current;
+      for (const id of movingIds) {
+        if (!Object.hasOwn(next, id)) continue;
+        if (next === current) next = { ...current };
+        delete next[id];
+      }
       return next;
     });
   }, [persistNodePositions, props.board.nodes, selectedNodeIds, getNodes, positions]);
@@ -259,8 +245,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   };
 
   const onSelectionChange = useCallback(({ nodes: selected, edges: selectedEdges }: OnSelectionChangeParams) => {
-    setSelectedNodeIds(selected.map((node) => node.id));
-    setSelectedEdgeIds(selectedEdges.map((edge) => edge.id));
+    setSelectedNodeIds((current) => sameIdOrder(current, selected) ? current : selected.map((node) => node.id));
+    setSelectedEdgeIds((current) => sameIdOrder(current, selectedEdges) ? current : selectedEdges.map((edge) => edge.id));
   }, []);
 
   const selectedNode = props.board.nodes.find((node) => node.id === selectedNodeIds.at(-1));
@@ -434,6 +420,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
             onNodeDragStop={onNodeDragStop}
             onConnect={onConnect}
             onSelectionChange={onSelectionChange}
+            onlyRenderVisibleElements
             defaultViewport={props.view.viewport}
             onMoveEnd={(_event, viewport) => dispatch({ type: 'view.viewport', viewId: props.view.id, viewport })}
             fitView={!props.view.viewport}
