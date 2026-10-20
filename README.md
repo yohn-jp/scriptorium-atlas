@@ -2,7 +2,23 @@
 
 **汎用Graph/CanvasであるAtlasと、単独でも利用できるStory Knowledgeを、同一モノレポの独立プラグインとして開発する。**
 
-**状態:** 2026-10-20 時点のV1設計・Goalを固定した段階。実装、Plugin SDK、Scriptorium本番導入、障害隔離の認証は未完了。
+**状態:** Standalone V1を実装・検証中。全F/Qの最終判定は[検証台帳](docs/implementation/VERIFICATION.md)を参照。Scriptorium本番SDKへの統合は含まない。
+
+## 起動
+
+Node 24、pnpm 12.10.1を使用する。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build:profiles
+node apps/standalone/scripts/serve.mjs combined
+```
+
+`http://127.0.0.1:4173` を開く。`combined` を `atlas` または `story` に変えると独立profileを起動する。HostとPluginは4173–4175の別originを使う。別ポートでは `ATLAS_HOST_PORT=4200 node apps/standalone/scripts/serve.mjs combined` のように指定し、続く2ポートも空ける。
+
+空のWorkspaceを作成し、Atlasのボード、Storyのライブラリ、またはHostの「Workspaceのファイル・Source」から編集する。変更案の耐久記録後は、Hostの「変更の確認・ローカルCommit」で内容を確認してCommitする。Pluginの準備済み表示とCommitは別の状態。ページ再読込後は「開く」からWorkspaceを選択する。保存先はこのブラウザのIndexedDBで、Bundle export/importで持ち出し・復元できる。
+
+Import/Exportの上限100,000件・256MiBには、`manifest.json`の1件と実シリアライズ後bytesを含む（payloadは最大99,999件）。ZIP metadataと圧縮後bytesも別途検証する。超過は明示エラーとし、既存データを削除・切り詰めない。
 
 ## 契約の正本
 
