@@ -17,6 +17,7 @@ import type {
   OrderedExcalidrawElement,
 } from "@excalidraw/excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { CanvasViewportState } from "./types.js";
 
 type AddKind = "rectangle" | "diamond" | "ellipse" | "arrow" | "freedraw" | "text";
 type GeometryDraft = Readonly<{ x: string; y: string; width: string; height: string }>;
@@ -238,9 +239,13 @@ function isGrouped(element: ExcalidrawElement): boolean {
 export function KeyboardControls({
   api,
   canvasRoot,
+  viewport,
+  onViewportAction,
 }: {
   api: ExcalidrawImperativeAPI;
   canvasRoot: HTMLDivElement;
+  viewport: CanvasViewportState;
+  onViewportAction(): void;
 }) {
   const [elements, setElements] = useState<readonly OrderedExcalidrawElement[]>(() => [
     ...api.getSceneElements(),
@@ -253,6 +258,7 @@ export function KeyboardControls({
   const [freehandDraft, setFreehandDraft] = useState(DEFAULT_FREEHAND_DRAFT);
   const [selectedFreehandDraft, setSelectedFreehandDraft] = useState(DEFAULT_FREEHAND_DRAFT);
   const [draft, setDraft] = useState<GeometryDraft>({ x: "0", y: "0", width: "100", height: "80" });
+  const [panDraft, setPanDraft] = useState({ x: String(viewport.scrollX), y: String(viewport.scrollY) });
   const [status, setStatus] = useState("");
   const elementSignatureRef = useRef(activeElementsSignature(elements));
   const selectionSignatureRef = useRef(selectedIds.join("\u001f"));
@@ -295,6 +301,10 @@ export function KeyboardControls({
       }
     }
   }, [selectedElementSignature]);
+
+  useEffect(() => {
+    setPanDraft({ x: String(viewport.scrollX), y: String(viewport.scrollY) });
+  }, [viewport.scrollX, viewport.scrollY]);
 
   const updateSelection = useCallback((ids: readonly string[]) => {
     const uniqueIds = [...new Set(ids)].filter((id) => elements.some((element) => element.id === id)).sort();
@@ -399,9 +409,40 @@ export function KeyboardControls({
 
   const canUngroup = selectedElements.some(isGrouped);
 
+  const applyPanPosition = () => {
+    const scrollX = Number(panDraft.x);
+    const scrollY = Number(panDraft.y);
+    if (!Number.isFinite(scrollX) || !Number.isFinite(scrollY)) {
+      setStatus("表示位置X、Yには数値を入力してください。");
+      return;
+    }
+
+    api.updateScene({
+      appState: { scrollX, scrollY },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    onViewportAction();
+    setStatus("表示位置を更新しました。");
+  };
+
   return (
     <div className="atlas-canvas-accessibility-content">
-      <p>追加、要素の選択、位置とサイズの編集をキーボードで行えます。画像はExcalidrawの「画像を挿入」（9）を使ってください。</p>
+      <p>表示位置の移動、追加、要素の選択、位置とサイズの編集をキーボードで行えます。画像はExcalidrawの「画像を挿入」（9）を使ってください。</p>
+
+      <fieldset>
+        <legend>表示位置</legend>
+        <label>
+          表示位置X
+          <input aria-label="Canvas表示位置X" type="number" step="1" value={panDraft.x}
+            onChange={(event) => setPanDraft({ ...panDraft, x: event.currentTarget.value })} />
+        </label>
+        <label>
+          表示位置Y
+          <input aria-label="Canvas表示位置Y" type="number" step="1" value={panDraft.y}
+            onChange={(event) => setPanDraft({ ...panDraft, y: event.currentTarget.value })} />
+        </label>
+        <button type="button" onClick={applyPanPosition}>表示位置を適用</button>
+      </fieldset>
 
       <fieldset>
         <legend>要素を追加</legend>

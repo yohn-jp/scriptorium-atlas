@@ -5,7 +5,7 @@ import { inspectExcalidrawScene } from "../scene/inspect.js";
 import type { CanvasEditorProps } from "./types.js";
 import "./styles.css";
 
-export type { CanvasEditorProps, CanvasPoint, CanvasViewport } from "./types.js";
+export type { CanvasEditorProps, CanvasPoint, CanvasViewport, CanvasViewportState } from "./types.js";
 
 function downloadRawScene(text: string): void {
   const url = URL.createObjectURL(new Blob([text], { type: "application/json;charset=utf-8" }));
@@ -43,7 +43,9 @@ export function CanvasEditor(props: CanvasEditorProps) {
   const lastEmittedText = useRef<string | null>(null);
   const lastPropText = useRef(props.sceneText);
   const onChange = useRef(props.onChange);
+  const onViewportChange = useRef(props.onViewportChange);
   onChange.current = props.onChange;
+  onViewportChange.current = props.onViewportChange;
 
   useEffect(() => {
     if (lastEmittedText.current === props.sceneText) {
@@ -86,6 +88,8 @@ export function CanvasEditor(props: CanvasEditorProps) {
             onChange.current(sceneText);
           }}
           readOnly={props.readOnly ?? false}
+          viewport={props.viewport}
+          onViewportChange={(viewport) => onViewportChange.current?.(viewport)}
           renderOverlay={props.renderOverlay}
         />
       </Suspense>

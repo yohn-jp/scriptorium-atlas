@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  CaptureUpdateAction,
   Excalidraw,
   sceneCoordsToViewportCoords,
   viewportCoordsToSceneCoords,
@@ -17,11 +18,19 @@ import type {
 } from "@excalidraw/excalidraw/element/types";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { restoreExcalidrawScene, serializeExcalidrawScene } from "../io/scene-core.js";
-import type { CanvasEditorProps, CanvasPoint, CanvasViewport } from "./types.js";
+import type {
+  CanvasEditorProps,
+  CanvasPoint,
+  CanvasViewport,
+  CanvasViewportState,
+} from "./types.js";
 import { KeyboardControls } from "./KeyboardControls.js";
 import "@excalidraw/excalidraw/index.css";
 
-type InternalProps = Pick<CanvasEditorProps, "sceneText" | "onChange" | "readOnly" | "renderOverlay">;
+type InternalProps = Pick<
+  CanvasEditorProps,
+  "sceneText" | "onChange" | "readOnly" | "renderOverlay" | "viewport" | "onViewportChange"
+>;
 type ExcalidrawLinkEvent = CustomEvent<{
   nativeEvent: MouseEvent | ReactPointerEvent<HTMLCanvasElement>;
 }>;
@@ -44,25 +53,101 @@ function activateHistoryButtonWithKeyboard(event: ReactKeyboardEvent<HTMLDivElem
   button.click();
 }
 
-function makeInitialData(sceneText: string): ExcalidrawInitialDataState {
+function validViewportState(value: CanvasViewportState | undefined): CanvasViewportState | null {
+  if (!value
+    || !Number.isFinite(value.scrollX)
+    || !Number.isFinite(value.scrollY)
+    || !Number.isFinite(value.zoom)
+    || value.zoom <= 0) {
+    return null;
+  }
+  return value;
+}
+
+function viewportStateFromAppState(appState: AppState): CanvasViewportState {
+  return {
+    scrollX: appState.scrollX,
+    scrollY: appState.scrollY,
+    zoom: appState.zoom.value,
+  };
+}
+
+function sameViewportState(
+  left: CanvasViewportState | null,
+  right: CanvasViewportState | null,
+): boolean {
+  return left === right || Boolean(left && right
+    && Math.abs(left.scrollX - right.scrollX) < 0.0001
+    && Math.abs(left.scrollY - right.scrollY) < 0.0001
+    && Math.abs(left.zoom - right.zoom) < 0.0001);
+}
+
+function makeInitialData(
+  sceneText: string,
+  viewport?: CanvasViewportState,
+): ExcalidrawInitialDataState {
   const restored = restoreExcalidrawScene(sceneText);
+  const initialViewport = validViewportState(viewport);
   return {
     elements: restored.elements,
-    appState: restored.appState,
+    appState: initialViewport
+      ? {
+        ...restored.appState,
+        scrollX: initialViewport.scrollX,
+        scrollY: initialViewport.scrollY,
+        zoom: { value: initialViewport.zoom as AppState["zoom"]["value"] },
+      }
+      : restored.appState,
     files: restored.files,
   };
 }
 
-export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay }: InternalProps) {
-  const [initialData] = useState(() => makeInitialData(sceneText));
+export function ExcalidrawEditor({
+  sceneText,
+  onChange,
+  readOnly,
+  renderOverlay,
+  viewport: savedViewport,
+  onViewportChange,
+}: InternalProps) {
+  const [initialData] = useState(() => makeInitialData(sceneText, savedViewport));
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const rawTextRef = useRef(sceneText);
   const refreshFrameRef = useRef<number | null>(null);
+  const viewportTimerRef = useRef<number | null>(null);
+  const latestViewportRef = useRef<CanvasViewportState | null>(validViewportState(savedViewport));
+  const previousViewportRef = useRef<CanvasViewportState | null>(validViewportState(savedViewport));
+  const lastReportedViewportRef = useRef<CanvasViewportState | null>(null);
+  const onViewportChangeRef = useRef(onViewportChange);
+  latestViewportRef.current = validViewportState(savedViewport);
+  onViewportChangeRef.current = onViewportChange;
   const [viewportRevision, setViewportRevision] = useState(0);
   const [controlsExpanded, setControlsExpanded] = useState(false);
 
   const updateViewport = useCallback(() => setViewportRevision((revision) => revision + 1), []);
+
+  const cancelViewportReport = useCallback(() => {
+    if (viewportTimerRef.current !== null) {
+      window.clearTimeout(viewportTimerRef.current);
+      viewportTimerRef.current = null;
+    }
+  }, []);
+
+  const reportSettledViewport = useCallback(() => {
+    viewportTimerRef.current = null;
+    const appState = apiRef.current?.getAppState();
+    if (!appState) return;
+    const current = viewportStateFromAppState(appState);
+    if (sameViewportState(lastReportedViewportRef.current, current)) return;
+    lastReportedViewportRef.current = current;
+    onViewportChangeRef.current?.(current);
+  }, []);
+
+  const scheduleViewportReport = useCallback(() => {
+    cancelViewportReport();
+    viewportTimerRef.current = window.setTimeout(reportSettledViewport, 180);
+  }, [cancelViewportReport, reportSettledViewport]);
 
   const refreshSceneBounds = useCallback(() => {
     if (refreshFrameRef.current !== null) return;
@@ -91,6 +176,56 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
       updateViewport();
     });
   }, [updateViewport]);
+
+  const applyViewportState = useCallback((api: ExcalidrawImperativeAPI, next: CanvasViewportState) => {
+    const current = viewportStateFromAppState(api.getAppState());
+    if (sameViewportState(current, next)) {
+      lastReportedViewportRef.current = current;
+      return;
+    }
+
+    cancelViewportReport();
+    // View restoration belongs to Atlas board state, not Excalidraw's undoable
+    // drawing history or the raw `.excalidraw` scene text.
+    lastReportedViewportRef.current = next;
+    api.updateScene({
+      appState: {
+        scrollX: next.scrollX,
+        scrollY: next.scrollY,
+        zoom: { value: next.zoom as AppState["zoom"]["value"] },
+      },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    refreshSceneBounds();
+  }, [cancelViewportReport, refreshSceneBounds]);
+
+  useEffect(() => {
+    const next = latestViewportRef.current;
+    if (sameViewportState(previousViewportRef.current, next)) return;
+    previousViewportRef.current = next ? { ...next } : null;
+    cancelViewportReport();
+
+    const api = apiRef.current;
+    if (next && api) {
+      applyViewportState(api, next);
+    } else if (api) {
+      lastReportedViewportRef.current = viewportStateFromAppState(api.getAppState());
+    }
+  }, [
+    savedViewport?.scrollX,
+    savedViewport?.scrollY,
+    savedViewport?.zoom,
+    applyViewportState,
+    cancelViewportReport,
+  ]);
+
+  useEffect(() => () => {
+    // The active board may switch while a pan is in its debounce window. Flush
+    // the last official state through the callback captured by this editor,
+    // without scheduling React state updates during unmount.
+    cancelViewportReport();
+    reportSettledViewport();
+  }, [cancelViewportReport, reportSettledViewport]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -168,6 +303,11 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
       viewportToScene: toScene,
     };
   }, [viewportRevision]);
+  const keyboardViewport: CanvasViewportState = {
+    scrollX: viewport.scrollX,
+    scrollY: viewport.scrollY,
+    zoom: viewport.zoom,
+  };
 
   const onExcalidrawChange = useCallback((
     elements: readonly OrderedExcalidrawElement[],
@@ -185,8 +325,18 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
 
   const onApi = useCallback((api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
+    if (lastReportedViewportRef.current === null) {
+      lastReportedViewportRef.current = viewportStateFromAppState(api.getAppState());
+    }
+    const initialViewport = latestViewportRef.current;
+    if (initialViewport) applyViewportState(api, initialViewport);
     refreshSceneBounds();
-  }, [refreshSceneBounds]);
+  }, [applyViewportState, refreshSceneBounds]);
+
+  const onExcalidrawScrollChange = useCallback(() => {
+    refreshSceneBounds();
+    scheduleViewportReport();
+  }, [refreshSceneBounds, scheduleViewportReport]);
 
   const overlay: ReactNode = renderOverlay?.(viewport);
 
@@ -197,7 +347,7 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
           initialData={initialData}
           excalidrawAPI={onApi}
           onChange={onExcalidrawChange}
-          onScrollChange={refreshSceneBounds}
+          onScrollChange={onExcalidrawScrollChange}
           langCode="ja-JP"
           viewModeEnabled={readOnly}
           validateEmbeddable={() => false}
@@ -228,7 +378,12 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
         >
           <summary>キーボード操作と要素一覧</summary>
           {controlsExpanded && apiRef.current && rootRef.current && (
-            <KeyboardControls api={apiRef.current} canvasRoot={rootRef.current} />
+            <KeyboardControls
+              api={apiRef.current}
+              canvasRoot={rootRef.current}
+              viewport={keyboardViewport}
+              onViewportAction={onExcalidrawScrollChange}
+            />
           )}
         </details>
       )}
