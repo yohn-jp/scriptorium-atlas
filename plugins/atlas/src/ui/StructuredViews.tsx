@@ -24,12 +24,21 @@ type InnerProps = {
   onOpenCard(cardId: string): void;
 };
 
+function cardKindLabel(kind: BoardDocument['cards'][number]['kind']): string {
+  switch (kind) {
+    case 'text': return 'テキスト';
+    case 'source': return 'ソース';
+    case 'provider-node': return 'Providerノード';
+    case 'image': return '画像';
+  }
+}
+
 function KanbanView({ board, view, dispatch, onOpenCard }: InnerProps) {
   const lanes = view.lanes ?? (view.laneIds ?? []).map((id) => ({ id, label: id, cardIds: [] as string[] }));
   const cardsById = new Map(board.cards.map((card) => [card.id, card]));
 
   const saveLanes = (next: typeof lanes) => dispatch({ type: 'view.set-lanes', viewId: view.id, lanes: next });
-  const addLane = () => saveLanes([...lanes, { id: createAtlasId('lane'), label: `Lane ${lanes.length + 1}`, cardIds: [] }]);
+  const addLane = () => saveLanes([...lanes, { id: createAtlasId('lane'), label: `レーン ${lanes.length + 1}`, cardIds: [] }]);
   const renameLane = (laneId: string, label: string) => saveLanes(lanes.map((lane) => lane.id === laneId ? { ...lane, label } : lane));
   const removeLane = (laneId: string) => {
     if (lanes.length <= 1) return;
@@ -53,16 +62,16 @@ function KanbanView({ board, view, dispatch, onOpenCard }: InnerProps) {
     dispatch({ type: 'view.assign-card', viewId: view.id, laneId, cardId, index: target });
   };
 
-  return <section className="atlas-structured-view atlas-kanban" aria-label="Kanban board">
-    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>Card lane membership and order are stored in this Board view.</p></div><button type="button" onClick={addLane}>＋ Add lane</button></div>
+  return <section className="atlas-structured-view atlas-kanban" aria-label="カンバンボード">
+    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>カードのレーンと並び順は、このボードビューに保存されます。</p></div><button type="button" onClick={addLane}>＋ レーンを追加</button></div>
     <div className="atlas-lane-row">
       {lanes.map((lane, laneIndex) => <section className="atlas-lane" key={lane.id} aria-label={lane.label}>
         <header className="atlas-lane-header">
           <LaneLabelInput label={lane.label} onSave={(label) => renameLane(lane.id, label)} />
           <div className="atlas-button-pair">
-            <button type="button" aria-label="Move lane left" disabled={laneIndex === 0} onClick={() => moveLane(laneIndex, -1)}>←</button>
-            <button type="button" aria-label="Move lane right" disabled={laneIndex === lanes.length - 1} onClick={() => moveLane(laneIndex, 1)}>→</button>
-            <button type="button" aria-label="Remove lane" disabled={lanes.length <= 1} onClick={() => removeLane(lane.id)}>×</button>
+            <button type="button" aria-label="レーンを左へ移動" disabled={laneIndex === 0} onClick={() => moveLane(laneIndex, -1)}>←</button>
+            <button type="button" aria-label="レーンを右へ移動" disabled={laneIndex === lanes.length - 1} onClick={() => moveLane(laneIndex, 1)}>→</button>
+            <button type="button" aria-label="レーンを削除" disabled={lanes.length <= 1} onClick={() => removeLane(lane.id)}>×</button>
           </div>
         </header>
         <div className="atlas-lane-cards">
@@ -70,12 +79,12 @@ function KanbanView({ board, view, dispatch, onOpenCard }: InnerProps) {
             const card = cardsById.get(id);
             if (!card) return null;
             return <article className="atlas-structured-card" key={id}>
-              <button className="atlas-card-title" type="button" onClick={() => onOpenCard(id)}>{card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? card.kind}</button>
-              <p>{card.text?.slice(0, 120) ?? (card.source ? `${card.source.path} @ ${card.source.revision}` : card.kind)}</p>
+              <button className="atlas-card-title" type="button" onClick={() => onOpenCard(id)}>{card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? cardKindLabel(card.kind)}</button>
+              <p>{card.text?.slice(0, 120) ?? (card.source ? `${card.source.path} @ ${card.source.revision}` : cardKindLabel(card.kind))}</p>
               <footer>
-                <button type="button" disabled={index === 0} aria-label="Move card up" onClick={() => reorderCard(lane.id, id, -1)}>↑</button>
-                <button type="button" disabled={index === lane.cardIds.length - 1} aria-label="Move card down" onClick={() => reorderCard(lane.id, id, 1)}>↓</button>
-                <label className="atlas-card-lane-select">Move to
+                <button type="button" disabled={index === 0} aria-label="カードを上へ移動" onClick={() => reorderCard(lane.id, id, -1)}>↑</button>
+                <button type="button" disabled={index === lane.cardIds.length - 1} aria-label="カードを下へ移動" onClick={() => reorderCard(lane.id, id, 1)}>↓</button>
+                <label className="atlas-card-lane-select">移動先
                   <select value={lane.id} onChange={(event) => dispatch({ type: 'view.assign-card', viewId: view.id, laneId: event.currentTarget.value, cardId: id })}>
                     {lanes.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}
                   </select>
@@ -83,7 +92,7 @@ function KanbanView({ board, view, dispatch, onOpenCard }: InnerProps) {
               </footer>
             </article>;
           })}
-          {lane.cardIds.length === 0 && <p className="atlas-muted">No cards in this lane.</p>}
+          {lane.cardIds.length === 0 && <p className="atlas-muted">このレーンにカードはありません。</p>}
         </div>
       </section>)}
     </div>
@@ -95,7 +104,7 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
   const timeline = view.timeline ?? { range: { start: 0, end: 1 }, entries: [] };
   const allItems = useMemo(() => [
     ...board.nodes.map((node) => ({ id: node.id, title: node.label, kind: node.kind, card: false })),
-    ...board.cards.map((card) => ({ id: card.id, title: card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? card.kind, kind: card.kind, card: true })),
+    ...board.cards.map((card) => ({ id: card.id, title: card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? cardKindLabel(card.kind), kind: card.kind, card: true })),
   ], [board.nodes, board.cards]);
   const entryById = new Map(timeline.entries.map((entry) => [entry.itemId, entry.value]));
   const [start, setStart] = useState(String(timeline.range.start));
@@ -121,7 +130,7 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
 
   const changeAxis = (nextAxis: TimelineAxis) => {
     if (nextAxis !== axis && timeline.entries.some((entry) => entry.value !== null)) {
-      const accepted = window.confirm('Changing the axis clears known values to Unknown. Continue?');
+      const accepted = window.confirm('軸を変更すると、入力済みの値は「不明」に戻ります。続行しますか？');
       if (!accepted) return;
     }
     commit({ axis: nextAxis, values: new Map(allItems.map((item) => [item.id, null])) });
@@ -134,17 +143,17 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
     commit({ range: { start: rangeStart, end: rangeEnd } });
   };
 
-  return <section className="atlas-structured-view atlas-timeline" aria-label="Timeline">
-    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>Values are explicit; an empty value is Unknown. Atlas never infers dates from source order.</p></div></div>
+  return <section className="atlas-structured-view atlas-timeline" aria-label="タイムライン">
+    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>値は明示的に設定します。空欄は「不明」です。Atlasは並び順から日付を推測しません。</p></div></div>
     <div className="atlas-timeline-controls">
-      <label>Axis
+      <label>軸
         <select value={axis} onChange={(event) => changeAxis(event.currentTarget.value as TimelineAxis)}>
-          <option value="unknown">Unknown</option><option value="generic.time">Generic time (epoch ms)</option><option value="story.time">Story time (epoch ms)</option><option value="story.scene-order">Story scene order (ordinal)</option>
+          <option value="unknown">不明</option><option value="generic.time">一般時刻（エポックms）</option><option value="story.time">物語内時刻（エポックms）</option><option value="story.scene-order">物語のシーン順（順序番号）</option>
         </select>
       </label>
-      <label>Range start<input type="number" value={start} onChange={(event) => setStart(event.currentTarget.value)} onBlur={saveRange} /></label>
-      <label>Range end<input type="number" value={end} onChange={(event) => setEnd(event.currentTarget.value)} onBlur={saveRange} /></label>
-      <button type="button" onClick={saveRange}>Apply range</button>
+      <label>範囲の開始<input type="number" value={start} onChange={(event) => setStart(event.currentTarget.value)} onBlur={saveRange} /></label>
+      <label>範囲の終了<input type="number" value={end} onChange={(event) => setEnd(event.currentTarget.value)} onBlur={saveRange} /></label>
+      <button type="button" onClick={saveRange}>範囲を適用</button>
     </div>
     <div className="atlas-timeline-rows">
       {allItems.map((item) => {
@@ -154,17 +163,17 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
         return <div className="atlas-timeline-row" key={item.id}>
           <div className="atlas-timeline-item">
             {item.card ? <button type="button" onClick={() => onOpenCard(item.id)}>{item.title}</button> : <strong>{item.title}</strong>}
-            <small>{item.kind} · {item.id}</small>
+            <small>{item.card ? cardKindLabel(item.kind as BoardDocument['cards'][number]['kind']) : item.kind} · {item.id}</small>
           </div>
           <div className="atlas-timeline-track" aria-hidden="true">
             <span className={value === null ? 'atlas-timeline-marker is-unknown' : 'atlas-timeline-marker'} style={fraction === null ? undefined : { left: `${fraction * 100}%`}}>{value === null ? '?' : ''}</span>
           </div>
-          <label className="atlas-timeline-value">{axis === 'story.scene-order' ? 'Ordinal' : axis.endsWith('.time') ? 'Epoch ms' : 'Value'}
+          <label className="atlas-timeline-value">{axis === 'story.scene-order' ? '順序番号' : axis.endsWith('.time') ? 'エポック時刻（ms）' : '値'}
             <TimelineValueInput value={value} label={item.title} onCommit={(text) => updateValue(item.id, text)} />
           </label>
         </div>;
       })}
-      {allItems.length === 0 && <p className="atlas-empty-state">Add graph nodes or cards to put explicit values on this timeline.</p>}
+      {allItems.length === 0 && <p className="atlas-empty-state">グラフノードやカードを追加して、タイムラインに値を設定してください。</p>}
     </div>
   </section>;
 }
@@ -172,11 +181,11 @@ function TimelineView({ board, view, dispatch, onOpenCard }: InnerProps) {
 function LaneLabelInput({ label, onSave }: { label: string; onSave(value: string): void }) {
   const [draft, setDraft] = useState(label);
   useEffect(() => setDraft(label), [label]);
-  return <input aria-label="Lane label" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onBlur={() => {
+  return <input aria-label="レーン名" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onBlur={() => {
     const next = draft.trim();
     if (next && next !== label) onSave(next);
     else setDraft(label);
-  }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} />;
+  }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) event.currentTarget.blur(); }} />;
 }
 
 function TimelineValueInput({ value, label, onCommit }: { value: number | null; label: string; onCommit(text: string): void }) {
@@ -192,7 +201,7 @@ function TimelineValueInput({ value, label, onCommit }: { value: number | null; 
     setInvalid(false);
     if (draft !== initial) onCommit(draft);
   };
-  return <input type="number" aria-label={`${label} timeline value`} aria-invalid={invalid} value={draft} placeholder="Unknown" onChange={(event) => setDraft(event.currentTarget.value)} onBlur={commitDraft} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} />;
+  return <input type="number" aria-label={`${label} のタイムライン値`} aria-invalid={invalid} value={draft} placeholder="不明" onChange={(event) => setDraft(event.currentTarget.value)} onBlur={commitDraft} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) event.currentTarget.blur(); }} />;
 }
 
 function StoryboardView({ board, view, dispatch, onOpenCard }: InnerProps) {
@@ -207,8 +216,8 @@ function StoryboardView({ board, view, dispatch, onOpenCard }: InnerProps) {
     [next[index], next[target]] = [next[target]!, next[index]!];
     dispatch({ type: 'view.reorder-cards', viewId: view.id, cardIds: next });
   };
-  return <section className="atlas-structured-view atlas-storyboard" aria-label="Storyboard">
-    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>Scene order is explicit and independent of dates.</p></div></div>
+  return <section className="atlas-structured-view atlas-storyboard" aria-label="ストーリーボード">
+    <div className="atlas-view-heading"><div><h2>{view.name}</h2><p>シーンの順序は明示的に設定し、日付とは独立して管理します。</p></div></div>
     <ol className="atlas-storyboard-list">
       {ids.map((id, index) => {
         const card = cardsById.get(id);
@@ -216,13 +225,13 @@ function StoryboardView({ board, view, dispatch, onOpenCard }: InnerProps) {
         return <li className="atlas-storyboard-card" key={id}>
           <div className="atlas-storyboard-order">{String(index + 1).padStart(2, '0')}</div>
           <button type="button" className="atlas-storyboard-content" onClick={() => onOpenCard(id)}>
-            <strong>{card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? card.kind}</strong>
-            <span>{card.text?.slice(0, 180) ?? (card.source ? `${card.source.path} @ ${card.source.revision}` : card.kind)}</span>
+            <strong>{card.text?.split('\n')[0] ?? card.source?.path ?? card.nodeRef?.localId ?? cardKindLabel(card.kind)}</strong>
+            <span>{card.text?.slice(0, 180) ?? (card.source ? `${card.source.path} @ ${card.source.revision}` : cardKindLabel(card.kind))}</span>
           </button>
-          <div className="atlas-button-pair"><button type="button" disabled={index === 0} onClick={() => move(id, -1)}>↑</button><button type="button" disabled={index === ids.length - 1} onClick={() => move(id, 1)}>↓</button></div>
+          <div className="atlas-button-pair"><button type="button" aria-label="シーンを前へ移動" disabled={index === 0} onClick={() => move(id, -1)}>↑</button><button type="button" aria-label="シーンを後ろへ移動" disabled={index === ids.length - 1} onClick={() => move(id, 1)}>↓</button></div>
         </li>;
       })}
-      {!ids.length && <li className="atlas-empty-state">Create cards to build an ordered storyboard.</li>}
+      {!ids.length && <li className="atlas-empty-state">カードを作成して、順序付きのストーリーボードを組み立ててください。</li>}
     </ol>
   </section>;
 }

@@ -596,7 +596,7 @@ export function createAtlasId(prefix: string): string {
   return id;
 }
 
-export function createEmptyAtlasBoard(name = 'New Atlas board'): BoardDocument {
+export function createEmptyAtlasBoard(name = '新しいAtlasボード'): BoardDocument {
   const defaultViewport = (): Viewport => ({ x: 0, y: 0, zoom: 1 });
   const board: BoardDocument = {
     schema: 'atlas.board/v1',
@@ -604,31 +604,31 @@ export function createEmptyAtlasBoard(name = 'New Atlas board'): BoardDocument {
     name,
     revision: 0,
     views: [
-      { id: createAtlasId('view'), kind: 'graph', name: 'Graph', viewport: defaultViewport(), pins: [] },
-      { id: createAtlasId('view'), kind: 'freeform', name: 'Canvas', viewport: defaultViewport() },
+      { id: createAtlasId('view'), kind: 'graph', name: 'グラフ', viewport: defaultViewport(), pins: [] },
+      { id: createAtlasId('view'), kind: 'freeform', name: 'キャンバス', viewport: defaultViewport() },
       {
         id: createAtlasId('view'),
         kind: 'board',
-        name: 'Board',
+        name: 'ボード',
         viewport: defaultViewport(),
         laneIds: ['lane-unassigned', 'lane-todo', 'lane-doing', 'lane-done'],
         cardOrder: [],
         lanes: [
-          { id: 'lane-unassigned', label: 'Unassigned', cardIds: [] },
-          { id: 'lane-todo', label: 'To do', cardIds: [] },
-          { id: 'lane-doing', label: 'In progress', cardIds: [] },
-          { id: 'lane-done', label: 'Done', cardIds: [] },
+          { id: 'lane-unassigned', label: '未割り当て', cardIds: [] },
+          { id: 'lane-todo', label: '未着手', cardIds: [] },
+          { id: 'lane-doing', label: '進行中', cardIds: [] },
+          { id: 'lane-done', label: '完了', cardIds: [] },
         ],
       },
       {
         id: createAtlasId('view'),
         kind: 'timeline',
-        name: 'Timeline',
+        name: 'タイムライン',
         viewport: defaultViewport(),
         axis: 'unknown',
         timeline: { range: { start: 0, end: 1 }, entries: [] },
       },
-      { id: createAtlasId('view'), kind: 'storyboard', name: 'Storyboard', viewport: defaultViewport(), cardOrder: [] },
+      { id: createAtlasId('view'), kind: 'storyboard', name: 'ストーリーボード', viewport: defaultViewport(), cardOrder: [] },
     ],
     nodes: [],
     edges: [],

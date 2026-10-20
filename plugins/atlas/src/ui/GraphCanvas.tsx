@@ -290,7 +290,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       const result = await props.graphWorker.neighbors({ from: selectedRef, direction, depth, limit: 5000 });
       setFocusRefs(new Set([nodeKey(result.from), ...result.nodes.map((entry) => nodeKey(entry.ref))]));
       setAnalysis(`${result.nodes.length} 件の近傍を表示しました${result.unresolved.length ? `。未解決参照 ${result.unresolved.length} 件` : ''}${result.complete ? '' : '（上限により一部）'}`);
-    } catch (error) { setAnalysis(errorMessage(error)); }
+    } catch (error) { setAnalysis(`近傍の解析に失敗しました: ${errorMessage(error)}`); }
   };
 
   const findPath = async () => {
@@ -302,9 +302,9 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       if (result.status === 'found') {
         const labels = result.nodes.map((node, index) => node?.label ?? result.refs[index]!.localId);
         setFocusRefs(new Set(result.refs.map(nodeKey)));
-        setAnalysis(`最短経路 ${result.hops} hop: ${labels.join(' → ')}`);
-      } else setAnalysis(result.status === 'bounded' ? '探索上限に達しました。範囲を絞って再試行してください。' : 'このSnapshotに経路はありません。');
-    } catch (error) { setAnalysis(errorMessage(error)); }
+        setAnalysis(`最短経路 ${result.hops}ホップ: ${labels.join(' → ')}`);
+      } else setAnalysis(result.status === 'bounded' ? '探索上限に達しました。範囲を絞って再試行してください。' : 'このProviderスナップショットに経路はありません。');
+    } catch (error) { setAnalysis(`経路の検索に失敗しました: ${errorMessage(error)}`); }
   };
 
   const groupComponents = async () => {
@@ -320,8 +320,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
         grouped += ids.length;
       }
       if (groups.length) dispatch({ type: 'node.apply-groups', groups });
-      setAnalysis(`${components.length} weak component。Board内の ${grouped} ノードをcomponentごとにGroup化しました。`);
-    } catch (error) { setAnalysis(errorMessage(error)); }
+      setAnalysis(`連結成分 ${components.length} 個を検出し、ボード内の ${grouped} ノードを成分ごとにグループ化しました。`);
+    } catch (error) { setAnalysis(`連結成分の解析に失敗しました: ${errorMessage(error)}`); }
   };
 
   const saveNodeLabel = () => {
@@ -342,20 +342,20 @@ function GraphCanvasBody(props: GraphCanvasProps) {
 
   return (
     <div className="atlas-graph-layout" onKeyDown={onGraphKeyDown} tabIndex={0}>
-      <section className="atlas-graph-main" aria-label="Graph workspace">
+      <section className="atlas-graph-main" aria-label="グラフ作業領域">
         <div className="atlas-toolbar atlas-graph-toolbar">
-          <button type="button" onClick={addManualNode}>＋ Manual node</button>
-          <button type="button" onClick={groupSelection} disabled={selectedNodeIdsInBoard.length < 2}>Group selection</button>
-          <button type="button" onClick={duplicateSelectedNode} disabled={selectedNode?.origin !== 'manual'}>Duplicate node</button>
-          <button type="button" onClick={removeSelection} disabled={!selectedNodeIdsInBoard.length && !selectedEdgeIds.some((id) => props.board.edges.some((edge) => edge.id === id && edge.meaning === 'visual'))}>Delete selection</button>
+          <button type="button" onClick={addManualNode}>＋ 手動ノード</button>
+          <button type="button" onClick={groupSelection} disabled={selectedNodeIdsInBoard.length < 2}>選択項目をグループ化</button>
+          <button type="button" onClick={duplicateSelectedNode} disabled={selectedNode?.origin !== 'manual'}>ノードを複製</button>
+          <button type="button" onClick={removeSelection} disabled={!selectedNodeIdsInBoard.length && !selectedEdgeIds.some((id) => props.board.edges.some((edge) => edge.id === id && edge.meaning === 'visual'))}>選択項目を削除</button>
           <span className="atlas-toolbar-separator" />
-          <button type="button" onClick={fit}>Fit</button>
-          <button type="button" onClick={() => void props.onLayout('force')}>Force</button>
-          <button type="button" onClick={() => void props.onLayout('layered')}>Layered</button>
-          <button type="button" onClick={() => void props.onLayout('timeline')}>Timeline layout</button>
-          <button type="button" onClick={() => void props.onLayout('manual')}>Manual positions</button>
-          <button type="button" onClick={props.onCancelLayout}>Cancel layout</button>
-          <button type="button" onClick={() => setFocusRefs(null)} disabled={!focusRefs}>Clear focus</button>
+          <button type="button" onClick={fit}>全体を表示</button>
+          <button type="button" onClick={() => void props.onLayout('force')}>力学レイアウト</button>
+          <button type="button" onClick={() => void props.onLayout('layered')}>階層レイアウト</button>
+          <button type="button" onClick={() => void props.onLayout('timeline')}>タイムライン配置</button>
+          <button type="button" onClick={() => void props.onLayout('manual')}>手動配置</button>
+          <button type="button" onClick={props.onCancelLayout}>レイアウトを中止</button>
+          <button type="button" onClick={() => setFocusRefs(null)} disabled={!focusRefs}>注目範囲を解除</button>
         </div>
         <div className="atlas-graph-flow">
           <ReactFlow
@@ -381,36 +381,36 @@ function GraphCanvasBody(props: GraphCanvasProps) {
             <MiniMap pannable zoomable nodeColor={(node) => node.data?.['origin'] === 'provider' ? '#83a8a2' : node.data?.['origin'] === 'preview' ? '#b0a5bf' : '#d5a65b'} />
             <Controls showInteractive={false} />
           </ReactFlow>
-          {flowNodes.length === 0 && <div className="atlas-empty-graph">Search a read-only source or add a manual node to start mapping.</div>}
+          {flowNodes.length === 0 && <div className="atlas-empty-graph">読み取り専用のデータソースを検索するか、手動ノードを追加して関係図を作成してください。</div>}
         </div>
       </section>
 
-      <aside className="atlas-inspector" aria-label="Graph inspector and search">
+      <aside className="atlas-inspector" aria-label="グラフの検索と詳細">
         <section className="atlas-panel-section">
-          <h3>Search and filter</h3>
-          <label className="atlas-field">Search provider snapshot
-            <input value={props.searchQuery} onChange={(event) => props.onSearch(event.currentTarget.value)} placeholder="name, id, alias, tag, type, path" />
+          <h3>検索と絞り込み</h3>
+          <label className="atlas-field">Providerスナップショットを検索
+            <input value={props.searchQuery} onChange={(event) => props.onSearch(event.currentTarget.value)} placeholder="名前、ID、別名、タグ、種類、パス" />
           </label>
-          <label className="atlas-field">Board filter
+          <label className="atlas-field">ボード内を絞り込む
             <input
               value={filterDraft}
               onChange={(event) => setFilterDraft(event.currentTarget.value)}
               onBlur={() => dispatch({ type: 'view.filter', viewId: props.view.id, filter: { ...filters, query: filterDraft } })}
-              placeholder="Filter visible nodes"
+              placeholder="表示するノードを絞り込む"
             />
           </label>
-          <label className="atlas-field">Node kinds
+          <label className="atlas-field">ノードの種類
             <select multiple size={3} value={filters?.kinds ?? []} onChange={(event) => dispatch({ type: 'view.filter', viewId: props.view.id, filter: { ...filters, kinds: [...event.currentTarget.selectedOptions].map((option) => option.value) } })}>
               {[...new Set([...props.board.nodes.map((node) => node.kind), ...(props.graph?.nodes.map((node) => node.kind) ?? [])])].sort().map((kind) => <option value={kind} key={kind}>{kind}</option>)}
             </select>
           </label>
-          {props.graph && <label className="atlas-field">Provider filter
+          {props.graph && <label className="atlas-field">Providerで絞り込む
             <select multiple size={2} value={filters?.providers ?? []} onChange={(event) => dispatch({ type: 'view.filter', viewId: props.view.id, filter: { ...filters, providers: [...event.currentTarget.selectedOptions].map((option) => option.value) } })}>
               {[...new Set(props.graph.nodes.map((node) => node.ref.providerId))].sort().map((id) => <option value={id} key={id}>{id}</option>)}
             </select>
           </label>}
-          {props.graph && <p className="atlas-muted">Source: {props.graph.providerId} · snapshot {props.graph.snapshot.providerRevision}</p>}
-          {!props.graph && <p className="atlas-muted">Connect a provider from the toolbar to search its read-only snapshot.</p>}
+          {props.graph && <p className="atlas-muted">データ提供元: {props.graph.providerId} · スナップショット {props.graph.snapshot.providerRevision}</p>}
+          {!props.graph && <p className="atlas-muted">ツールバーからProviderを接続すると、読み取り専用スナップショットを検索できます。</p>}
           <div className="atlas-search-results">
             {searchMatches.slice(0, 30).map(({ node, matchedFields }) => {
               const present = props.board.nodes.some((candidate) => candidate.ref && nodeKey(candidate.ref) === nodeKey(node.ref));
@@ -423,54 +423,54 @@ function GraphCanvasBody(props: GraphCanvasProps) {
               } });
             };
               return <div className="atlas-search-hit" key={nodeKey(node.ref)}>
-                <div><strong>{node.label}</strong><small>{node.kind} · {matchedFields.join(', ') || 'all'}</small></div>
-                <button type="button" onClick={() => props.onAddProviderNode(node)}>{present ? 'Reveal' : 'Add node'}</button>
-                <button type="button" onClick={addCard}>Card</button>
+                <div><strong>{node.label}</strong><small>{node.kind} · {matchedFields.map(localizeMatchField).join('、') || 'すべての項目'}</small></div>
+                <button type="button" onClick={() => props.onAddProviderNode(node)}>{present ? 'グラフで表示' : 'ノードを追加'}</button>
+                <button type="button" onClick={addCard}>カードを作成</button>
               </div>;
             })}
-            {props.searchResult && <small className="atlas-muted">{props.searchResult.totalMatches} match{props.searchResult.complete ? '' : ' · limited'}</small>}
+            {props.searchResult && <small className="atlas-muted">{props.searchResult.totalMatches} 件{props.searchResult.complete ? '' : ' · 上限まで表示'}</small>}
           </div>
         </section>
 
         <section className="atlas-panel-section">
-          <h3>Selected node</h3>
+          <h3>選択中のノード</h3>
           {selectedNode ? <>
-            <label className="atlas-field">Name
-              <input value={labelDraft} disabled={selectedNode.origin === 'provider'} onChange={(event) => setLabelDraft(event.currentTarget.value)} onBlur={saveNodeLabel} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} />
+            <label className="atlas-field">名前
+              <input value={labelDraft} disabled={selectedNode.origin === 'provider'} onChange={(event) => setLabelDraft(event.currentTarget.value)} onBlur={saveNodeLabel} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) event.currentTarget.blur(); }} />
             </label>
-            <p className="atlas-muted">{selectedNode.kind} · {selectedNode.origin === 'provider' ? `Provider ref ${selectedNode.ref?.providerId}/${selectedNode.ref?.localId}` : `Local ID ${selectedNode.id}`}</p>
-            <label className="atlas-field">Annotation
+            <p className="atlas-muted">{selectedNode.kind} · {selectedNode.origin === 'provider' ? `Provider参照 ${selectedNode.ref?.providerId}/${selectedNode.ref?.localId}` : `ローカルID ${selectedNode.id}`}</p>
+            <label className="atlas-field">注釈
               <textarea value={annotationDraft} rows={3} onChange={(event) => setAnnotationDraft(event.currentTarget.value)} onBlur={saveNodeAnnotation} />
             </label>
-            {selectedNode.ref && <button type="button" onClick={() => void focusNeighbors('both', 1)} disabled={!props.graph}>Focus neighbors</button>}
-            {selectedNode.source && <button type="button" onClick={() => props.onSource(selectedNode.source!)}>Open source</button>}
-            <label className="atlas-field">Use as path start
-              <select value={pathFrom} onChange={(event) => setPathFrom(event.currentTarget.value)}><option value="">Select node</option>{props.board.nodes.filter((node) => node.ref).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
+            {selectedNode.ref && <button type="button" onClick={() => void focusNeighbors('both', 1)} disabled={!props.graph}>近傍ノードに注目</button>}
+            {selectedNode.source && <button type="button" onClick={() => props.onSource(selectedNode.source!)}>ソースを開く</button>}
+            <label className="atlas-field">経路の始点
+              <select value={pathFrom} onChange={(event) => setPathFrom(event.currentTarget.value)}><option value="">ノードを選択</option>{props.board.nodes.filter((node) => node.ref).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
             </label>
-            <label className="atlas-field">Path destination
-              <select value={pathTo} onChange={(event) => setPathTo(event.currentTarget.value)}><option value="">Select node</option>{props.board.nodes.filter((node) => node.ref).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
+            <label className="atlas-field">経路の終点
+              <select value={pathTo} onChange={(event) => setPathTo(event.currentTarget.value)}><option value="">ノードを選択</option>{props.board.nodes.filter((node) => node.ref).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
             </label>
-            <button type="button" onClick={() => void findPath()} disabled={!props.graph}>Find shortest path</button>
+            <button type="button" onClick={() => void findPath()} disabled={!props.graph}>最短経路を検索</button>
           </> : selectedPreview ? <>
-            <p className="atlas-muted">Read-only provider neighbor preview</p>
+            <p className="atlas-muted">読み取り専用のProvider近傍プレビュー</p>
             <strong>{selectedPreview.label}</strong>
             <p className="atlas-muted">{selectedPreview.kind} · {selectedPreview.ref.providerId}/{selectedPreview.ref.localId}</p>
-            <button type="button" onClick={() => props.onAddProviderNode(selectedPreview)}>Add reference to Board</button>
-            {selectedPreview.source && <button type="button" onClick={() => props.onSource(selectedPreview.source!)}>Open pinned source</button>}
-          </> : <p className="atlas-muted">Select a node to inspect or open its pinned source revision.</p>}
-          {selectedEdge && <label className="atlas-field">Visual edge label
+            <button type="button" onClick={() => props.onAddProviderNode(selectedPreview)}>ボードに参照を追加</button>
+            {selectedPreview.source && <button type="button" onClick={() => props.onSource(selectedPreview.source!)}>固定したソースを開く</button>}
+          </> : <p className="atlas-muted">ノードを選択すると詳細を確認したり、固定したソースリビジョンを開いたりできます。</p>}
+          {selectedEdge && <label className="atlas-field">エッジのラベル
             <input value={edgeLabelDraft} disabled={selectedEdge.meaning !== 'visual'} onChange={(event) => setEdgeLabelDraft(event.currentTarget.value)} onBlur={saveEdgeLabel} />
           </label>}
           <div className="atlas-neighbor-actions">
-            <button type="button" onClick={() => void focusNeighbors('in', 1)} disabled={!selectedRef || !props.graph}>In 1</button>
-            <button type="button" onClick={() => void focusNeighbors('out', 2)} disabled={!selectedRef || !props.graph}>Out 2</button>
-            <button type="button" onClick={() => void focusNeighbors('both', 3)} disabled={!selectedRef || !props.graph}>Both 3</button>
-            <button type="button" onClick={() => void groupComponents()} disabled={!props.graph}>Group components</button>
+            <button type="button" onClick={() => void focusNeighbors('in', 1)} disabled={!selectedRef || !props.graph}>入力方向 1段</button>
+            <button type="button" onClick={() => void focusNeighbors('out', 2)} disabled={!selectedRef || !props.graph}>出力方向 2段</button>
+            <button type="button" onClick={() => void focusNeighbors('both', 3)} disabled={!selectedRef || !props.graph}>双方向 3段</button>
+            <button type="button" onClick={() => void groupComponents()} disabled={!props.graph}>連結成分をグループ化</button>
           </div>
-          {selectedGraphNode && <details><summary>Provider metadata</summary><pre>{JSON.stringify({ aliases: selectedGraphNode.aliases ?? [], tags: selectedGraphNode.tags ?? [], source: selectedGraphNode.source ?? null, status: selectedGraphNode.status ?? 'available', meta: selectedGraphNode.meta ?? {} }, null, 2)}</pre></details>}
+          {selectedGraphNode && <details><summary>Providerメタデータ</summary><pre>{JSON.stringify({ aliases: selectedGraphNode.aliases ?? [], tags: selectedGraphNode.tags ?? [], source: selectedGraphNode.source ?? null, status: selectedGraphNode.status ?? 'available', meta: selectedGraphNode.meta ?? {} }, null, 2)}</pre></details>}
           {analysis && <p className="atlas-analysis" role="status">{analysis}</p>}
         </section>
-        <p className="atlas-muted atlas-key-hint">Drag to pin · Shift-drag to select · Ctrl/⌘+Z undo · Delete removes selection</p>
+        <p className="atlas-muted atlas-key-hint">ドラッグで位置を固定 · Shift+ドラッグで複数選択 · Ctrl/⌘+Zで元に戻す · Deleteで選択項目を削除</p>
       </aside>
     </div>
   );
@@ -482,6 +482,18 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function localizeMatchField(field: SearchResult['items'][number]['matchedFields'][number]): string {
+  switch (field) {
+    case 'name': return '名前';
+    case 'id': return 'ID';
+    case 'alias': return '別名';
+    case 'tag': return 'タグ';
+    case 'type': return '種類';
+    case 'path': return 'パス';
+    default: return field;
+  }
 }
 
 function previewNodeId(ref: GraphNode['ref']): string {

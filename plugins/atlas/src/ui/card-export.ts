@@ -55,14 +55,14 @@ async function prepareCardImage(asset: Asset, readAsset: AtlasCardAssetReader): 
 function cardHeading(card: BoardDocument['cards'][number]): string {
   switch (card.kind) {
     case 'text': return 'Markdown';
-    case 'source': return 'Source';
-    case 'provider-node': return 'Provider node';
-    case 'image': return card.annotation?.trim() ? `Image · ${card.annotation.trim()}` : 'Image';
+    case 'source': return 'ソース';
+    case 'provider-node': return 'Providerノード';
+    case 'image': return card.annotation?.trim() ? `画像 · ${card.annotation.trim()}` : '画像';
   }
 }
 
 function cardBody(card: BoardDocument['cards'][number]): string {
-  const source = card.source ? `${card.source.path}\nRevision ${card.source.revision}` : '';
+  const source = card.source ? `${card.source.path}\nリビジョン ${card.source.revision}` : '';
   switch (card.kind) {
     case 'text':
       return [card.text, card.annotation].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
@@ -174,7 +174,7 @@ export async function buildAtlasCardExportOverlay(
     const asset = board.assets.find((item) => item.id === card.assetId);
     if (!asset) {
       unavailableImagePaths.push(card.assetId ?? card.id);
-      appendCardText(elements, card, 'Image asset is missing.');
+      appendCardText(elements, card, '画像アセットが見つかりません。');
       if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
       continue;
     }
@@ -192,7 +192,7 @@ export async function buildAtlasCardExportOverlay(
       if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
     } catch {
       unavailableImagePaths.push(asset.path);
-      appendCardText(elements, card, `Image asset is unavailable: ${asset.path}`);
+      appendCardText(elements, card, `画像アセットを読み込めません: ${asset.path}`);
       if (card.source) appendCardText(elements, card, cardBody(card), card.position.y + card.height - 30);
     }
   }

@@ -36,7 +36,7 @@ export function FreeformView(props: FreeformViewProps) {
   return <div className="atlas-freeform-view">
     <div className="atlas-freeform-toolbar atlas-toolbar">
       <span>{props.view.name}</span>
-      <small>Canvas shapes are saved in the separate Excalidraw scene; cards remain in the Atlas Board.</small>
+      <small>Canvasの図形はExcalidrawシーンに、カードはAtlasボードに保存されます。</small>
     </div>
     <CanvasEditor
       sceneText={props.sceneText}
@@ -124,6 +124,12 @@ function CardOverlay({
   }, [focusCardId, board.cards]);
 
   const cards = board.cards;
+  const cardKindLabel = (kind: BoardDocument['cards'][number]['kind']) => ({
+    text: 'テキスト',
+    source: 'ソース',
+    'provider-node': 'Providerノード',
+    image: '画像',
+  })[kind];
 
   const startGesture = (event: ReactPointerEvent<HTMLButtonElement>, card: BoardDocument['cards'][number], kind: Gesture['kind']) => {
     if (event.button !== 0) return;
@@ -156,29 +162,29 @@ function CardOverlay({
         }}
         tabIndex={0}
         role="group"
-        aria-label={`${card.kind} card`}
+        aria-label={`${cardKindLabel(card.kind)}カード`}
       >
         <header>
-          <button type="button" className="atlas-card-drag" aria-label="Move card" onPointerDown={(event) => startGesture(event, card, 'move')}>⠿</button>
-          <span>{card.kind === 'text' ? 'Markdown' : card.kind}</span>
-          <button type="button" aria-label="Duplicate card" onClick={() => onDuplicate(card.id)}>⧉</button>
-          <button type="button" aria-label="Delete card" onClick={() => onDelete(card.id)}>×</button>
+          <button type="button" className="atlas-card-drag" aria-label="カードを移動" onPointerDown={(event) => startGesture(event, card, 'move')}>⠿</button>
+          <span>{card.kind === 'text' ? 'Markdown' : cardKindLabel(card.kind)}</span>
+          <button type="button" aria-label="カードを複製" onClick={() => onDuplicate(card.id)}>⧉</button>
+          <button type="button" aria-label="カードを削除" onClick={() => onDelete(card.id)}>×</button>
         </header>
         {card.kind === 'image' ? imageUrl
-          ? <img className="atlas-card-image" src={imageUrl} alt={card.annotation ?? 'Atlas image'} draggable={false} />
-          : <p className="atlas-card-unavailable">Image asset is not loaded or missing.</p>
+          ? <img className="atlas-card-image" src={imageUrl} alt={card.annotation ?? 'Atlasの画像'} draggable={false} />
+          : <p className="atlas-card-unavailable">画像データを読み込めないか、見つかりません。</p>
           : card.kind === 'provider-node'
             ? <div className="atlas-card-provider">
-                <strong>{linkedNode?.label ?? card.text ?? card.nodeRef?.localId ?? 'Missing provider node'}</strong>
+                <strong>{linkedNode?.label ?? card.text ?? card.nodeRef?.localId ?? 'Providerノードが見つかりません'}</strong>
                 <small>{card.nodeRef?.providerId}/{card.nodeRef?.localId}</small>
                 {card.annotation && <p>{card.annotation}</p>}
-                {card.nodeRef && <button type="button" onClick={() => onNavigateToNode(card.nodeRef!)}>Reveal in graph</button>}
+                {card.nodeRef && <button type="button" onClick={() => onNavigateToNode(card.nodeRef!)}>グラフで表示</button>}
               </div>
             : <CardTextEditor card={card} onUpdate={onUpdate} />}
         {card.source && <button className="atlas-card-source" type="button" onClick={() => onSource(card.source!)}>
-          {card.source.path} · {card.source.revision.slice(0, 12)} · Open pinned revision
+          {card.source.path} · {card.source.revision.slice(0, 12)} · 固定したリビジョンを開く
         </button>}
-        {selectedId === card.id && <button className="atlas-card-resize" type="button" aria-label="Resize card" onPointerDown={(event) => startGesture(event, card, 'resize')}>⌟</button>}
+        {selectedId === card.id && <button className="atlas-card-resize" type="button" aria-label="カードのサイズを変更" onPointerDown={(event) => startGesture(event, card, 'resize')}>⌟</button>}
       </article>;
     })}
   </div>;
@@ -195,7 +201,7 @@ function CardTextEditor({
   const [annotation, setAnnotation] = useState(card.annotation ?? '');
   useEffect(() => { setText(card.text ?? ''); setAnnotation(card.annotation ?? ''); }, [card.id, card.text, card.annotation]);
   return <div className="atlas-card-editor">
-    <textarea aria-label="Card Markdown" value={text} onChange={(event) => setText(event.currentTarget.value)} onBlur={() => onUpdate(card.id, { text })} />
-    <input aria-label="Card annotation" value={annotation} placeholder="Annotation" onChange={(event) => setAnnotation(event.currentTarget.value)} onBlur={() => onUpdate(card.id, { annotation })} />
+    <textarea aria-label="カードのMarkdown本文" value={text} onChange={(event) => setText(event.currentTarget.value)} onBlur={() => onUpdate(card.id, { text })} />
+    <input aria-label="カードの注釈" value={annotation} placeholder="注釈" onChange={(event) => setAnnotation(event.currentTarget.value)} onBlur={() => onUpdate(card.id, { annotation })} />
   </div>;
 }

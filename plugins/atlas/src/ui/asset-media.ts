@@ -14,11 +14,11 @@ const ACTIVE_SVG_ELEMENTS = new Set([
 ]);
 
 function sanitizeSvgText(input: string): string {
-  if (!globalThis.DOMParser || !globalThis.XMLSerializer) throw new Error('This browser cannot safely inspect SVG images.');
+  if (!globalThis.DOMParser || !globalThis.XMLSerializer) throw new Error('このブラウザーではSVG画像を安全に検査できません。');
   const documentValue = new DOMParser().parseFromString(input, 'image/svg+xml');
-  if (documentValue.querySelector('parsererror')) throw new Error('SVG image is not valid XML.');
+  if (documentValue.querySelector('parsererror')) throw new Error('SVG画像のXML形式が正しくありません。');
   const root = documentValue.documentElement;
-  if (root.localName.toLowerCase() !== 'svg') throw new Error('SVG image must have an <svg> root.');
+  if (root.localName.toLowerCase() !== 'svg') throw new Error('SVG画像のルート要素は<svg>である必要があります。');
 
   for (const element of [...documentValue.querySelectorAll('*')]) {
     const localName = element.localName.toLowerCase();
@@ -41,16 +41,16 @@ function sanitizeSvgText(input: string): string {
 }
 
 export function sanitizeImageBytes(bytes: Uint8Array, mime: Asset['mime']): Uint8Array {
-  if (!IMAGE_MIME_TYPES.has(mime)) throw new Error(`Unsupported image type: ${mime}.`);
+  if (!IMAGE_MIME_TYPES.has(mime)) throw new Error(`対応していない画像形式です: ${mime}。`);
   if (mime !== 'image/svg+xml') return bytes.slice();
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   return new TextEncoder().encode(sanitizeSvgText(text));
 }
 
 export async function verifyAssetBytes(asset: Asset, bytes: Uint8Array): Promise<void> {
-  if (bytes.byteLength !== asset.bytes) throw new Error(`Asset ${asset.path} has ${bytes.byteLength} bytes; expected ${asset.bytes}.`);
+  if (bytes.byteLength !== asset.bytes) throw new Error(`アセット ${asset.path} のサイズは${bytes.byteLength}バイトです（期待値: ${asset.bytes}バイト）。`);
   const hash = await sha256Hex(bytes);
-  if (hash !== asset.sha256) throw new Error(`Asset ${asset.path} failed its SHA-256 check.`);
+  if (hash !== asset.sha256) throw new Error(`アセット ${asset.path} のSHA-256検証に失敗しました。`);
 }
 
 export function assetExtension(mime: Asset['mime']): string {

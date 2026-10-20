@@ -78,7 +78,7 @@ async function loadSession(
   files: Map<string, WorkspaceFile>,
 ): Promise<{ session: BoardSession; boardText: string }> {
   const boardText = await readFileText(host, boardFile);
-  if (new TextEncoder().encode(boardText).byteLength > 2 * 1024 * 1024) throw new Error('Atlas Board exceeds the 2 MiB document limit.');
+  if (new TextEncoder().encode(boardText).byteLength > 2 * 1024 * 1024) throw new Error('Atlasボードが2 MiBのドキュメント上限を超えています。');
   const board = parseBoardDocument(boardText);
   const scenePath = scenePathForBoard(boardPath);
   const sceneFile = files.get(scenePath);

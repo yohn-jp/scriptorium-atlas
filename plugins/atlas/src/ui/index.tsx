@@ -250,13 +250,13 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         publishPrepared(null);
         const asset = stagedAssetRef.current;
         if (asset && asset.boardId === commitObserved.boardId && asset.path === commitObserved.assetPath) publishStagedAsset(null);
-        setNotice(`Host commit observed for ${commitObserved.operationId}. The durable journal ACK and Host commit are separate states.`);
+        setNotice(`Hostのコミットを確認しました（操作ID: ${commitObserved.operationId}）。ジャーナルの永続化ACKとHostのコミットは別の状態です。`);
       }
       if (!activeBoardIdRef.current && next.size > 0) {
         const id = next.keys().next().value as string | undefined;
         if (id) { activeBoardIdRef.current = id; setActiveBoardId(id); setActiveViewId(next.get(id)!.board.views[0]?.id ?? null); }
       }
-      if (initial && next.size === 0 && inventory.invalid.length === 0) setNotice('Create an Atlas Board to begin. Changes are submitted to the Host for review.');
+      if (initial && next.size === 0 && inventory.invalid.length === 0) setNotice('Atlasボードを作成して始めましょう。変更はHostのレビューに送信されます。');
       return inventory;
     } finally {
       if (sequence === refreshSequenceRef.current) {
@@ -270,11 +270,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     let live = true;
     void refreshWorkspace(true).catch((error) => {
       if (!live) return;
-      setFatalError(errorMessage(error));
+      setFatalError(`Hostワークスペースを読み込めませんでした: ${errorMessage(error)}`);
       setLoading(false);
     });
     const unsubscribe = host.subscribeWorkspace(() => {
-      void refreshWorkspace().catch((error) => setFatalError(errorMessage(error)));
+      void refreshWorkspace().catch((error) => setFatalError(`Hostワークスペースを更新できませんでした: ${errorMessage(error)}`));
     });
     return () => {
       live = false;
@@ -303,7 +303,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         setProviders(items);
         setProviderId((current) => current || items.find((item) => item.features.includes('listNodes') && item.features.includes('listEdges'))?.id || '');
       }
-    }).catch((error) => { if (active) setProviderError(`Provider discovery failed: ${errorMessage(error)}`); });
+    }).catch((error) => { if (active) setProviderError(`Providerの検出に失敗しました: ${errorMessage(error)}`); });
     return () => { active = false; };
   }, [host]);
 
@@ -349,7 +349,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         ...(activeView.filter?.kinds ? { kinds: activeView.filter.kinds } : {}),
         limit: 1000,
       }, controller.signal).then((result) => setSearchResult(result)).catch((error) => {
-        if (!controller.signal.aborted) setProviderError(`Graph search failed: ${errorMessage(error)}`);
+        if (!controller.signal.aborted) setProviderError(`グラフ検索に失敗しました: ${errorMessage(error)}`);
       });
     }, 180);
     return () => { window.clearTimeout(timer); controller.abort(); };
@@ -357,7 +357,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
   useEffect(() => {
     if (!workspace || !graph || graph.snapshot.sourceRevision === workspace.sourceRevision) return;
-    setProviderStatus('The workspace source revision changed. This provider snapshot is stale; reconnect to refresh it.');
+    setProviderStatus('ワークスペースのソースリビジョンが変わりました。このProviderスナップショットは古いため、再接続して更新してください。');
   }, [workspace?.sourceRevision, graph?.snapshot.sourceRevision]);
 
   useEffect(() => {
@@ -404,13 +404,13 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     const view = session?.board.views.find((candidate) => candidate.id === viewId);
     if (!session || !view) return;
     if (view.kind === 'freeform' && session.sceneText === null && !session.sceneError) {
-      setNotice('Loading Canvas tools…');
+      setNotice('Canvasを読み込んでいます…');
       try {
         const sceneText = await createEmptyExcalidrawScene();
         const current = sessionsRef.current.get(boardId);
         if (current?.sceneText === null) replaceSession(boardId, { ...current, sceneText });
       } catch (error) {
-        setNotice(`Canvas could not be opened: ${errorMessage(error)}`);
+        setNotice(`Canvasを開けませんでした: ${errorMessage(error)}`);
         return;
       }
     }
@@ -437,18 +437,18 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       setActiveBoardId(board.boardId);
       setActiveViewId(board.views[0]?.id ?? null);
       setFocusCardId(null);
-      setNotice(`Created ${session.path} as a local draft. Prepare changes for Host review when ready.`);
-    } catch (error) { setFatalError(`Could not create a Board: ${errorMessage(error)}`); }
+      setNotice(`${session.path}をローカル下書きとして作成しました。準備ができたらHostレビュー用に変更を送ってください。`);
+    } catch (error) { setFatalError(`ボードを作成できませんでした: ${errorMessage(error)}`); }
   }, [makeLocalSession, publishSessions]);
 
   const createView = useCallback((kind: View['kind']) => {
     if (!activeSession) return;
     const id = createAtlasId('view');
-    const name = ({ graph: 'Graph', freeform: 'Canvas', board: 'Board', timeline: 'Timeline', storyboard: 'Storyboard' } as const)[kind];
+    const name = ({ graph: 'グラフ', freeform: 'キャンバス', board: 'ボード', timeline: 'タイムライン', storyboard: 'ストーリーボード' } as const)[kind];
     const common = { id, kind, name, viewport: { x: 0, y: 0, zoom: 1 } };
     let view: BoardView;
     if (kind === 'graph') view = { ...common, kind, pins: [] };
-    else if (kind === 'board') view = { ...common, kind, laneIds: ['lane-unassigned'], lanes: [{ id: 'lane-unassigned', label: 'Unassigned', cardIds: [] }] };
+    else if (kind === 'board') view = { ...common, kind, laneIds: ['lane-unassigned'], lanes: [{ id: 'lane-unassigned', label: '未割り当て', cardIds: [] }] };
     else if (kind === 'timeline') view = { ...common, kind, axis: 'unknown', timeline: { range: { start: 0, end: 1 }, entries: [] } };
     else if (kind === 'storyboard') view = { ...common, kind, cardOrder: [] };
     else view = { ...common, kind };
@@ -578,17 +578,17 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
   const connectProvider = async () => {
     if (!workspace || !providerId) return;
     const descriptor = providers.find((item) => item.id === providerId);
-    if (!descriptor) { setProviderError(`Provider ${providerId} was not discovered by the Host.`); return; }
+    if (!descriptor) { setProviderError(`Provider ${providerId}がHostから検出されませんでした。`); return; }
     if (!descriptor.features.includes('listNodes') || !descriptor.features.includes('listEdges')) {
-      setProviderError(`${providerId} does not provide both paged nodes and edges.`);
+      setProviderError(`${providerId}はページ単位のノード一覧とエッジ一覧の両方を提供していません。`);
       return;
     }
     if (providerEntriesRef.current.has(providerId)) {
-      setProviderError(`${providerId} is already connected.`);
+      setProviderError(`${providerId}はすでに接続されています。`);
       return;
     }
     setProviderError('');
-    setProviderStatus(`Connecting to ${providerId}…`);
+    setProviderStatus(`${providerId}に接続しています…`);
     let acquiredLeaseId: string | null = null;
     try {
       const lease = await host.acquireProvider(providerId, workspace.sourceRevision);
@@ -596,7 +596,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       if (lease.providerId !== providerId || lease.snapshot.workspaceId !== workspace.workspaceId || lease.snapshot.sourceRevision !== workspace.sourceRevision) {
         await host.releaseProvider(lease.leaseId).catch(() => undefined);
         acquiredLeaseId = null;
-        throw new Error('Provider lease returned a mismatched provider, workspace, or source revision.');
+        throw new Error('ProviderリースのProvider ID、ワークスペース、またはソースリビジョンが一致しません。');
       }
       const nodePages = await collectProviderPages<ProviderPage>(host, lease.leaseId, 'listNodes', lease.snapshot);
       const edgePages = await collectProviderPages<GraphEdgePage>(host, lease.leaseId, 'listEdges', lease.snapshot);
@@ -612,11 +612,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       providerEntriesRef.current = candidateEntries;
       acquiredLeaseId = null;
       publishGraph(combined);
-      setProviderStatus(`${combined.providerIds.join(' + ')}: ${combined.nodes.length} nodes and ${combined.edges.length} edges from a shared source revision.`);
+      setProviderStatus(`${combined.providerIds.join(' + ')}: ノード ${combined.nodes.length} 件、エッジ ${combined.edges.length} 件を共通ソースリビジョンから読み込みました。`);
     } catch (error) {
       if (acquiredLeaseId) await host.releaseProvider(acquiredLeaseId).catch(() => undefined);
       setProviderError(`${providerErrorKind(error)}: ${errorMessage(error)}`);
-      setProviderStatus('Provider could not be added. Existing snapshots and Board data are unchanged.');
+      setProviderStatus('Providerを追加できませんでした。既存のスナップショットとボードデータは変更されていません。');
     }
   };
 
@@ -643,8 +643,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         publishGraph(combined);
       }
       await host.releaseProvider(removed.leaseId);
-      setProviderStatus(candidateEntries.size ? `Connected: ${[...candidateEntries.keys()].join(' + ')}.` : 'Provider disconnected; saved Board references remain available as unresolved items.');
-    } catch (error) { setProviderError(`Provider disconnect failed: ${errorMessage(error)}`); }
+      setProviderStatus(candidateEntries.size ? `接続中: ${[...candidateEntries.keys()].join(' + ')}。` : 'Providerを切断しました。保存済みボード参照は未解決項目として残ります。');
+    } catch (error) { setProviderError(`Providerの切断に失敗しました: ${errorMessage(error)}`); }
   };
 
   const runLayout = async (kind: 'force' | 'layered' | 'timeline' | 'manual') => {
@@ -655,7 +655,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     layoutWorkerRef.current = worker;
     const revision = { boardRevision: board.revision, ...(snapshot ? { snapshot } : {}) };
     worker.updateRevision(revision);
-    setNotice(`Calculating ${kind} layout…`);
+    const layoutName = ({ force: '力学', layered: '階層', timeline: 'タイムライン', manual: '手動' } as const)[kind];
+    setNotice(`${layoutName}レイアウトを計算しています…`);
     try {
       const timelineView = board.views.find((view) => view.kind === 'timeline');
       const base = { boardRevision: board.revision, ...(snapshot ? { snapshot } : {}), nodes: board.nodes, edges: board.edges, pins: activeView.pins ?? [] };
@@ -675,29 +676,29 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       const currentSnapshot = graphRef.current?.snapshot;
       const snapshotMatches = snapshot ? Boolean(result.snapshot && currentSnapshot && sameSnapshot(snapshot, currentSnapshot) && sameSnapshot(result.snapshot, snapshot)) : !result.snapshot;
       if (!current || current.board.revision !== result.boardRevision || !snapshotMatches) {
-        setNotice('Discarded a stale layout result. Run the layout again on the current Board and provider snapshot.');
+        setNotice('古いレイアウト結果を破棄しました。現在のボードとProviderスナップショットで再計算してください。');
         return;
       }
       const positions = result.positions.map(({ nodeId, position }) => ({ id: nodeId, position }));
       acceptBoard(board.boardId, applyAtlasCommand(current.board, { type: 'node.apply-layout', positions }));
-      setNotice(`${kind} layout applied as one undoable action. ${result.unresolvedEdgeIds.length} edges had unresolved endpoints.`);
-    } catch (error) { setNotice(`Layout failed: ${errorMessage(error)}`); }
+      setNotice(`${layoutName}レイアウトを1回のUndo操作として適用しました。端点が未解決のエッジ: ${result.unresolvedEdgeIds.length}件。`);
+    } catch (error) { setNotice(`レイアウトに失敗しました: ${errorMessage(error)}`); }
   };
 
   const cancelLayout = () => {
     layoutWorkerRef.current?.cancel();
-    setNotice('Layout calculation cancelled.');
+    setNotice('レイアウト計算を中止しました。');
   };
 
   const prepareChanges = async () => {
     if (!activeSession || activeSession.conflict) return;
     if (preparingRef.current) return;
-    if (preparedRef.current) { setNotice('A Host review operation is already pending. Wait for its commit or resolution before preparing another.'); return; }
+    if (preparedRef.current) { setNotice('Hostレビューの操作がすでに保留中です。コミットまたは解決を待ってから次の変更を準備してください。'); return; }
     const staged = stagedAssetRef.current;
-    if (staged && staged.boardId !== activeSession.board.boardId) { setNotice('Finish the staged image upload for its Board before preparing another Board.'); return; }
+    if (staged && staged.boardId !== activeSession.board.boardId) { setNotice('別のボードを準備する前に、画像アップロードを完了してください。'); return; }
     preparingRef.current = true;
     let retryAfterConcurrentEdit = false;
-    setNotice('Checking current Host revisions…');
+    setNotice('Hostの最新リビジョンを確認しています…');
     try {
       const latest = await loadAtlasInventory(host);
       setWorkspace(latest.workspace);
@@ -719,17 +720,17 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
           };
           replaceSession(activeSession.board.boardId, { ...activeSession, conflict });
         }
-        setNotice('The Host revision changed. Resolve the external edit before preparing this Board.');
+        setNotice('Hostのリビジョンが変わりました。このボードを準備する前に、外部編集との競合を解決してください。');
         return;
       }
       const currentSession = sessionsRef.current.get(activeSession.board.boardId) ?? activeSession;
       if (currentSession.board.revision !== activeSession.board.revision || currentSession.sceneText !== activeSession.sceneText) {
         retryAfterConcurrentEdit = true;
-        setNotice('The local draft changed while the Host inventory was loading. Press Prepare again.');
+        setNotice('Hostのファイル一覧を読み込んでいる間にローカル下書きが変わりました。もう一度「レビュー用に準備」を実行してください。');
         return;
       }
       const boardText = serializeSessionBoard(currentSession);
-      if (new TextEncoder().encode(boardText).byteLength > MAX_BOARD_BYTES) throw new Error('The Atlas Board exceeds the 2 MiB document limit.');
+      if (new TextEncoder().encode(boardText).byteLength > MAX_BOARD_BYTES) throw new Error('Atlasボードがドキュメント上限の2 MiBを超えています。');
       const writes: ChangeIntent['writes'] = [];
       const reads: ChangeIntent['reads'] = [];
       if (activeSession.baseBoardText === null || boardText !== activeSession.baseBoardText || wasDeleted) {
@@ -738,8 +739,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       }
       let sceneText: string | undefined;
       if (activeSession.sceneText !== null && (activeSession.baseSceneText === null || activeSession.sceneText !== activeSession.baseSceneText)) {
-        if (activeSession.sceneError) throw new Error(`The Excalidraw scene is read-only: ${activeSession.sceneError}`);
-        if (new TextEncoder().encode(activeSession.sceneText).byteLength > MAX_SCENE_BYTES) throw new Error('Excalidraw scene exceeds the Host 2 MiB document limit. Export the raw scene, reduce embedded image data, or import a smaller scene.');
+        if (activeSession.sceneError) throw new Error(`Excalidrawシーンは読み取り専用です: ${activeSession.sceneError}`);
+        if (new TextEncoder().encode(activeSession.sceneText).byteLength > MAX_SCENE_BYTES) throw new Error('ExcalidrawシーンがHostの2 MiB上限を超えています。生シーンをエクスポートし、埋め込み画像を小さくするか、より小さなシーンをインポートしてください。');
         sceneText = activeSession.sceneText;
         writes.push({ path: activeSession.scenePath, content: sceneText, encoding: 'utf8' });
         reads.push({ path: activeSession.scenePath, revision: currentSceneFile?.revision ?? null });
@@ -753,10 +754,10 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
           continue;
         }
         const assetFile = latest.files.get(asset.path);
-        if (!assetFile) throw new Error(`Referenced asset ${asset.path} is missing. Restore it through Host bundle import before preparing this Board.`);
+        if (!assetFile) throw new Error(`参照アセット ${asset.path} が見つかりません。ボードを準備する前にHostバンドルのインポートで復元してください。`);
         reads.push({ path: asset.path, revision: assetFile.revision });
       }
-      if (!writes.length) { setNotice('No local changes to prepare.'); return; }
+      if (!writes.length) { setNotice('準備するローカル変更はありません。'); return; }
       const operationId = crypto.randomUUID();
       const change: ChangeIntent = {
         operationId,
@@ -764,10 +765,10 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         baseWorkspaceRevision: latest.workspace.sourceRevision,
         reads: reads.sort((left, right) => left.path.localeCompare(right.path)),
         writes: writes.sort((left, right) => left.path.localeCompare(right.path)),
-        message: `Update Atlas Board: ${activeSession.board.name}`,
+        message: `Atlasボードを更新: ${activeSession.board.name}`,
         kind: staged ? 'asset' : 'document',
       };
-      setNotice(staged ? 'Uploading image bytes in bounded Host chunks…' : 'Preparing this document change in the Host journal…');
+      setNotice(staged ? '画像データを分割してHostへアップロードしています…' : 'ドキュメント変更をHostジャーナルに準備しています…');
       let preparedChange;
       if (staged) {
         const start = await host.beginAsset({
@@ -780,13 +781,13 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
           contentType: staged.mime,
         });
         if (start.operationId !== operationId || start.workspaceId !== latest.workspace.workspaceId || start.path !== staged.path || start.totalBytes !== staged.bytes.byteLength) {
-          throw new Error('Host image upload acknowledgement does not match the staged asset.');
+          throw new Error('Host画像アップロードの応答が、準備中のアセットと一致しません。');
         }
         for (let offset = start.nextOffset; offset < staged.bytes.byteLength;) {
           const part = staged.bytes.subarray(offset, Math.min(offset + ASSET_CHUNK_BYTES, staged.bytes.byteLength));
           const receipt = await host.appendAsset({ uploadId: start.uploadId, offset, content: bytesToBase64(part) });
           if (receipt.uploadId !== start.uploadId || receipt.nextOffset !== offset + part.byteLength || receipt.receivedBytes !== offset + part.byteLength) {
-            throw new Error('Host returned a mismatched image chunk acknowledgement.');
+            throw new Error('Hostの画像チャンク応答が一致しません。');
           }
           offset = receipt.nextOffset;
         }
@@ -796,7 +797,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         || preparedChange.durableAck.workspaceId !== latest.workspace.workspaceId
         || !Number.isSafeInteger(preparedChange.durableAck.journalSequence)
         || preparedChange.durableAck.journalSequence < 1) {
-        throw new Error('Host returned a durable journal acknowledgement for a different operation or workspace.');
+        throw new Error('Hostの永続化ジャーナルACKが、異なる操作またはワークスペースを示しています。');
       }
       const pending: PreparedOperation = {
         boardId: activeSession.board.boardId,
@@ -810,10 +811,11 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         changes: preparedChange.changes.map((item) => ({ path: item.path, operation: item.operation, bytes: item.bytes })),
       };
       publishPrepared(pending);
-      setNotice(`Host journal ACK ${preparedChange.durableAck.journalSequence} received for ${operationId}. Awaiting Host review and commit.`);
+      setNotice(`HostジャーナルACKを受信しました（操作ID: ${operationId}、連番: ${preparedChange.durableAck.journalSequence}）。Hostのレビューとコミットを待っています。`);
     } catch (error) {
       const code = hostErrorCode(error);
-      setNotice(`${code === 'REVISION_CONFLICT' ? 'Revision conflict' : code === 'QUOTA_EXCEEDED' ? 'Storage quota exceeded' : 'Prepare failed'}: ${errorMessage(error)}`);
+      const failure = code === 'REVISION_CONFLICT' ? 'リビジョンの競合' : code === 'QUOTA_EXCEEDED' ? '保存容量の上限超過' : '変更の準備に失敗';
+      setNotice(`${failure}${code ? ` (${code})` : ''}: ${errorMessage(error)}`);
     } finally {
       preparingRef.current = false;
       if (retryAfterConcurrentEdit) setAutoPrepareRetry((value) => value + 1);
@@ -842,7 +844,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     replaceSession(activeSession.board.boardId, nextSession);
     historyRef.current.get(activeSession.board.boardId)?.replaceFromHost(keepDraft ? nextSession.board : remote.board);
     if (!keepDraft) setActiveViewId(nextSession.board.views[0]?.id ?? null);
-    setNotice(keepDraft ? 'Kept the local draft on top of the latest Host revision. Review its changes before preparing.' : 'Reloaded the latest Host version.');
+    setNotice(keepDraft ? '最新のHostリビジョンにローカル下書きを重ねました。変更内容を確認してから準備してください。' : '最新のHostバージョンを読み込みました。');
   };
 
   const undoRedo = (direction: 'undo' | 'redo') => {
@@ -867,12 +869,12 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     event.currentTarget.value = '';
     if (!file) return;
     try {
-      if (file.size > MAX_BOARD_BYTES) throw new Error('Atlas Board import exceeds the 2 MiB document limit.');
+      if (file.size > MAX_BOARD_BYTES) throw new Error('Atlasボードのインポートファイルが2 MiBの上限を超えています。');
       const imported: unknown = JSON.parse(await file.text());
       assertBoardIntegrity(imported);
       for (const asset of imported.assets) {
         const assetFile = filesRef.current.get(asset.path);
-        if (!assetFile) throw new Error(`Asset ${asset.path} is not present in this Host Workspace. Use Host bundle import for Boards with attachments.`);
+        if (!assetFile) throw new Error(`アセット ${asset.path} はこのHostワークスペースにありません。添付ファイルを含むボードはHostバンドルからインポートしてください。`);
         await verifyAssetBytes(asset, await readFileBytes(host, assetFile));
       }
       const board = { ...imported, boardId: crypto.randomUUID(), revision: 0 } as BoardDocument;
@@ -884,8 +886,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       publishSessions(next);
       setActiveBoardId(board.boardId);
       setActiveViewId(board.views[0]?.id ?? null);
-      setNotice(`Imported as ${session.path}; the existing Host Workspace was not changed.`);
-    } catch (error) { setNotice(`Atlas import rejected: ${errorMessage(error)}`); }
+      setNotice(`${session.path}としてインポートしました。既存のHostワークスペースは変更されていません。`);
+    } catch (error) { setNotice(`Atlasボードをインポートできませんでした: ${errorMessage(error)}`); }
   };
 
   const importScene = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -893,7 +895,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     event.currentTarget.value = '';
     if (!file || !activeSession) return;
     try {
-      if (file.size > MAX_SCENE_BYTES) throw new Error('Excalidraw scene exceeds the Host 2 MiB document limit. Reduce embedded image data before importing.');
+      if (file.size > MAX_SCENE_BYTES) throw new Error('ExcalidrawシーンがHostの2 MiB上限を超えています。埋め込み画像を小さくしてからインポートしてください。');
       const sceneText = await file.text();
       const inspection = inspectExcalidrawScene(sceneText);
       if (inspection.status === 'read-only') throw new Error(inspection.message);
@@ -901,8 +903,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
       replaceSession(activeSession.board.boardId, { ...sessionWithoutSceneError, sceneText });
       const freeform = activeSession.board.views.find((view) => view.kind === 'freeform');
       if (freeform) void activateView(activeSession.board.boardId, freeform.id);
-      setNotice(`Imported scene into the local draft for ${activeSession.scenePath}.`);
-    } catch (error) { setNotice(`Excalidraw import rejected: ${errorMessage(error)}`); }
+      setNotice(`シーンを${activeSession.scenePath}のローカル下書きにインポートしました。`);
+    } catch (error) { setNotice(`Excalidrawシーンをインポートできませんでした: ${errorMessage(error)}`); }
   };
 
   const addImage = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -910,16 +912,16 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     event.currentTarget.value = '';
     if (!file || !activeSession) return;
     if (stagedAssetRef.current && stagedAssetRef.current.boardId !== activeSession.board.boardId) {
-      setNotice('Prepare or remove the already staged image before adding one to another Board.');
+      setNotice('別のボードに画像を追加する前に、準備中の画像を送信するか取り除いてください。');
       return;
     }
     try {
-      if (file.size === 0 || file.size > MAX_IMAGE_BYTES) throw new Error('Image size must be between 1 byte and 10 MiB.');
-      if (!IMAGE_MIME_TYPES.has(file.type as Asset['mime'])) throw new Error(`Unsupported image type ${file.type || '(unknown)'}. Choose PNG, JPEG, WebP, or SVG.`);
+      if (file.size === 0 || file.size > MAX_IMAGE_BYTES) throw new Error('画像サイズは1バイト以上、10 MiB以下にしてください。');
+      if (!IMAGE_MIME_TYPES.has(file.type as Asset['mime'])) throw new Error(`画像形式 ${file.type || '(不明)'} は対応していません。PNG、JPEG、WebP、SVGを選んでください。`);
       const mime = file.type as Asset['mime'];
       const originalBytes = new Uint8Array(await file.arrayBuffer());
       const bytes = sanitizeImageBytes(originalBytes, mime);
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Sanitized image size must be within the 10 MiB limit.');
+      if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('安全化後の画像サイズは10 MiB以下にしてください。');
       const digest = await sha256Hex(bytes);
       const path = `documents/assets/${digest}.${assetExtension(mime)}`;
       const existing = filesRef.current.get(path);
@@ -932,8 +934,8 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
         id: createAtlasId('card'), kind: 'image', assetId: asset.id, annotation: file.name,
         position: { x: 120 + offset, y: 120 + offset }, width: 320, height: 240,
       }, asset);
-      setNotice(existing ? 'Added an image card using the matching content-addressed asset.' : `Added image ${file.name}; prepare it with the Board change to transfer bounded chunks.`);
-    } catch (error) { setNotice(`Image import rejected: ${errorMessage(error)}`); }
+      setNotice(existing ? '同じコンテンツアドレスのアセットを使って画像カードを追加しました。' : `画像 ${file.name} を追加しました。ボードの変更を準備すると、分割してHostへ送信します。`);
+    } catch (error) { setNotice(`画像をインポートできませんでした: ${errorMessage(error)}`); }
   };
 
   const exportBoard = () => {
@@ -945,32 +947,32 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
     if (!activeSession) return;
     try {
       if (activeSession.sceneText === null && activeSession.sceneError) {
-        setNotice('The Host scene could not be read, so there is no raw scene available to export. Import a supported scene to replace it.');
+        setNotice('Hostシーンを読み込めなかったため、エクスポートできる生データがありません。対応するシーンをインポートして置き換えてください。');
         return;
       }
       const sceneText = activeSession.sceneText ?? await createEmptyExcalidrawScene();
       downloadText(`${activeSession.board.boardId}.excalidraw`, sceneText, 'application/json;charset=utf-8');
-    } catch (error) { setNotice(`Excalidraw export failed: ${errorMessage(error)}`); }
+    } catch (error) { setNotice(`Excalidrawのエクスポートに失敗しました: ${errorMessage(error)}`); }
   };
 
   const exportVector = async (format: 'png' | 'svg') => {
     if (!activeSession) return;
-    if (activeSession.sceneError) { setNotice(`Canvas export is unavailable: ${activeSession.sceneError}`); return; }
+    if (activeSession.sceneError) { setNotice(`Canvasをエクスポートできません: ${activeSession.sceneError}`); return; }
     try {
-      if (activeSession.sceneText === null && activeSession.sceneError) throw new Error('The Host scene could not be read. Import a supported scene before exporting PNG or SVG.');
+      if (activeSession.sceneText === null && activeSession.sceneError) throw new Error('Hostシーンを読み込めませんでした。PNGまたはSVGのエクスポート前に、対応するシーンをインポートしてください。');
       const sceneText = activeSession.sceneText ?? await createEmptyExcalidrawScene();
       const cardExport = await buildAtlasCardExportOverlay(activeSession.board, async (asset) => {
         const staged = stagedAssetRef.current;
         if (staged?.boardId === activeSession.board.boardId && staged.path === asset.path) return staged.bytes;
         const file = filesRef.current.get(asset.path);
-        if (!file) throw new Error(`Image asset ${asset.path} is not available in the Host workspace.`);
+        if (!file) throw new Error(`画像アセット ${asset.path} はHostワークスペースにありません。`);
         return readFileBytes(host, file);
       });
       const blob = await exportExcalidrawScene(sceneText, format, cardExport.overlay);
       downloadBlob(`${activeSession.board.boardId}.${format}`, blob);
       const missing = cardExport.unavailableImagePaths.length;
-      setNotice(`${format.toUpperCase()} export downloaded${missing ? ` with ${missing} unavailable image card${missing === 1 ? '' : 's'} represented by a placeholder` : ''}. Export is a local file, not a Host commit.`);
-    } catch (error) { setNotice(`${format.toUpperCase()} export failed: ${errorMessage(error)}`); }
+      setNotice(`${format.toUpperCase()}をダウンロードしました${missing ? `。画像を読み込めなかったカード ${missing} 件はプレースホルダーで表示しています` : ''}。ローカルへのエクスポートであり、Hostへのコミットではありません。`);
+    } catch (error) { setNotice(`${format.toUpperCase()}のエクスポートに失敗しました: ${errorMessage(error)}`); }
   };
 
   const openStructuredCard = (cardId: string) => {
@@ -992,22 +994,22 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
 
   return <div className="atlas-plugin" onKeyDown={onMainKeyDown}>
     <header className="atlas-app-header">
-      <div className="atlas-brand"><span className="atlas-brand-mark" aria-hidden="true">A</span><div><strong>Atlas</strong><small>Graph and canvas workspace</small></div></div>
+      <div className="atlas-brand"><span className="atlas-brand-mark" aria-hidden="true">A</span><div><strong>Atlas</strong><small>グラフとキャンバスの作業領域</small></div></div>
       <div className="atlas-header-actions">
-        <button type="button" onClick={() => void createBoard()}>＋ New Board</button>
-        <button type="button" onClick={() => boardImportRef.current?.click()}>Import Board</button>
-        <button type="button" onClick={() => void refreshWorkspace()} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh Host files'}</button>
+        <button type="button" onClick={() => void createBoard()}>＋ 新しいボード</button>
+        <button type="button" onClick={() => boardImportRef.current?.click()}>ボードをインポート</button>
+        <button type="button" onClick={() => void refreshWorkspace()} disabled={refreshing}>{refreshing ? '更新中…' : 'Hostファイルを更新'}</button>
         <span className={`atlas-save-indicator ${prepared ? 'is-pending' : dirty ? 'is-dirty' : 'is-clean'}`} role="status">
-          {prepared ? 'Prepared · awaiting Host commit' : dirty ? 'Local draft changes' : 'Host baseline loaded'}
+          {prepared ? '準備済み・Hostコミット待ち' : dirty ? 'ローカル下書きに変更あり' : 'Hostの基準状態を読み込み済み'}
         </span>
       </div>
       <input ref={boardImportRef} className="atlas-hidden-input" type="file" accept=".atlas.json,application/json" onChange={(event) => void importBoard(event)} />
     </header>
 
-    {fatalError && <div className="atlas-alert atlas-alert-error" role="alert">{fatalError}<button type="button" onClick={() => setFatalError('')}>Dismiss</button></div>}
-    {loading ? <div className="atlas-loading" role="status">Loading Host workspace files…</div> : <div className="atlas-shell">
-      <nav className="atlas-board-nav" aria-label="Atlas Boards">
-        <div className="atlas-nav-heading"><strong>Boards</strong><small>{sessions.size}</small></div>
+    {fatalError && <div className="atlas-alert atlas-alert-error" role="alert">{fatalError}<button type="button" onClick={() => setFatalError('')}>閉じる</button></div>}
+    {loading ? <div className="atlas-loading" role="status">Hostワークスペースのファイルを読み込んでいます…</div> : <div className="atlas-shell">
+      <nav className="atlas-board-nav" aria-label="Atlasボード">
+        <div className="atlas-nav-heading"><strong>ボード</strong><small>{sessions.size}</small></div>
         {[...sessions.values()].map((session) => <button
           type="button"
           key={session.board.boardId}
@@ -1016,85 +1018,85 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
           title={session.path}
         >
           <span className="atlas-board-tab-title">{session.board.name}</span>
-          <small>{isSessionDirty(session) ? 'Draft' : 'Loaded'}</small>
+          <small>{isSessionDirty(session) ? '下書き' : '読み込み済み'}</small>
         </button>)}
-        {sessions.size === 0 && <p className="atlas-muted">No Atlas Boards in this Workspace.</p>}
+        {sessions.size === 0 && <p className="atlas-muted">このワークスペースにAtlasボードはありません。</p>}
         {invalidFiles.length > 0 && <section className="atlas-invalid-files">
-          <strong>Read-only diagnostics ({invalidFiles.length})</strong>
+          <strong>読み取り専用の診断情報（{invalidFiles.length}）</strong>
           {invalidFiles.map((item) => <div key={`${item.path}:${item.revision}`}>
             <span>{item.path}: {item.message}</span>
-            {item.rawText && <button type="button" onClick={() => downloadText(item.path.split('/').at(-1) ?? 'invalid.atlas.json', item.rawText)}>Download raw</button>}
+            {item.rawText && <button type="button" onClick={() => downloadText(item.path.split('/').at(-1) ?? 'invalid.atlas.json', item.rawText)}>生データをダウンロード</button>}
           </div>)}
         </section>}
       </nav>
 
       <main className="atlas-main">
         {!activeSession ? <section className="atlas-empty-workspace">
-          <div className="atlas-empty-symbol">◇</div><h1>Start an Atlas Board</h1>
-          <p>Atlas stores manual graph, canvas, and timeline documents through the Host. The Host owns review and commit.</p>
-          <button type="button" onClick={() => void createBoard()}>Create a Board</button>
+          <div className="atlas-empty-symbol">◇</div><h1>Atlasボードを作成</h1>
+          <p>Atlasは手動のグラフ、キャンバス、タイムライン文書をHost経由で保存します。レビューとコミットはHostが行います。</p>
+          <button type="button" onClick={() => void createBoard()}>ボードを作成</button>
         </section> : <>
           <section className="atlas-board-header">
             <div className="atlas-board-title-wrap">
-              <label className="atlas-board-name-label">Board name
-                <input key={`${activeSession.board.boardId}:${activeSession.board.name}`} defaultValue={activeSession.board.name} onBlur={handleNewBoardName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} aria-label="Board name" />
+              <label className="atlas-board-name-label">ボード名
+                <input key={`${activeSession.board.boardId}:${activeSession.board.name}`} defaultValue={activeSession.board.name} onBlur={handleNewBoardName} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) event.currentTarget.blur(); }} aria-label="ボード名" />
               </label>
               <small className="atlas-path-label">{activeSession.path} · {activeSession.board.boardId}</small>
             </div>
             <div className="atlas-toolbar atlas-board-toolbar">
-              <button type="button" onClick={() => undoRedo('undo')} disabled={!activeHistory?.canUndo}>Undo</button>
-              <button type="button" onClick={() => undoRedo('redo')} disabled={!activeHistory?.canRedo}>Redo</button>
-              <button type="button" className="atlas-primary-button" onClick={() => void prepareChanges()} disabled={!canPrepare}>{prepared ? 'Host review pending' : 'Prepare for Host review'}</button>
-              <button type="button" onClick={exportBoard}>Export .atlas.json</button>
-              <button type="button" onClick={() => void exportScene()}>Export .excalidraw</button>
+              <button type="button" onClick={() => undoRedo('undo')} disabled={!activeHistory?.canUndo}>元に戻す</button>
+              <button type="button" onClick={() => undoRedo('redo')} disabled={!activeHistory?.canRedo}>やり直す</button>
+              <button type="button" className="atlas-primary-button" onClick={() => void prepareChanges()} disabled={!canPrepare}>{prepared ? 'Hostレビュー待ち' : 'Hostレビュー用に準備'}</button>
+              <button type="button" onClick={exportBoard}>.atlas.jsonをエクスポート</button>
+              <button type="button" onClick={() => void exportScene()}>.excalidrawをエクスポート</button>
               <button type="button" onClick={() => void exportVector('png')}>PNG</button>
               <button type="button" onClick={() => void exportVector('svg')}>SVG</button>
             </div>
           </section>
 
           <section className="atlas-view-header">
-            <div className="atlas-view-tabs" role="tablist" aria-label="Board views">
-              {activeSession.board.views.map((view) => <button type="button" key={view.id} role="tab" aria-selected={view.id === activeView?.id} className={view.id === activeView?.id ? 'is-active' : ''} onClick={() => setView(view.id)}>{view.name}<small>{view.kind}</small></button>)}
+            <div className="atlas-view-tabs" role="tablist" aria-label="ボードのビュー">
+              {activeSession.board.views.map((view) => <button type="button" key={view.id} role="tab" aria-selected={view.id === activeView?.id} className={view.id === activeView?.id ? 'is-active' : ''} onClick={() => setView(view.id)}>{view.name}<small>{{ graph: 'グラフ', freeform: 'キャンバス', board: 'ボード', timeline: 'タイムライン', storyboard: 'ストーリーボード' }[view.kind]}</small></button>)}
             </div>
             <div className="atlas-view-actions">
-              {activeView && <label>View name<input key={`${activeView.id}:${activeView.name}`} defaultValue={activeView.name} aria-label="View name" onBlur={(event) => renameView(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></label>}
-              <label>Add view<select value="" onChange={(event) => { if (event.currentTarget.value) createView(event.currentTarget.value as View['kind']); event.currentTarget.value = ''; }}>
-                <option value="">Choose…</option><option value="graph">Graph</option><option value="freeform">Canvas</option><option value="board">Kanban</option><option value="timeline">Timeline</option><option value="storyboard">Storyboard</option>
+              {activeView && <label>ビュー名<input key={`${activeView.id}:${activeView.name}`} defaultValue={activeView.name} aria-label="ビュー名" onBlur={(event) => renameView(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) event.currentTarget.blur(); }} /></label>}
+              <label>ビューを追加<select value="" onChange={(event) => { if (event.currentTarget.value) createView(event.currentTarget.value as View['kind']); event.currentTarget.value = ''; }}>
+                <option value="">選択…</option><option value="graph">グラフ</option><option value="freeform">キャンバス</option><option value="board">カンバン</option><option value="timeline">タイムライン</option><option value="storyboard">ストーリーボード</option>
               </select></label>
-              <button type="button" onClick={removeView} disabled={activeSession.board.views.length <= 1}>Delete view</button>
+              <button type="button" onClick={removeView} disabled={activeSession.board.views.length <= 1}>ビューを削除</button>
             </div>
           </section>
 
           {activeSession.conflict && <section className="atlas-conflict" role="alert">
-            <div><strong>Host revision conflict</strong><p>{activeSession.path} changed outside this draft. Choose which document version to continue from.</p></div>
-            <button type="button" onClick={() => acceptConflict(false)}>Reload Host version</button>
-            <button type="button" onClick={() => acceptConflict(true)}>Keep my draft on latest revision</button>
+            <div><strong>Hostリビジョンの競合</strong><p>{activeSession.path}がこの下書き以外で変更されました。続ける文書のバージョンを選択してください。</p></div>
+            <button type="button" onClick={() => acceptConflict(false)}>Hostのバージョンを再読み込み</button>
+            <button type="button" onClick={() => acceptConflict(true)}>最新リビジョンに下書きを保持</button>
           </section>}
-          {activeSession.externalDeleted && <section className="atlas-conflict" role="alert"><strong>This Board was removed from the Host Workspace; its local draft remains in memory.</strong><button type="button" onClick={() => void prepareChanges()}>Create it again through Host review</button></section>}
-          {activeSession.sceneError && <div className="atlas-alert atlas-alert-warning" role="status">Canvas is read-only: {activeSession.sceneError}{activeSession.sceneText !== null ? ' Raw scene export remains available.' : ''}</div>}
+          {activeSession.externalDeleted && <section className="atlas-conflict" role="alert"><strong>このボードはHostワークスペースから削除されました。ローカル下書きはメモリ上に残っています。</strong><button type="button" onClick={() => void prepareChanges()}>Hostレビューを通じて再作成</button></section>}
+          {activeSession.sceneError && <div className="atlas-alert atlas-alert-warning" role="status">Canvasは読み取り専用です: {activeSession.sceneError}{activeSession.sceneText !== null ? ' 生シーンをエクスポートできます。' : ''}</div>}
 
-          <section className="atlas-command-toolbar" aria-label="Atlas commands">
+          <section className="atlas-command-toolbar" aria-label="Atlasの操作">
             {activeView?.kind === 'freeform' && <>
-              <button type="button" onClick={createTextCard}>＋ Text card</button>
-              <button type="button" onClick={createSourceCard} disabled={sourcePanel?.state !== 'ready'}>＋ Source card</button>
-              <button type="button" onClick={() => assetInputRef.current?.click()} disabled={Boolean(stagedAsset && stagedAsset.boardId !== activeSession.board.boardId)}>＋ Image card</button>
-              <button type="button" onClick={() => sceneImportRef.current?.click()}>Import .excalidraw</button>
+              <button type="button" onClick={createTextCard}>＋ テキストカード</button>
+              <button type="button" onClick={createSourceCard} disabled={sourcePanel?.state !== 'ready'}>＋ ソースカード</button>
+              <button type="button" onClick={() => assetInputRef.current?.click()} disabled={Boolean(stagedAsset && stagedAsset.boardId !== activeSession.board.boardId)}>＋ 画像カード</button>
+              <button type="button" onClick={() => sceneImportRef.current?.click()}>.excalidrawをインポート</button>
               <input ref={assetInputRef} className="atlas-hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => void addImage(event)} />
               <input ref={sceneImportRef} className="atlas-hidden-input" type="file" accept=".excalidraw,application/json" onChange={(event) => void importScene(event)} />
             </>}
             {activeView?.kind === 'graph' && <>
-              <label>Provider<select value={providerId} onChange={(event) => setProviderId(event.currentTarget.value)} disabled={providers.length === 0}>
-                <option value="">Select provider</option>{providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.id} · {provider.version}</option>)}
+              <label>Providerを選択<select value={providerId} onChange={(event) => setProviderId(event.currentTarget.value)} disabled={providers.length === 0}>
+                <option value="">Providerを選択</option>{providers.map((provider) => <option value={provider.id} key={provider.id}>{provider.id} · {provider.version}</option>)}
               </select></label>
-              <button type="button" onClick={() => void connectProvider()} disabled={!canConnect || !workspace || Boolean(graph?.providerIds.includes(providerId))}>Connect selected provider</button>
-              {graph?.providerIds.map((connectedId) => <button type="button" key={connectedId} onClick={() => void disconnectProvider(connectedId)}>Disconnect {connectedId}</button>)}
+              <button type="button" onClick={() => void connectProvider()} disabled={!canConnect || !workspace || Boolean(graph?.providerIds.includes(providerId))}>選択したProviderを接続</button>
+              {graph?.providerIds.map((connectedId) => <button type="button" key={connectedId} onClick={() => void disconnectProvider(connectedId)}>{connectedId}を切断</button>)}
               {providerStatus && <small className="atlas-status-inline">{providerStatus}</small>}
               {providerError && <small className="atlas-error-inline" role="alert">{providerError}</small>}
             </>}
           </section>
 
           {prepared && <section className="atlas-prepared" role="status">
-            <div><strong>Durable Host journal ACK received.</strong><p>Operation {prepared.operationId} · sequence {prepared.journalSequence} · base revision {prepared.preparedAtRevision}. Host review and commit are pending.</p></div>
+            <div><strong>Hostジャーナルの永続化ACKを受信しました。</strong><p>操作ID {prepared.operationId} · 連番 {prepared.journalSequence} · 基準リビジョン {prepared.preparedAtRevision}。Hostのレビューとコミットを待っています。</p></div>
             <ul>{prepared.changes.map((change) => <li key={change.path}>{change.operation} {change.path} · {change.bytes} bytes</li>)}</ul>
           </section>}
 
@@ -1116,7 +1118,7 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
               onFocusDone={() => setFocusNodeId(null)}
             />}
             {activeView?.kind === 'freeform' && <div className="atlas-canvas-shell">
-              {activeSession.sceneError ? <div className="atlas-scene-readonly"><p>{activeSession.sceneError}</p>{activeSession.sceneText === null ? <p>Raw scene content is unavailable. Import a supported scene to replace it.</p> : <pre>{activeSession.sceneText.slice(0, 6000)}</pre>}</div> : activeSession.sceneText === null ? <div className="atlas-loading" role="status">Loading Canvas tools…</div> : <FreeformView
+              {activeSession.sceneError ? <div className="atlas-scene-readonly"><p>{activeSession.sceneError}</p>{activeSession.sceneText === null ? <p>生シーンを読み込めません。対応するシーンをインポートして置き換えてください。</p> : <pre>{activeSession.sceneText.slice(0, 6000)}</pre>}</div> : activeSession.sceneText === null ? <div className="atlas-loading" role="status">Canvasを読み込んでいます…</div> : <FreeformView
                 board={activeSession.board}
                 view={activeView}
                 sceneText={activeSession.sceneText}
@@ -1137,28 +1139,28 @@ export function AtlasPlugin({ host }: AtlasPluginProps) {
             />}
           </section>
 
-          {assetErrors.length > 0 && <section className="atlas-alert atlas-alert-warning" role="status"><strong>Asset diagnostics</strong><ul>{assetErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
-          {stagedAsset?.boardId === activeSession.board.boardId && <p className="atlas-staged-label">Image staged locally: {stagedAsset.path} · {stagedAsset.bytes.byteLength} bytes · it will be sent in bounded chunks with the next Host prepare.</p>}
+          {assetErrors.length > 0 && <section className="atlas-alert atlas-alert-warning" role="status"><strong>アセットの診断情報</strong><ul>{assetErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
+          {stagedAsset?.boardId === activeSession.board.boardId && <p className="atlas-staged-label">画像をローカルで準備しました: {stagedAsset.path} · {stagedAsset.bytes.byteLength}バイト · 次回Hostレビュー用に準備すると分割して送信されます。</p>}
         </>}
       </main>
 
       <aside className="atlas-host-sidebar">
         <section className="atlas-panel-section">
-          <h2>Host state</h2>
-          <p><strong>Workspace:</strong> {workspace?.workspaceId ?? 'Loading'}</p>
-          <p><strong>Source revision:</strong> {workspace?.sourceRevision ?? '—'}</p>
-          <p><strong>Files:</strong> {files.size}</p>
-          <p><strong>Change authority:</strong> Host review and commit</p>
-          <p className="atlas-muted">Atlas only prepares document intents. A durable journal ACK does not mean the Host has committed them.</p>
+          <h2>Hostの状態</h2>
+          <p><strong>ワークスペース:</strong> {workspace?.workspaceId ?? '読み込み中'}</p>
+          <p><strong>ソースリビジョン:</strong> {workspace?.sourceRevision ?? '—'}</p>
+          <p><strong>ファイル数:</strong> {files.size}</p>
+          <p><strong>変更の確定:</strong> Hostのレビューとコミット</p>
+          <p className="atlas-muted">Atlasはドキュメント変更をHostに準備します。永続化ジャーナルACKはHostのコミット完了を意味しません。</p>
           {notice && <div className="atlas-notice" role="status">{notice}</div>}
         </section>
-        {sourcePanel && <section className="atlas-panel-section atlas-source-inspector" aria-label="Source Inspector">
-          <div className="atlas-source-heading"><h2>Source Inspector</h2><button type="button" onClick={() => setSourcePanel(null)} aria-label="Close source inspector">×</button></div>
-          <p className="atlas-source-ref">{sourcePanel.source.path}<br />revision {sourcePanel.source.revision}<br />workspace {sourcePanel.source.workspaceId}</p>
-          {sourcePanel.state === 'loading' ? <p>Opening the exact pinned Host revision…</p>
+        {sourcePanel && <section className="atlas-panel-section atlas-source-inspector" aria-label="ソースの詳細">
+          <div className="atlas-source-heading"><h2>ソースの詳細</h2><button type="button" onClick={() => setSourcePanel(null)} aria-label="ソースの詳細を閉じる">×</button></div>
+          <p className="atlas-source-ref">{sourcePanel.source.path}<br />リビジョン {sourcePanel.source.revision}<br />ワークスペース {sourcePanel.source.workspaceId}</p>
+          {sourcePanel.state === 'loading' ? <p>固定したHostリビジョンを開いています…</p>
             : sourcePanel.state === 'ready' ? <>
-              <p className="atlas-source-state is-ready">Pinned source revision is available.</p>
-              <button type="button" onClick={createSourceCard} disabled={!activeSession}>Create Source card</button>
+              <p className="atlas-source-state is-ready">固定したソースリビジョンを利用できます。</p>
+              <button type="button" onClick={createSourceCard} disabled={!activeSession}>ソースカードを作成</button>
               <pre className="atlas-source-content">{sourcePanel.content}</pre>
             </>
               : <p className={`atlas-source-state is-${sourcePanel.state}`}>{sourceStateLabel(sourcePanel.state)}: {sourcePanel.message}</p>}
@@ -1180,28 +1182,28 @@ async function collectProviderPages<T extends { snapshot: SnapshotRef; items: un
   for (let count = 0; count < 100_000; count += 1) {
     const result = await host.providerCall(leaseId, { method, params: { ...(cursor ? { cursor } : {}), limit: 500 } });
     if (!result || !Array.isArray(result.items) || !('snapshot' in result) || !('complete' in result) || !('nextCursor' in result)) {
-      throw new Error(`Provider ${method} returned an invalid page.`);
+      throw new Error(`Providerの${method}応答ページが不正です。`);
     }
-    if (!sameSnapshot(result.snapshot, snapshot)) throw new Error(`Provider ${method} changed snapshot during pagination.`);
+    if (!sameSnapshot(result.snapshot, snapshot)) throw new Error(`Providerの${method}ページ取得中にスナップショットが変わりました。`);
     const page = result as T;
     pages.push(page);
     if (page.complete && page.nextCursor === null) return pages;
-    if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error(`Provider ${method} returned an incomplete or repeated cursor.`);
+    if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error(`Providerの${method}から未完了または重複したカーソルが返されました。`);
     cursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
-  throw new Error(`Provider ${method} exceeded the pagination limit.`);
+  throw new Error(`Providerの${method}ページ数が上限を超えました。`);
 }
 
 async function assembleProviderSnapshot(entries: Map<string, ConnectedProvider>): Promise<ProviderSnapshot> {
   const ordered = [...entries.values()].sort((left, right) => left.providerId.localeCompare(right.providerId));
   const first = ordered[0];
-  if (!first) throw new Error('At least one provider snapshot is required.');
+  if (!first) throw new Error('Providerスナップショットが1つ以上必要です。');
   for (const entry of ordered.slice(1)) {
     if (entry.snapshot.workspaceId !== first.snapshot.workspaceId
       || entry.snapshot.sourceRevision !== first.snapshot.sourceRevision
       || entry.snapshot.epoch !== first.snapshot.epoch) {
-      throw new Error('Providers returned snapshots from different workspace source revisions or Host epochs.');
+      throw new Error('Providerから異なるワークスペースのソースリビジョンまたはHostエポックのスナップショットが返されました。');
     }
   }
   const snapshot: SnapshotRef = ordered.length === 1
@@ -1233,24 +1235,24 @@ function downloadBlob(filename: string, blob: Blob): void {
 
 function sourceStateLabel(state: SourcePanel['state']): string {
   switch (state) {
-    case 'missing': return 'Source missing';
-    case 'stale': return 'Pinned revision is stale';
-    case 'denied': return 'Host denied access';
-    case 'error': return 'Source unavailable';
-    case 'loading': return 'Loading';
-    case 'ready': return 'Ready';
+    case 'missing': return 'ソースが見つかりません';
+    case 'stale': return '固定したリビジョンが古くなっています';
+    case 'denied': return 'Hostがアクセスを拒否しました';
+    case 'error': return 'ソースを利用できません';
+    case 'loading': return '読み込み中';
+    case 'ready': return '利用可能';
   }
 }
 
 function providerErrorKind(error: unknown): string {
   const code = hostErrorCode(error);
-  if (code === 'PERMISSION_DENIED') return 'Provider access denied';
-  if (code === 'NOT_INSTALLED') return 'Provider not installed';
-  if (code === 'DISABLED') return 'Provider disabled';
-  if (code === 'TIMEOUT') return 'Provider timed out';
-  if (code === 'PROVIDER_FAILED') return 'Provider failed';
-  if (code === 'SNAPSHOT_STALE' || code === 'RESYNC_REQUIRED') return 'Provider snapshot stale';
-  return 'Provider unavailable';
+  if (code === 'PERMISSION_DENIED') return 'Providerへのアクセスが拒否されました';
+  if (code === 'NOT_INSTALLED') return 'Providerがインストールされていません';
+  if (code === 'DISABLED') return 'Providerは無効です';
+  if (code === 'TIMEOUT') return 'Providerがタイムアウトしました';
+  if (code === 'PROVIDER_FAILED') return 'Providerでエラーが発生しました';
+  if (code === 'SNAPSHOT_STALE' || code === 'RESYNC_REQUIRED') return 'Providerスナップショットが古くなっています';
+  return 'Providerを利用できません';
 }
 
 function hostErrorCode(error: unknown): string | undefined {
@@ -1274,14 +1276,14 @@ function stableSeed(input: string): number {
 /** ReactFlow props remain mounted only while a provider Worker is live. */
 function disabledGraphWorker(): GraphWorkerClient {
   return {
-    replaceSnapshot: async () => { throw new Error('No graph Worker is connected.'); },
-    replaceSnapshotFromPages: async () => { throw new Error('No graph Worker is connected.'); },
-    applyDelta: async () => { throw new Error('No graph Worker is connected.'); },
-    applyDeltaPages: async () => { throw new Error('No graph Worker is connected.'); },
-    search: async () => { throw new Error('No graph Worker is connected.'); },
-    neighbors: async () => { throw new Error('No graph Worker is connected.'); },
-    shortestPath: async () => { throw new Error('No graph Worker is connected.'); },
-    weakComponents: async () => { throw new Error('No graph Worker is connected.'); },
+    replaceSnapshot: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    replaceSnapshotFromPages: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    applyDelta: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    applyDeltaPages: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    search: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    neighbors: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    shortestPath: async () => { throw new Error('グラフWorkerが接続されていません。'); },
+    weakComponents: async () => { throw new Error('グラフWorkerが接続されていません。'); },
     cancelAll: () => undefined,
     close: () => undefined,
   };
