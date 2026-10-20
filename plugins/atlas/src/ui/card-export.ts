@@ -1,5 +1,5 @@
 import type { Asset, BoardDocument } from '@scriptorium-atlas/contracts';
-import type { CanvasExportElementSkeleton, CanvasExportFile, CanvasExportOverlay } from '@scriptorium-atlas/canvas/io';
+import type { CanvasExportElementSkeleton, CanvasExportFile, CanvasExportImageMimeType, CanvasExportOverlay } from '@scriptorium-atlas/canvas/io';
 import { imageDataUrl } from './host-utils.js';
 import { sanitizeImageBytes, verifyAssetBytes } from './asset-media.js';
 
@@ -9,6 +9,48 @@ export type AtlasCardExportResult = {
   overlay: CanvasExportOverlay;
   unavailableImagePaths: string[];
 };
+
+type PreparedCardImage = { file: CanvasExportFile; width: number; height: number };
+
+async function prepareCardImage(asset: Asset, readAsset: AtlasCardAssetReader): Promise<PreparedCardImage> {
+  const originalBytes = await readAsset(asset);
+  await verifyAssetBytes(asset, originalBytes);
+  const safeBytes = sanitizeImageBytes(originalBytes, asset.mime);
+  const sourceDataUrl = imageDataUrl(safeBytes, asset.mime);
+  const probe = new Image();
+  probe.src = sourceDataUrl;
+  await probe.decode();
+  if (probe.naturalWidth <= 0 || probe.naturalHeight <= 0) throw new Error('Image dimensions are unavailable.');
+
+  let mimeType: CanvasExportImageMimeType;
+  let dataURL: string;
+  switch (asset.mime) {
+    case 'image/png':
+    case 'image/jpeg':
+    case 'image/svg+xml':
+      mimeType = asset.mime;
+      dataURL = sourceDataUrl;
+      break;
+    case 'image/webp': {
+      const canvas = document.createElement('canvas');
+      canvas.width = probe.naturalWidth;
+      canvas.height = probe.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas cannot decode this WebP image.');
+      context.drawImage(probe, 0, 0);
+      mimeType = 'image/png';
+      dataURL = canvas.toDataURL(mimeType);
+      break;
+    }
+    default:
+      throw new Error(`Unsupported image type: ${asset.mime}.`);
+  }
+  return {
+    file: { id: `atlas-export-${crypto.randomUUID()}`, mimeType, dataURL },
+    width: probe.naturalWidth,
+    height: probe.naturalHeight,
+  };
+}
 
 function cardHeading(card: BoardDocument['cards'][number]): string {
   switch (card.kind) {
@@ -118,7 +160,7 @@ export async function buildAtlasCardExportOverlay(
 ): Promise<AtlasCardExportResult> {
   const elements: CanvasExportElementSkeleton[] = [];
   const files: CanvasExportFile[] = [];
-  const imageCache = new Map<string, Promise<{ file: CanvasExportFile; width: number; height: number }>>();
+  const imageCache = new Map<string, Promise<PreparedCardImage>>();
   const includedFileIds = new Set<string>();
   const unavailableImagePaths: string[] = [];
 
@@ -138,24 +180,8 @@ export async function buildAtlasCardExportOverlay(
     }
 
     try {
-      let image = imageCache.get(asset.id);
-      if (!image) {
-        image = (async () => {
-          const originalBytes = await readAsset(asset);
-          await verifyAssetBytes(asset, originalBytes);
-          const safeBytes = sanitizeImageBytes(originalBytes, asset.mime);
-          const dataURL = imageDataUrl(safeBytes, asset.mime);
-          const probe = new Image();
-          probe.src = dataURL;
-          await probe.decode();
-          return {
-            file: { id: `atlas-export-${crypto.randomUUID()}`, mimeType: asset.mime, dataURL },
-            width: probe.naturalWidth,
-            height: probe.naturalHeight,
-          };
-        })();
-        imageCache.set(asset.id, image);
-      }
+      const image = imageCache.get(asset.id) ?? prepareCardImage(asset, readAsset);
+      if (!imageCache.has(asset.id)) imageCache.set(asset.id, image);
       const prepared = await image;
       if (!includedFileIds.has(prepared.file.id)) {
         files.push(prepared.file);
