@@ -335,6 +335,33 @@ async function run() {
     }
     report.cases.push('multi-selected-drag-persists-both-positions-and-pins');
 
+    await atlas.getByLabel('辺の始点').selectOption(firstNode.id);
+    await atlas.getByLabel('辺の終点').selectOption(secondNode.id);
+    const addVisualEdge = atlas.getByRole('button', { name: '視覚的な辺を追加' });
+    await addVisualEdge.focus();
+    await page.keyboard.press('Enter');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    let visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
+    assert.equal(visualEdges.length, 1, 'The keyboard-accessible inspector should create one visual edge.');
+    const keyboardEdgeId = visualEdges[0]?.id;
+    assert.ok(keyboardEdgeId);
+    const keyboardEdgeLabel = atlas.getByLabel('エッジのラベル');
+    await keyboardEdgeLabel.fill('Keyboard-created Atlas edge');
+    await keyboardEdgeLabel.press('Tab');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    assert.equal(board.edges.find((edge) => edge.id === keyboardEdgeId)?.label, 'Keyboard-created Atlas edge', 'Inspector keyboard edit should save a visual edge label.');
+    const deleteSelection = atlas.getByRole('button', { name: '選択項目を削除' });
+    await deleteSelection.focus();
+    await page.keyboard.press('Enter');
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
+    assert.equal(visualEdges.length, 0, 'Keyboard deletion should remove the visual edge.');
+    assert.ok(board.edges.some((edge) => edge.meaning === 'semantic'), 'Visual edge deletion should preserve Story provider edges.');
+    report.cases.push('keyboard-accessible-visual-edge-create-edit-delete');
+
     // Refit after the drag so the nodes stay in the usable canvas area and
     // outside the fixed MiniMap overlay before creating a visual edge.
     await atlas.getByRole('button', { name: '全体を表示' }).click();
@@ -343,14 +370,37 @@ async function run() {
     const flowMetrics = await flow.boundingBox();
     assert.ok(flowMetrics);
     await flow.click({ position: { x: 12, y: 12 } });
-    const nodeAfterDrag = await graphNodeOne.boundingBox();
     const minimap = atlas.locator('.react-flow__minimap');
+    const minimapBoxBeforePan = await minimap.boundingBox();
+    assert.ok(minimapBoxBeforePan);
+    await minimap.click({ position: { x: minimapBoxBeforePan.width / 2, y: minimapBoxBeforePan.height / 2 } });
+    await commitAtlasUntilClean(page, atlas);
+    await graphNodeOne.scrollIntoViewIfNeeded();
+    const nodeAfterDrag = await graphNodeOne.boundingBox();
     const minimapAfterDrag = await minimap.boundingBox();
+    const atlasFrameBox = await page.locator('iframe[title="Atlas"]').boundingBox();
+    const viewportAfterFit = page.viewportSize();
+    const [flowInner, nodeInner, minimapInner] = await Promise.all([
+      flow.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, scrollX, scrollY, innerWidth, innerHeight };
+      }),
+      graphNodeOne.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }),
+      minimap.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }),
+    ]);
     try {
       await graphNodeOne.hover();
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Could not physically hover the graph node to create an edge; node=${JSON.stringify(nodeAfterDrag)} minimap=${JSON.stringify(minimapAfterDrag)} flow=${JSON.stringify(await flow.boundingBox())}: ${detail}`);
+      const screenshotPath = `/tmp/atlas-q07-graph-${randomUUID()}.png`;
+      await page.screenshot({ path: screenshotPath, fullPage: false });
+      throw new Error(`Could not physically hover the graph node to create an edge; viewport=${JSON.stringify(viewportAfterFit)} iframe=${JSON.stringify(atlasFrameBox)} flow(main=${JSON.stringify(await flow.boundingBox())},frame=${JSON.stringify(flowInner)}) node(main=${JSON.stringify(nodeAfterDrag)},frame=${JSON.stringify(nodeInner)}) minimap(main=${JSON.stringify(minimapAfterDrag)},frame=${JSON.stringify(minimapInner)}) screenshot=${screenshotPath}: ${detail}`);
     }
     const sourceHandle = graphNodeOne.locator('.react-flow__handle.source').first();
     const targetHandle = graphNodeTwo.locator('.react-flow__handle.target').first();
@@ -359,7 +409,7 @@ async function run() {
     await sourceHandle.dragTo(targetHandle, { timeout: 15000 });
     await commitAtlasUntilClean(page, atlas);
     board = await downloadBoard(page, atlas);
-    let visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
+    visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
     assert.equal(visualEdges.length, 1, 'Dragging between node handles should create one editable visual edge.');
     const visualEdgeId = visualEdges[0]?.id;
     assert.ok(visualEdgeId);

@@ -52,6 +52,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
   const [focusRefs, setFocusRefs] = useState<Set<string> | null>(null);
   const [pathFrom, setPathFrom] = useState('');
   const [pathTo, setPathTo] = useState('');
+  const [visualEdgeFromId, setVisualEdgeFromId] = useState('');
+  const [visualEdgeToId, setVisualEdgeToId] = useState('');
   const [filterDraft, setFilterDraft] = useState(props.view.filter?.query ?? '');
   const [labelDraft, setLabelDraft] = useState('');
   const [annotationDraft, setAnnotationDraft] = useState('');
@@ -129,6 +131,8 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       label: edge.label,
       selectable: true,
       deletable: edge.meaning === 'visual',
+      focusable: true,
+      selected: selectedEdgeIds.includes(edge.id),
       animated: false,
       style: edge.meaning === 'semantic' ? { strokeDasharray: '5 4', stroke: '#675f71' } : { stroke: '#376b8d' },
       labelStyle: { fill: '#45404b', fontSize: 11 },
@@ -152,7 +156,7 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       } satisfies Edge];
     }) ?? [];
     return [...savedEdges, ...providerEdges];
-  }, [props.board.edges, props.board.nodes, props.graph?.edges, previewNodes, flowNodes]);
+  }, [props.board.edges, props.board.nodes, props.graph?.edges, previewNodes, flowNodes, selectedEdgeIds]);
 
   useEffect(() => {
     setPositions({});
@@ -237,6 +241,14 @@ function GraphCanvasBody(props: GraphCanvasProps) {
       id: createAtlasId('edge'), from: connection.source, to: connection.target, meaning: 'visual',
     } });
   }, [dispatch]);
+
+  const createVisualEdge = () => {
+    if (!props.board.nodes.some((node) => node.id === visualEdgeFromId) || !props.board.nodes.some((node) => node.id === visualEdgeToId)) return;
+    const edge = { id: createAtlasId('edge'), from: visualEdgeFromId, to: visualEdgeToId, meaning: 'visual' as const };
+    dispatch({ type: 'edge.create', edge });
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([edge.id]);
+  };
 
   const onSelectionChange = useCallback(({ nodes: selected, edges: selectedEdges }: OnSelectionChangeParams) => {
     setSelectedNodeIds(selected.map((node) => node.id));
@@ -478,6 +490,25 @@ function GraphCanvasBody(props: GraphCanvasProps) {
               </div>;
             })}
             {props.searchResult && <small className="atlas-muted">{props.searchResult.totalMatches} 件{props.searchResult.complete ? '' : ' · 上限まで表示'}</small>}
+          </div>
+        </section>
+
+        <section className="atlas-panel-section">
+          <div className="atlas-visual-edge-form" role="group" aria-label="視覚的な辺の作成">
+            <h3>視覚的な辺を作成</h3>
+            <label className="atlas-field">辺の始点
+              <select value={visualEdgeFromId} onChange={(event) => setVisualEdgeFromId(event.currentTarget.value)}>
+                <option value="">ノードを選択</option>
+                {props.board.nodes.map((node) => <option value={node.id} key={node.id}>{node.label}</option>)}
+              </select>
+            </label>
+            <label className="atlas-field">辺の終点
+              <select value={visualEdgeToId} onChange={(event) => setVisualEdgeToId(event.currentTarget.value)}>
+                <option value="">ノードを選択</option>
+                {props.board.nodes.map((node) => <option value={node.id} key={node.id}>{node.label}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={createVisualEdge} disabled={!visualEdgeFromId || !visualEdgeToId}>視覚的な辺を追加</button>
           </div>
         </section>
 

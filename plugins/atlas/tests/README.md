@@ -22,3 +22,22 @@ node plugins/atlas/tests/browser-graph-history.mjs
 ```
 
 `browser-structured-views.mjs` exercises Kanban lane and card ordering, assignment, explicit timeline axis confirmation/cancellation with unknown values, storyboard ordering, Host commit, and reload persistence using an imported board fixture.
+
+`browser-card-keyboard.mjs` verifies that Tab can select two existing Canvas cards after reload, arrow keys move and resize them, and Host commit/reload preserves their geometry:
+
+```sh
+ATLAS_HOST_ROOT=/path/to/scriptorium-atlas \
+ATLAS_E2E_CHROMIUM=/path/to/chromium \
+ATLAS_ARTIFACT_HEAD=<built-host-commit> \
+node plugins/atlas/tests/browser-card-keyboard.mjs
+```
+
+`browser-graph-interactions.mjs` uses `ATLAS_PROFILE=combined` and exercises real Story-provider search/navigation, provider node selection and grouping, physical group drag and pin persistence, keyboard edge CRUD, MiniMap navigation, viewport/layout persistence, multiple boards, and Host reload. It records an artifact commit in its report; run it against the combined Host profile:
+
+```sh
+ATLAS_PROFILE=combined \
+ATLAS_HOST_ROOT=/path/to/scriptorium-atlas \
+ATLAS_E2E_CHROMIUM=/path/to/chromium \
+ATLAS_ARTIFACT_HEAD=<built-host-commit> \
+node plugins/atlas/tests/browser-graph-interactions.mjs
+```

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { CanvasEditor } from '@scriptorium-atlas/canvas/ui';
 import type { CanvasViewport } from '@scriptorium-atlas/canvas/ui';
@@ -80,6 +80,7 @@ function CardOverlay({
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
+  const consumedFocusRequest = useRef<string | null>(null);
   const positionFor = (card: BoardDocument['cards'][number]) => {
     const moved = gesture?.cardId === card.id && gesture.kind === 'move'
       ? { x: card.position.x + gesture.dx / viewport.zoom, y: card.position.y + gesture.dy / viewport.zoom }
@@ -120,7 +121,13 @@ function CardOverlay({
   }, [board.cards, gesture, viewport.zoom, onUpdate]);
 
   useEffect(() => {
-    if (focusCardId && board.cards.some((card) => card.id === focusCardId)) setSelectedId(focusCardId);
+    if (!focusCardId) {
+      consumedFocusRequest.current = null;
+      return;
+    }
+    if (consumedFocusRequest.current === focusCardId || !board.cards.some((card) => card.id === focusCardId)) return;
+    consumedFocusRequest.current = focusCardId;
+    setSelectedId(focusCardId);
   }, [focusCardId, board.cards]);
 
   const cards = board.cards;
@@ -151,6 +158,7 @@ function CardOverlay({
         key={card.id}
         style={{ left: point.x, top: point.y, width: size.width, height: size.height }}
         onPointerDown={() => setSelectedId(card.id)}
+        onFocus={() => setSelectedId(card.id)}
         onKeyDown={(event) => {
           if (selectedId !== card.id || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
           if (event.target instanceof HTMLElement && event.target.closest('textarea,input,button')) return;
@@ -184,7 +192,23 @@ function CardOverlay({
         {card.source && <button className="atlas-card-source" type="button" onClick={() => onSource(card.source!)}>
           {card.source.path} · {card.source.revision.slice(0, 12)} · 固定したリビジョンを開く
         </button>}
-        {selectedId === card.id && <button className="atlas-card-resize" type="button" aria-label="カードのサイズを変更" onPointerDown={(event) => startGesture(event, card, 'resize')}>⌟</button>}
+        {selectedId === card.id && <button
+          className="atlas-card-resize"
+          type="button"
+          aria-label="カードのサイズを変更"
+          aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+          title="矢印キーでサイズを変更できます。Shiftキーで大きく変更します。"
+          onPointerDown={(event) => startGesture(event, card, 'resize')}
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const amount = event.shiftKey ? 40 : 10;
+            const width = card.width + (event.key === 'ArrowLeft' ? -amount : event.key === 'ArrowRight' ? amount : 0);
+            const height = card.height + (event.key === 'ArrowUp' ? -amount : event.key === 'ArrowDown' ? amount : 0);
+            onUpdate(card.id, { width: Math.max(120, width), height: Math.max(88, height) });
+          }}
+        >⌟</button>}
       </article>;
     })}
   </div>;
