@@ -58,19 +58,69 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const rawTextRef = useRef(sceneText);
+  const refreshFrameRef = useRef<number | null>(null);
   const [viewportRevision, setViewportRevision] = useState(0);
   const [controlsExpanded, setControlsExpanded] = useState(false);
 
   const updateViewport = useCallback(() => setViewportRevision((revision) => revision + 1), []);
 
+  const refreshSceneBounds = useCallback(() => {
+    if (refreshFrameRef.current !== null) return;
+    refreshFrameRef.current = window.requestAnimationFrame(() => {
+      refreshFrameRef.current = null;
+      const api = apiRef.current;
+      const container = rootRef.current?.querySelector<HTMLElement>(".excalidraw-container");
+      if (!api || !container) {
+        updateViewport();
+        return;
+      }
+
+      const bounds = container.getBoundingClientRect();
+      const appState = api.getAppState();
+      const moved = Math.abs(bounds.left - appState.offsetLeft) > 0.5
+        || Math.abs(bounds.top - appState.offsetTop) > 0.5;
+      if (moved) {
+        // Excalidraw caches this DOM offset for pointer hit testing. Its
+        // detectScroll listener can attach before the Host iframe's eventual
+        // scroll container is established, so refresh through its public API
+        // when ancestor layout or scrolling moves the official container.
+        api.refresh();
+        window.requestAnimationFrame(updateViewport);
+        return;
+      }
+      updateViewport();
+    });
+  }, [updateViewport]);
+
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateViewport);
-    observer.observe(root);
-    updateViewport();
-    return () => observer.disconnect();
-  }, [updateViewport]);
+    if (!root) return;
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(refreshSceneBounds);
+      // Ancestor size changes can move the editor without changing its own
+      // dimensions (for example, when a Host frame finishes laying out its
+      // toolbar). Excalidraw's own observer only tracks its container size.
+      for (let ancestor: HTMLElement | null = root; ancestor; ancestor = ancestor.parentElement) {
+        observer.observe(ancestor);
+      }
+    }
+
+    // Scroll events from nested Host containers do not bubble. Capturing at
+    // the document lets the wrapper refresh Excalidraw if its initial
+    // detectScroll target was chosen before that container became scrollable.
+    document.addEventListener("scroll", refreshSceneBounds, true);
+    refreshSceneBounds();
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("scroll", refreshSceneBounds, true);
+      if (refreshFrameRef.current !== null) {
+        window.cancelAnimationFrame(refreshFrameRef.current);
+        refreshFrameRef.current = null;
+      }
+    };
+  }, [refreshSceneBounds]);
 
   const viewport = useMemo<CanvasViewport>(() => {
     const api = apiRef.current;
@@ -135,8 +185,8 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
 
   const onApi = useCallback((api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
-    updateViewport();
-  }, [updateViewport]);
+    refreshSceneBounds();
+  }, [refreshSceneBounds]);
 
   const overlay: ReactNode = renderOverlay?.(viewport);
 
@@ -147,7 +197,7 @@ export function ExcalidrawEditor({ sceneText, onChange, readOnly, renderOverlay 
           initialData={initialData}
           excalidrawAPI={onApi}
           onChange={onExcalidrawChange}
-          onScrollChange={updateViewport}
+          onScrollChange={refreshSceneBounds}
           langCode="ja-JP"
           viewModeEnabled={readOnly}
           validateEmbeddable={() => false}
