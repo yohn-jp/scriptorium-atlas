@@ -210,7 +210,7 @@ export function PluginFrame(props: Props) {
 
   return <section className="plugin-panel" aria-label={props.plugin === 'atlas' ? 'Atlas Plugin' : 'Story Knowledge Plugin'}>
     <header><strong>{props.plugin === 'atlas' ? 'Atlas' : 'Story Knowledge'}</strong><span>{ready ? '接続中' : '未接続'}</span><button onClick={() => setVisible(value => !value)}>{visible ? 'UIを隠す' : 'UIを表示'}</button><button onClick={() => setReload(value => value+1)}>Pluginを再起動</button></header>
-    {error ? <p role="alert">{error}</p> : <iframe key={session.nonce} hidden={!visible} ref={frame} title={props.plugin === 'atlas' ? 'Atlas' : 'Story Knowledge'} src={src} onLoad={() => {
+    {error ? <p role="alert">{error}</p> : <iframe key={session.nonce} hidden={!visible} style={{colorScheme:props.theme}} ref={frame} title={props.plugin === 'atlas' ? 'Atlas' : 'Story Knowledge'} src={src} onLoad={() => {
       if (loadedNonce.current === session.nonce) setReload(value => value + 1);
       else loadedNonce.current = session.nonce;
     }} sandbox="allow-scripts allow-same-origin allow-downloads" referrerPolicy="no-referrer"/>}
