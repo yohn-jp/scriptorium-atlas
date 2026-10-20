@@ -6,6 +6,51 @@ import { performance } from 'node:perf_hooks';
 const STORY_PROVIDER_ID = 'scriptorium.story-knowledge';
 
 function instrumentWorkers() {
+  const summarizeResponse = (operation, value) => {
+    if (operation === 'search') {
+      const items = Array.isArray(value?.items) ? value.items : [];
+      return {
+        totalMatches: value?.totalMatches ?? null,
+        resultCount: items.length,
+        complete: value?.complete ?? null,
+        firstMatches: items.slice(0, 3).map((item) => ({
+          localId: item?.node?.ref?.localId ?? null,
+          label: item?.node?.label ?? null,
+          kind: item?.node?.kind ?? null,
+          matchedFields: Array.isArray(item?.matchedFields) ? item.matchedFields : [],
+        })),
+      };
+    }
+    if (operation === 'neighbors') {
+      const nodes = Array.isArray(value?.nodes) ? value.nodes : [];
+      return {
+        fromLocalId: value?.from?.localId ?? null,
+        depth: value?.depth ?? null,
+        direction: value?.direction ?? null,
+        nodeCount: nodes.length,
+        nodeLocalIds: nodes.slice(0, 32).map((item) => item?.ref?.localId ?? null),
+        nodeDepths: nodes.slice(0, 32).map((item) => ({ localId: item?.ref?.localId ?? null, depth: item?.depth ?? null })),
+        edgeCount: Array.isArray(value?.edges) ? value.edges.length : null,
+        unresolvedCount: Array.isArray(value?.unresolved) ? value.unresolved.length : null,
+        complete: value?.complete ?? null,
+      };
+    }
+    if (operation === 'shortestPath') {
+      const refs = Array.isArray(value?.refs) ? value.refs : [];
+      const nodes = Array.isArray(value?.nodes) ? value.nodes : [];
+      return {
+        status: value?.status ?? null,
+        fromLocalId: refs[0]?.localId ?? null,
+        toLocalId: refs.at(-1)?.localId ?? null,
+        pathLocalIds: refs.map((ref) => ref?.localId ?? null),
+        pathLabels: nodes.map((node) => node?.label ?? null),
+        hops: value?.hops ?? null,
+        edgeCount: Array.isArray(value?.edges) ? value.edges.length : null,
+        complete: value?.complete ?? null,
+      };
+    }
+    return {};
+  };
   const send = (metric) => {
     try { window.top.postMessage({ tag: 'atlas-perf/v1', metric: { ...metric, frameNow: performance.now() } }, '*'); } catch { /* closing frame */ }
   };
@@ -37,7 +82,9 @@ function instrumentWorkers() {
         this.__atlasStarts.delete(key);
         send({ kind: 'response', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin,
           operation: start.operation, durationMs: performance.now() - start.time,
-          nodeCount: start.nodeCount, edgeCount: start.edgeCount });
+          nodeCount: start.nodeCount, edgeCount: start.edgeCount,
+          ...start.details, ok: message?.ok ?? null, errorCode: message?.error?.code ?? null,
+          ...summarizeResponse(start.operation, message?.value) });
       });
     }
     postMessage(message, ...transfer) {
@@ -46,8 +93,15 @@ function instrumentWorkers() {
       if (operation && key !== undefined) {
         const nodeCount = Array.isArray(message.nodes) ? message.nodes.length : Array.isArray(message.input?.nodes) ? message.input.nodes.length : null;
         const edgeCount = Array.isArray(message.edges) ? message.edges.length : Array.isArray(message.input?.edges) ? message.input.edges.length : null;
-        this.__atlasStarts.set(key, { operation, nodeCount, edgeCount, time: performance.now() });
-        send({ kind: 'request', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin, operation, nodeCount, edgeCount });
+        const details = operation === 'search' ? { query: message.options?.query ?? null }
+          : operation === 'neighbors' ? { fromLocalId: message.from?.localId ?? null, depth: message.depth ?? null,
+            direction: message.direction ?? null, limit: message.limit ?? null }
+            : operation === 'shortestPath' ? { fromLocalId: message.options?.from?.localId ?? null,
+              toLocalId: message.options?.to?.localId ?? null, direction: message.options?.direction ?? 'both',
+              maxHops: message.options?.maxHops ?? null, maxVisited: message.options?.maxVisited ?? null } : {};
+        this.__atlasStarts.set(key, { operation, nodeCount, edgeCount, details, time: performance.now() });
+        send({ kind: 'request', workerId: this.__atlasId, workerUrl: this.__atlasUrl, origin: location.origin,
+          operation, nodeCount, edgeCount, ...details });
       }
       return super.postMessage(message, ...transfer);
     }
@@ -112,11 +166,26 @@ async function coldReopen(context, page, workspaceId) {
   const elapsedMs = performance.now() - started;
   const resources = await atlas.frame.evaluate(() => performance.getEntriesByType('resource')
     .filter((entry) => /\.(?:js|css)(?:\?|$)/i.test(entry.name))
-    .map((entry) => ({ asset: new URL(entry.name).pathname.split('/').at(-1), durationMs: entry.duration,
+    .map((entry) => ({ asset: new URL(entry.name).pathname.split('/').at(-1), startTimeMs: entry.startTime,
+      responseEndMs: entry.responseEnd, durationMs: entry.duration,
       transferBytes: Number.isFinite(entry.transferSize) ? entry.transferSize : null,
       decodedBytes: Number.isFinite(entry.decodedBodySize) ? entry.decodedBodySize : null })));
+  assert.ok(resources.length > 0, 'Cold first-visible samples must separately record the loaded Atlas JavaScript and CSS resources.');
+  const resourceStarts = resources.map((entry) => entry.startTimeMs);
+  const resourceEnds = resources.map((entry) => entry.responseEndMs);
+  const resourceTiming = {
+    scriptAndStyleAssetCount: resources.length,
+    scriptStyleRequestWindowMs: resourceStarts.length && resourceEnds.length
+      ? Math.max(...resourceEnds) - Math.min(...resourceStarts) : null,
+    summedRequestDurationMs: resources.reduce((total, entry) => total + entry.durationMs, 0),
+    transferredBytes: resources.every((entry) => entry.transferBytes !== null)
+      ? resources.reduce((total, entry) => total + entry.transferBytes, 0) : null,
+    decodedBytes: resources.every((entry) => entry.decodedBytes !== null)
+      ? resources.reduce((total, entry) => total + entry.decodedBytes, 0) : null,
+    durationNote: 'Per-resource Resource Timing values are reported separately; their sum is not wall time and is not subtracted from the cold first-visible measurement.',
+  };
   await cdp.detach();
-  return { atlas, elapsedMs, firstVisibleNode: await firstNode.innerText(), resources };
+  return { atlas, elapsedMs, firstVisibleNode: await firstNode.innerText(), browserCacheClearedBeforeReload: true, resources, resourceTiming };
 }
 
 async function readMetrics(page) { return page.evaluate(() => window.__atlasPerfStore ?? []); }
@@ -269,16 +338,42 @@ async function connectStory(page, atlas) {
   await atlas.locator.getByRole('button', { name: '選択したProviderを接続' }).click();
 }
 
-async function searchThirty(page, atlas, origin) {
-  const before = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'search').length;
-  const queries = Array.from({ length: 30 }, (_, index) => ['計測対象', 'benchmark', `group-${String(index % 100).padStart(2, '0')}`, 'character'][index % 4]);
+async function searchThirty(page, atlas, origin, nodeCount) {
   const search = atlas.locator.getByLabel('Providerスナップショットを検索');
-  for (let index = 0; index < queries.length; index += 1) {
-    await search.fill(queries[index]);
-    await waitResponses(page, origin, 'search', before + index + 1);
+  const classes = [
+    { id: 'japaneseNameSubstring', field: 'name', queryAt: (index) => ['計測対象', '計測', '対象'][index % 3], expectedMatches: () => nodeCount },
+    { id: 'tag', field: 'tag', queryAt: (index) => index % 2 === 0 ? 'benchmark' : `group-${String(Math.floor(index / 2) % 100).padStart(2, '0')}`,
+      expectedMatches: (query) => query === 'benchmark' ? nodeCount : nodeCount / 100 },
+    { id: 'type', field: 'type', queryAt: (index) => index % 2 === 0 ? 'character' : 'story.character', expectedMatches: () => nodeCount },
+  ];
+  const byClass = {};
+  const allDurations = [];
+  for (const queryClass of classes) {
+    const before = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'search').length;
+    const samples = [];
+    for (let index = 0; index < 30; index += 1) {
+      const query = queryClass.queryAt(index);
+      await search.fill(query);
+      await waitResponses(page, origin, 'search', before + index + 1);
+      const response = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'search').slice(before + index, before + index + 1)[0];
+      const expectedMatches = queryClass.expectedMatches(query);
+      assert.ok(response, `${queryClass.id} query ${query} must produce a measured Worker response.`);
+      assert.equal(response.ok, true, `${queryClass.id} query ${query} must succeed in the Graph Worker.`);
+      assert.equal(response.query, query, 'The measured Worker response must correspond to the submitted search query.');
+      assert.equal(response.totalMatches, expectedMatches, `${queryClass.id} query ${query} must return the deterministic match count.`);
+      assert.equal(response.resultCount, Math.min(expectedMatches, 1_000), `${queryClass.id} query ${query} must return the expected capped result page.`);
+      assert.equal(response.complete, expectedMatches <= 1_000, `${queryClass.id} query ${query} must report whether its result page is complete.`);
+      assert.ok(response.firstMatches?.some((item) => item.matchedFields.includes(queryClass.field)),
+        `${queryClass.id} query ${query} must identify the expected indexed field (${queryClass.field}).`);
+      samples.push({ query, durationMs: response.durationMs, totalMatches: response.totalMatches,
+        resultCount: response.resultCount, complete: response.complete, firstMatch: response.firstMatches[0] ?? null });
+    }
+    const durationsMs = samples.map((sample) => sample.durationMs);
+    assert.equal(durationsMs.length, 30, `${queryClass.id} must provide 30 warmed samples.`);
+    allDurations.push(...durationsMs);
+    byClass[queryClass.id] = { field: queryClass.field, samples, measured: durationsMs.length, durationsMs, p95Ms: p95(durationsMs) };
   }
-  const values = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'search').slice(before).map((item) => item.durationMs);
-  return { queries, durationsMs: values, measured: values.length, p95Ms: p95(values) };
+  return { byClass, durationsMs: allDurations, measured: allDurations.length, p95Ms: p95(allDurations), samplesPerClass: 30 };
 }
 
 async function addProviderNode(atlas, id) {
@@ -290,26 +385,94 @@ async function addProviderNode(atlas, id) {
 
 async function measureTraversal(page, atlas, origin) {
   await addProviderNode(atlas, 'perf-node-00000');
-  await addProviderNode(atlas, 'perf-node-00001');
+  await addProviderNode(atlas, 'perf-node-00010');
+  await atlas.frame.waitForFunction(() => [...document.querySelectorAll('button')]
+    .some((button) => button.textContent?.trim() === '入力方向 1段' && !button.disabled), null,
+  { timeout: 30_000 });
   const from = atlas.locator.getByLabel('経路の始点');
   const to = atlas.locator.getByLabel('経路の終点');
-  const ids = await from.locator('option').evaluateAll((items) => items.slice(1).map((option) => option.value));
-  assert.equal(ids.length, 2);
-  await from.selectOption(ids[0]);
-  await to.selectOption(ids[1]);
-  const before = await readMetrics(page);
-  const startNeighbors = before.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'neighbors').length;
-  const startPaths = before.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'shortestPath').length;
-  for (let index = 0; index < 30; index += 1) {
-    await atlas.locator.getByRole('button', { name: '双方向 3段', exact: true }).click();
-    await waitResponses(page, origin, 'neighbors', startNeighbors + index + 1);
-    await atlas.locator.getByRole('button', { name: '最短経路を検索', exact: true }).click();
-    await waitResponses(page, origin, 'shortestPath', startPaths + index + 1);
+  const pathOptions = await from.locator('option').evaluateAll((items) => items.map((option) => ({ value: option.value, label: option.textContent?.trim() ?? '' })));
+  const fromOption = pathOptions.find((option) => option.label === '計測対象 00000');
+  const toOption = pathOptions.find((option) => option.label === '計測対象 00010');
+  assert.ok(fromOption && toOption, 'The nontrivial path endpoints must both be present in the real board UI.');
+  await from.selectOption(fromOption.value);
+  await to.selectOption(toOption.value);
+
+  const neighborWorkloads = [
+    { id: 'depth1-in', depth: 1, direction: 'in', button: '入力方向 1段',
+      expectedNodeDepths: [['perf-node-00008', 1], ['perf-node-00009', 1]] },
+    { id: 'depth2-out', depth: 2, direction: 'out', button: '出力方向 2段',
+      expectedNodeDepths: [['perf-node-00011', 1], ['perf-node-00012', 1], ['perf-node-00013', 2], ['perf-node-00014', 2]] },
+    { id: 'depth3-both', depth: 3, direction: 'both', button: '双方向 3段',
+      expectedNodeDepths: [['perf-node-00004', 3], ['perf-node-00005', 3], ['perf-node-00006', 2], ['perf-node-00007', 2],
+        ['perf-node-00008', 1], ['perf-node-00009', 1], ['perf-node-00011', 1], ['perf-node-00012', 1], ['perf-node-00013', 2],
+        ['perf-node-00014', 2], ['perf-node-00015', 3], ['perf-node-00016', 3]] },
+  ];
+  const beforeNeighbors = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'neighbors').length;
+  const neighborEvidence = {};
+  let nextNeighbor = 0;
+  for (const workload of neighborWorkloads) {
+    const durationsMs = [];
+    const samples = [];
+    for (let index = 0; index < 30; index += 1) {
+      await atlas.locator.getByRole('button', { name: workload.button, exact: true }).click();
+      nextNeighbor += 1;
+      await waitResponses(page, origin, 'neighbors', beforeNeighbors + nextNeighbor);
+      const response = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'neighbors').slice(beforeNeighbors + nextNeighbor - 1, beforeNeighbors + nextNeighbor)[0];
+      assert.ok(response, `${workload.id} must produce a measured Graph Worker response.`);
+      assert.equal(response.ok, true, `${workload.id} must succeed in the Graph Worker.`);
+      assert.equal(response.fromLocalId, 'perf-node-00010', `${workload.id} must traverse from the deterministic center node.`);
+      assert.equal(response.depth, workload.depth);
+      assert.equal(response.direction, workload.direction);
+      assert.equal(response.limit, 5_000, `${workload.id} must retain the production bounded-result limit.`);
+      assert.ok(response.nodeCount <= response.limit, `${workload.id} must not exceed the Worker result bound.`);
+      assert.equal(response.complete, true, `${workload.id} must report the bounded result as complete.`);
+      assert.equal(response.unresolvedCount, 0, `${workload.id} must return resolved deterministic nodes.`);
+      assert.ok(response.nodeDepths.every((item) => item.depth >= 1 && item.depth <= workload.depth), `${workload.id} must respect its hop depth.`);
+      const actualNodeDepths = response.nodeDepths.map((item) => [item.localId, item.depth]).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+      assert.deepEqual(actualNodeDepths, workload.expectedNodeDepths, `${workload.id} must return the expected bounded ring neighbors at their shortest depths.`);
+      durationsMs.push(response.durationMs);
+      samples.push({ durationMs: response.durationMs, nodeCount: response.nodeCount, complete: response.complete,
+        nodeLocalIds: response.nodeLocalIds, nodeDepths: response.nodeDepths });
+    }
+    assert.equal(durationsMs.length, 30, `${workload.id} must provide 30 warmed samples.`);
+    neighborEvidence[workload.id] = { direction: workload.direction, depth: workload.depth, resultLimit: 5_000,
+      expectedNodeCount: workload.expectedNodeDepths.length, expectedNodeDepths: workload.expectedNodeDepths,
+      measured: durationsMs.length, durationsMs, p95Ms: p95(durationsMs), samples };
   }
-  const after = await readMetrics(page);
-  const neighbors = after.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'neighbors').slice(startNeighbors).map((item) => item.durationMs);
-  const paths = after.filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'shortestPath').slice(startPaths).map((item) => item.durationMs);
-  return { neighbors: { measured: neighbors.length, durationsMs: neighbors, p95Ms: p95(neighbors) }, shortestPath: { measured: paths.length, durationsMs: paths, p95Ms: p95(paths) } };
+
+  const beforePaths = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'shortestPath').length;
+  const expectedPath = ['perf-node-00000', 'perf-node-00002', 'perf-node-00004', 'perf-node-00006', 'perf-node-00008', 'perf-node-00010'];
+  const expectedLabels = ['計測対象 00000', '計測対象 00002', '計測対象 00004', '計測対象 00006', '計測対象 00008', '計測対象 00010'];
+  const pathDurations = [];
+  const pathSamples = [];
+  for (let index = 0; index < 30; index += 1) {
+    await atlas.locator.getByRole('button', { name: '最短経路を検索', exact: true }).click();
+    await waitResponses(page, origin, 'shortestPath', beforePaths + index + 1);
+    const response = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === origin && item.operation === 'shortestPath').slice(beforePaths + index, beforePaths + index + 1)[0];
+    assert.ok(response, 'The bounded shortest-path workload must produce a measured Graph Worker response.');
+    assert.equal(response.ok, true, 'The shortest-path workload must succeed in the Graph Worker.');
+    assert.equal(response.fromLocalId, 'perf-node-00000');
+    assert.equal(response.toLocalId, 'perf-node-00010');
+    assert.equal(response.direction, 'both');
+    assert.equal(response.maxHops, 64);
+    assert.equal(response.maxVisited, 10_000);
+    assert.equal(response.status, 'found');
+    assert.equal(response.complete, true);
+    assert.equal(response.hops, 5, 'The selected endpoints must require a nontrivial five-hop path.');
+    assert.equal(response.edgeCount, 5);
+    assert.deepEqual(response.pathLocalIds, expectedPath, 'Shortest path must traverse the deterministic ring content.');
+    assert.deepEqual(response.pathLabels, expectedLabels, 'Shortest path must contain the expected Story node labels.');
+    pathDurations.push(response.durationMs);
+    pathSamples.push({ durationMs: response.durationMs, status: response.status, hops: response.hops,
+      pathLocalIds: response.pathLocalIds, pathLabels: response.pathLabels });
+  }
+  assert.equal(pathDurations.length, 30, 'Shortest path must provide 30 warmed samples.');
+  const allNeighborDurations = Object.values(neighborEvidence).flatMap((workload) => workload.durationsMs);
+  return {
+    neighbors: { measured: allNeighborDurations.length, durationsMs: allNeighborDurations, p95Ms: p95(allNeighborDurations), samplesPerDepth: 30, byDepth: neighborEvidence },
+    shortestPath: { measured: pathDurations.length, durationsMs: pathDurations, p95Ms: p95(pathDurations), maxHops: 64, maxVisited: 10_000, samples: pathSamples },
+  };
 }
 
 export async function runPerformanceCases({ browser, baseUrl, unzipSync, archives, datasets, record }) {
@@ -320,7 +483,9 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       const { context, page, workspaceId } = await createPage(browser, baseUrl, archives.oneK);
       try {
         const cold = await coldReopen(context, page, workspaceId);
-        samples.push({ elapsedMs: cold.elapsedMs, firstVisibleNode: cold.firstVisibleNode, resources: cold.resources });
+        samples.push({ elapsedMs: cold.elapsedMs, firstVisibleNode: cold.firstVisibleNode,
+          browserCacheClearedBeforeReload: cold.browserCacheClearedBeforeReload,
+          resourceTiming: cold.resourceTiming, resources: cold.resources });
         if (index === 0) {
           await connectStory(page, cold.atlas);
           await cold.atlas.locator.locator('.atlas-status-inline').filter({ hasText: 'ノード 1000 件、エッジ 2000 件' }).waitFor({ timeout: 120_000 });
@@ -330,8 +495,12 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
           assert.equal(indexResult.nodeCount, 1_000);
           assert.equal(indexResult.edgeCount, 2_000);
           assert.ok(indexResult.durationMs <= 10_000, `1k Graph Worker index took ${indexResult.durationMs}ms`);
-          const searches = await searchThirty(page, cold.atlas, cold.atlas.origin);
-          assert.equal(searches.measured, 30, 'the 1k search benchmark must complete all 30 queries');
+          const searches = await searchThirty(page, cold.atlas, cold.atlas.origin, 1_000);
+          assert.equal(searches.measured, 90, 'the 1k Japanese, tag and type search classes must each complete 30 queries');
+          for (const [searchClass, evidence] of Object.entries(searches.byClass)) {
+            assert.equal(evidence.measured, 30, `the 1k ${searchClass} search class must provide 30 measurements`);
+            assert.ok(evidence.p95Ms <= 100, `1k ${searchClass} search p95 ${evidence.p95Ms}ms exceeds 100ms`);
+          }
           const before = (await readMetrics(page)).filter((item) => item.kind === 'response' && item.origin === cold.atlas.origin && item.operation === 'layout-force').length;
           await cold.atlas.locator.getByRole('button', { name: '力学レイアウト', exact: true }).click();
           await waitResponses(page, cold.atlas.origin, 'layout-force', before + 1);
@@ -350,11 +519,13 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
     const coldP95Ms = p95(times);
     assert.equal(samples.length, 5);
     assert.ok(coldP95Ms <= 3_000, `1k cold first-visible p95 ${coldP95Ms}ms exceeds 3000ms`);
-    assert.equal(queryEvidence?.search?.measured, 30, 'the 1k search benchmark must provide 30 measurements');
+    assert.equal(queryEvidence?.search?.measured, 90, 'the 1k search benchmark must provide 30 measurements per indexed field class');
     assert.ok(queryEvidence.search.p95Ms <= 100, `1k search p95 ${queryEvidence.search.p95Ms}ms exceeds 100ms`);
     assert.ok(queryEvidence?.forceLayout, 'the 1k Force layout benchmark must provide a Worker response');
     assert.ok(queryEvidence.forceLayout.durationMs <= 2_000, `1k Force layout took ${queryEvidence.forceLayout.durationMs}ms`);
-    return { dataset: datasets.oneK, samples, coldFirstVisibleP95Ms: coldP95Ms, coldFirstVisibleLimitMs: 3_000, ...queryEvidence };
+    return { dataset: datasets.oneK, samples, coldFirstVisibleP95Ms: coldP95Ms, coldFirstVisibleLimitMs: 3_000,
+      coldFirstVisibleTimingScope: 'Host reload/open plus Atlas first-visible node, including JS/CSS transfer; per-resource timings are reported separately without subtracting them from this target.',
+      ...queryEvidence };
   });
 
   await record('Q12-1k-force-layout-cancel-ack', async () => {
@@ -412,11 +583,19 @@ export async function runPerformanceCases({ browser, baseUrl, unzipSync, archive
       assert.equal(indexResult.nodeCount, 10_000);
       assert.equal(indexResult.edgeCount, 20_000);
       assert.ok(indexResult.durationMs <= 10_000, `10k index took ${indexResult.durationMs}ms`);
-      const searches = await searchThirty(page, atlas, atlas.origin);
+      const searches = await searchThirty(page, atlas, atlas.origin, 10_000);
       const traversal = await measureTraversal(page, atlas, atlas.origin);
-      assert.equal(searches.measured, 30);
+      assert.equal(searches.measured, 90, 'the 10k Japanese, tag and type search classes must each complete 30 queries');
+      for (const [searchClass, evidence] of Object.entries(searches.byClass)) {
+        assert.equal(evidence.measured, 30, `the 10k ${searchClass} search class must provide 30 measurements`);
+        assert.ok(evidence.p95Ms <= 250, `10k ${searchClass} search p95 ${evidence.p95Ms}ms exceeds 250ms`);
+      }
       assert.ok(searches.p95Ms <= 250, `10k search p95 ${searches.p95Ms}ms exceeds 250ms`);
       assert.ok(traversal.neighbors.p95Ms <= 500, `10k neighbors p95 ${traversal.neighbors.p95Ms}ms exceeds 500ms`);
+      for (const [depth, evidence] of Object.entries(traversal.neighbors.byDepth)) {
+        assert.equal(evidence.measured, 30, `10k neighbor ${depth} must provide 30 measurements`);
+        assert.ok(evidence.p95Ms <= 500, `10k neighbor ${depth} p95 ${evidence.p95Ms}ms exceeds 500ms`);
+      }
       assert.ok(traversal.shortestPath.p95Ms <= 500, `10k path p95 ${traversal.shortestPath.p95Ms}ms exceeds 500ms`);
       const heap = await readHeap(atlas.frame);
       const disabledAt = Date.now();
