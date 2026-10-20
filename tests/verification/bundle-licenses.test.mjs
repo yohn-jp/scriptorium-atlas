@@ -32,7 +32,7 @@ test('writes exact bundled dependency legal text with a verifiable digest', asyn
       repoRoot: setup.root,
       profile: 'story',
       outputDirectory: setup.outputDirectory,
-      closure: { chunks: [{ file: 'assets/index.js', modules: [setup.module] }] }
+      closure: { chunks: [{ file: 'assets/index.js', modules: [setup.module, '<virtual>worker-url:/not-a-package/node_modules/generated/entry.js'] }] }
     });
     assert.equal(result.packageCount, 1);
     const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'));

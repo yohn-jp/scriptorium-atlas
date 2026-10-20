@@ -33,7 +33,7 @@ function modulePaths(closure) {
     assert.ok(Array.isArray(chunk.modules), `closure chunk ${chunk.file ?? '<unknown>'} must contain module paths`);
     for (const module of chunk.modules) {
       const path = typeof module === 'string' ? module : module?.path ?? module?.id ?? module?.source;
-      if (typeof path === 'string' && path && !path.startsWith('\0') && !path.startsWith('virtual:')) paths.push(path);
+      if (typeof path === 'string' && path && !path.startsWith('\0') && !path.startsWith('virtual:') && !path.startsWith('<virtual>')) paths.push(path);
     }
   }
   return [...new Set(paths)].sort();
