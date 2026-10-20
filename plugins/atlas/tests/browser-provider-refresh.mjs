@@ -201,7 +201,11 @@ async function run() {
     await commitAtlasUntilClean(page, atlas);
     await atlas.getByLabel('Providerを選択').selectOption('scriptorium.story-knowledge');
     await atlas.getByRole('button', { name: '選択したProviderを接続' }).click();
-    await atlas.locator('.atlas-status-inline').filter({ hasText: 'ノード 2 件' }).waitFor({ state: 'visible', timeout: 30000 });
+    try {
+      await atlas.locator('.atlas-status-inline').filter({ hasText: 'ノード 2 件' }).waitFor({ state: 'visible', timeout: 30000 });
+    } catch {
+      throw new Error(`Provider connect did not report two nodes: status=${JSON.stringify(await atlas.locator('.atlas-status-inline').allTextContents())}; errors=${JSON.stringify(await atlas.getByRole('alert').allTextContents())}; pageErrors=${JSON.stringify(pageErrors)}`);
+    }
     await addProviderNode(page, atlas, originalName);
     await addProviderNode(page, atlas, deletedName);
     let board = await downloadBoard(page, atlas);

@@ -218,7 +218,7 @@ async function run() {
     await atlas.locator('.atlas-status-inline').filter({ hasText: 'ノード 2 件' }).waitFor({ state: 'visible', timeout: 30000 });
     report.cases.push('connect-real-story-provider-snapshot');
 
-    for (const [query, field] of [[alias, '別名'], [tag, 'タグ'], ['story.character', '種類'], ['bible/characters', 'パス']]) {
+    for (const [query, field] of [[firstName, '名前'], [alias, '別名'], [tag, 'タグ'], ['story.character', '種類'], ['bible/characters', 'パス']]) {
       const hits = await searchProvider(atlas, query, field);
       assert.ok((await hits.first().locator('small').innerText()).includes(field), `Provider search for ${field} should identify the matched field.`);
     }
@@ -257,9 +257,18 @@ async function run() {
     await atlas.getByLabel('経路の終点').selectOption(secondNode.id);
     await atlas.getByRole('button', { name: '最短経路を検索' }).click();
     await atlas.getByRole('status').filter({ hasText: '最短経路 1ホップ' }).waitFor({ state: 'visible' });
-    await atlas.getByRole('button', { name: '双方向 3段' }).click();
-    await atlas.getByRole('status').filter({ hasText: '近傍を表示しました' }).waitFor({ state: 'visible' });
-    report.cases.push('provider-shortest-path-and-neighbor-focus');
+    for (const [buttonName, count] of [['入力方向 1段', 0], ['出力方向 2段', 1], ['双方向 3段', 1]]) {
+      await atlas.getByRole('button', { name: buttonName }).click();
+      await atlas.locator('.atlas-analysis').filter({ hasText: `${count} 件の近傍を表示しました` }).waitFor({ state: 'visible' });
+    }
+    await atlas.getByRole('button', { name: '連結成分をグループ化' }).click();
+    await atlas.locator('.atlas-analysis').filter({ hasText: '連結成分' }).waitFor({ state: 'visible' });
+    await commitAtlasUntilClean(page, atlas);
+    board = await downloadBoard(page, atlas);
+    const componentNodes = board.nodes.filter((node) => node.id === firstNode.id || node.id === secondNode.id);
+    assert.equal(componentNodes.length, 2);
+    assert.ok(componentNodes[0]?.groupId && componentNodes[0].groupId === componentNodes[1]?.groupId, 'Weak-component grouping should persist one group for the connected Story nodes.');
+    report.cases.push('provider-shortest-path-all-neighbor-directions-depths-and-component-grouping');
 
     const idHits = await searchProvider(atlas, firstNode.ref.localId, 'ID');
     const idHit = idHits.filter({ hasText: firstName }).first();
@@ -267,14 +276,25 @@ async function run() {
     assert.ok((await idHit.locator('small').innerText()).includes('ID'), 'Provider local ID should be searchable.');
     await atlas.getByLabel('Providerスナップショットを検索').fill('');
     const boardFilter = atlas.getByLabel('ボード内を絞り込む');
-    await boardFilter.fill(firstName);
-    await boardFilter.press('Tab');
-    await atlas.locator('.react-flow__node').filter({ hasText: firstName }).waitFor({ state: 'visible' });
-    assert.equal(await atlas.locator('.react-flow__node').count(), 1, 'Board text filtering should reveal the matching node only.');
-    await boardFilter.fill('');
-    await boardFilter.press('Tab');
+    const boardFilterCases = [
+      [firstName, [firstNode.id]],
+      [firstNode.ref.localId, [firstNode.id]],
+      [alias, [firstNode.id]],
+      [tag, [firstNode.id]],
+      ['story.character', [firstNode.id, secondNode.id]],
+      ['bible/characters', [firstNode.id, secondNode.id]],
+    ];
+    for (const [query, expectedIds] of boardFilterCases) {
+      await boardFilter.fill(query);
+      await boardFilter.press('Tab');
+      await atlas.locator('.react-flow__node').first().waitFor({ state: 'visible' });
+      const visibleNodeIds = await atlas.locator('.react-flow__node').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-id')).sort());
+      assert.deepEqual(visibleNodeIds, [...expectedIds].sort(), `Board filtering for ${query} should reveal its matching nodes only.`);
+      await boardFilter.fill('');
+      await boardFilter.press('Tab');
+    }
     await commitAtlasUntilClean(page, atlas);
-    report.cases.push('search-by-provider-id-and-filter-board-nodes');
+    report.cases.push('search-by-provider-id-and-board-name-id-alias-tag-type-path-filters');
 
     const flow = atlas.locator('.atlas-graph-flow');
     await marqueeSelect(page, flow, [graphNodeOne, graphNodeTwo]);
@@ -345,7 +365,9 @@ async function run() {
     let visualEdges = board.edges.filter((edge) => edge.meaning === 'visual');
     assert.equal(visualEdges.length, 1, 'The keyboard-accessible inspector should create one visual edge.');
     const keyboardEdgeId = visualEdges[0]?.id;
-    assert.ok(keyboardEdgeId);
+    assert.ok(keyboardEdgeId && keyboardEdgeId !== firstNode.id && keyboardEdgeId !== firstNode.ref.localId && keyboardEdgeId !== secondNode.ref.localId,
+      'Visual edge identity must remain separate from Board node IDs and provider ref IDs.');
+    assert.equal(visualEdges[0]?.ref, undefined, 'A visual edge must not be assigned a semantic provider ref.');
     const keyboardEdgeLabel = atlas.getByLabel('エッジのラベル');
     await keyboardEdgeLabel.fill('Keyboard-created Atlas edge');
     await keyboardEdgeLabel.press('Tab');
@@ -398,7 +420,11 @@ async function run() {
     ];
     for (const [buttonName, statusPattern] of layoutCases) {
       await atlas.getByRole('button', { name: buttonName }).click();
-      await atlas.locator('.atlas-notice').filter({ hasText: statusPattern }).waitFor({ state: 'visible', timeout: 20000 });
+      try {
+        await atlas.locator('.atlas-notice').filter({ hasText: statusPattern }).waitFor({ state: 'visible', timeout: 20000 });
+      } catch {
+        throw new Error(`Layout ${buttonName} did not complete: notices=${JSON.stringify(await atlas.locator('.atlas-notice').allTextContents())}; statuses=${JSON.stringify(await atlas.getByRole('status').allTextContents())}`);
+      }
       await commitAtlasUntilClean(page, atlas);
     }
     board = await downloadBoard(page, atlas);
