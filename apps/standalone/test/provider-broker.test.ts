@@ -19,6 +19,7 @@ function fixture(providerId: string) {
     epoch: 7, workspaceId: workspace.workspaceId,
     snapshot: async value => ({workspaceId:value.workspaceId,sourceRevision:value.sourceRevision,epoch:7,providerRevision:`${providerId}:r1`}),
     grants: [{capability:'graph.read'}],
+    fail: () => {},
     async call(request) {
       requests.push(request);
       let result: unknown;

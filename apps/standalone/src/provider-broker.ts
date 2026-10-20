@@ -1,10 +1,12 @@
 import { assertContract, type PluginProviderRequest, type ProviderGrant, type ProviderLease, type ProviderRequest, type ProviderRpcResponse, type SnapshotRef, type WorkspaceHandle } from '@scriptorium-atlas/contracts';
+import { assertProviderRequestScope, assertProviderResultScope } from './provider-scope.js';
 
 export type FrameProviderConnection = {
   epoch: number;
   workspaceId: string;
   snapshot(workspace: WorkspaceHandle): Promise<SnapshotRef>;
   grants: ProviderGrant[];
+  fail(reason: string): void;
   call(request: ProviderRequest, deadline: number): Promise<ProviderRpcResponse>;
 };
 const connections = new Map<string, FrameProviderConnection>();
@@ -52,6 +54,7 @@ export async function acquireProvider(owner: string, providerId: string, workspa
 export async function callProvider(owner: string, leaseId: string, request: PluginProviderRequest) {
   const entry = leases.get(leaseId);
   if (!entry || entry.owner !== owner || connections.get(entry.providerId) !== entry.connection) throw new Error('PERMISSION_DENIED: 有効なleaseがありません');
+  assertProviderRequestScope(entry.providerId, request);
   const routed = {...request, params: {...request.params, handle: entry.handle}};
   assertContract('providerRequest', routed);
   const response = await entry.connection.call(routed, Date.now() + 5000);
@@ -59,6 +62,18 @@ export async function callProvider(owner: string, leaseId: string, request: Plug
   if (!response.ok) throw Object.assign(new Error(response.error.message), {code: response.error.code});
   assertContract('providerResult', response.result);
   if (response.result.snapshot.workspaceId !== entry.lease.snapshot.workspaceId || response.result.snapshot.sourceRevision !== entry.lease.snapshot.sourceRevision || response.result.snapshot.providerRevision !== entry.lease.snapshot.providerRevision || response.result.snapshot.epoch !== entry.lease.snapshot.epoch) throw new Error('SNAPSHOT_STALE');
+  try {
+    assertProviderResultScope({providerId:entry.providerId,snapshot:entry.lease.snapshot,grants:entry.connection.grants,
+      foreignProviderAllowed: providerId => {
+        const target = connections.get(providerId);
+        return !!target && target.workspaceId === entry.lease.snapshot.workspaceId
+          && target.grants.some(grant => grant.capability === 'graph.read')
+          && target.grants.some(grant => grant.capability === 'workspace.files.read' && !!grant.paths?.length);
+      }}, request, response.result);
+  } catch (error) {
+    entry.connection.fail(`PROTOCOL_INVALID: ${String(error)}`);
+    throw error;
+  }
   return response.result;
 }
 

@@ -118,7 +118,7 @@ export function PluginFrame(props: Props) {
       port.current.start();
       child.postMessage({type:'atlas.frame.init',nonce:session.nonce,epoch:session.epoch}, {targetOrigin:origin,transfer:[channel.port2]});
       if (props.plugin === 'story') unregister = registerProvider(pluginId, {
-        epoch:session.epoch,workspaceId:props.workspace.workspaceId,call:providerCall,
+        epoch:session.epoch,workspaceId:props.workspace.workspaceId,call:providerCall,fail,
         snapshot: async workspace => ({workspaceId:workspace.workspaceId,sourceRevision:workspace.sourceRevision,epoch:session.epoch,
           providerRevision:`story-v1:${await sha256(new TextEncoder().encode(workspace.sourceRevision))}`}),
         grants:[{capability:'workspace.files.metadata',paths:['bible/','plot/','manuscript/']},{capability:'workspace.files.read',paths:['bible/','plot/','manuscript/']},{capability:'graph.read'}],

@@ -25,6 +25,9 @@ try {
       }
       if (message?.type === 'atlas.provider.response') {
         if (globalThis.__providerDropResponses) return;
+        if (globalThis.__providerTamperSource && message.ok && message.method === 'listNodes' && message.result.items[0]) {
+          message.result.items[0].source.path = '../private.yaml';
+        }
         if (globalThis.__providerDelayOpen && message.method === 'open') {
           globalThis.__providerDelayedOpens++;
           setTimeout(() => original.call(this, message, ...args), 6000);
@@ -47,8 +50,18 @@ try {
   await page.getByLabel('Workspace名').fill('Provider deadline fault');
   await page.getByRole('button', { name: '空のWorkspaceを作成' }).click();
   await page.getByRole('status').filter({ hasText: 'Workspaceを開きました。' }).waitFor();
+  async function openSourcePanel() {
+    const summary = page.getByText('Workspaceのファイル・Source', { exact: true });
+    if (!await summary.evaluate(element => element.parentElement.open)) await summary.click();
+  }
+  await openSourcePanel();
+  await page.getByLabel('相対Path').fill('bible/characters/provider.yaml');
+  await page.getByLabel('Source', { exact: true }).fill('id: char-a\ntype: character\nname: 故障試験の人物\n');
+  await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
+  await page.locator('section[aria-label="変更の承認"] article').getByRole('button', { name: 'この変更を承認してCommit' }).click();
+  await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
   const atlas = await (await page.locator('iframe[title="Atlas"]').elementHandle()).contentFrame();
-  const story = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
+  let story = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
   await atlas.waitForFunction(() => !!globalThis.__providerHostCall && document.body.innerText.length > 100);
   await story.waitForFunction(() => document.body.innerText.includes('ライブラリ'));
   const snapshot = await atlas.evaluate(() => globalThis.__providerHostCall('snapshot', {}));
@@ -63,6 +76,12 @@ try {
   await page.getByRole('checkbox', { name: 'AtlasへStory ProviderとSourceの読取りを許可', exact: true }).check();
   const initial = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
   assert.equal(initial.ok, true, JSON.stringify(initial));
+  const nodes = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall', {
+    leaseId, request: { method: 'listNodes', params: { limit: 100 } }
+  }), initial.result.leaseId);
+  assert.equal(nodes.ok, true, JSON.stringify(nodes));
+  assert.equal(nodes.result.items[0].ref.localId, 'char-a');
+  assert.equal(nodes.result.items[0].source.path, 'bible/characters/provider.yaml');
   await story.evaluate(() => { globalThis.__providerDelayOpen = true; });
   await atlas.evaluate(params => {
     globalThis.__providerOpenResults = Promise.all(Array.from({ length: 4 }, () => globalThis.__providerHostCall('acquireProvider', params)));
@@ -86,13 +105,25 @@ try {
   assert.ok(createdWorkers >= 1, 'real provider acquisition must exercise its actual Worker');
   assert.equal(page.workers().length, 0, 'last lease must terminate the provider Worker');
 
-  await page.getByText('Workspaceのファイル・Source', { exact: true }).click();
+  await openSourcePanel();
   await page.getByLabel('相対Path').fill('notes/provider-fault.md');
   const draft = 'Provider停止中も保持するDraft\n';
   await page.getByLabel('Source', { exact: true }).fill(draft);
   await page.getByRole('button', { name: '変更案を耐久記録して確認' }).click();
   const proposal = page.locator('section[aria-label="変更の承認"] article');
   await proposal.waitFor();
+  const scopeLease = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
+  assert.equal(scopeLease.ok, true);
+  await story.evaluate(() => { globalThis.__providerTamperSource = true; });
+  const spoofed = await atlas.evaluate(leaseId => globalThis.__providerHostCall('providerCall', {
+    leaseId, request: { method: 'listNodes', params: { limit: 100 } }
+  }), scopeLease.result.leaseId);
+  assert.equal(spoofed.ok, false);
+  await page.getByRole('region', { name: 'Story Knowledge Plugin', exact: true }).getByRole('alert').filter({ hasText: 'PROTOCOL_INVALID' }).waitFor();
+  assert.equal(await proposal.count(), 1);
+  await page.getByRole('region', { name: 'Story Knowledge Plugin', exact: true }).getByRole('button', { name: 'Pluginを再起動' }).click();
+  story = await (await page.locator('iframe[title="Story Knowledge"]').elementHandle()).contentFrame();
+  await story.waitForFunction(() => document.body.innerText.includes('ライブラリ'));
   await story.evaluate(() => { globalThis.__providerDropResponses = true; });
   const hung = await atlas.evaluate(params => globalThis.__providerHostCall('acquireProvider', params), openParams);
   assert.equal(hung.error.code, 'TIMEOUT');
@@ -104,5 +135,5 @@ try {
   await page.getByRole('status').filter({ hasText: 'ローカルCommit完了:' }).waitFor();
   console.log(JSON.stringify({ status: 'PASS', browser: browser.version(), baseUrl, queuedCalls: 9, delayedOpens: 4,
     queueDurationMs, createdWorkers, workersAfterLastLease: 0,
-    cases: ['grant denial without Worker', 'static discovery', 'bounded queued deadlines', 'last-lease Worker termination', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
+    cases: ['grant denial without Worker', 'static discovery', 'bounded queued deadlines', 'last-lease Worker termination', 'out-of-scope Provider SourceRef isolates producer', 'hang and ignored cancel isolate provider and preserve Host draft'] }));
 } finally { await context.close(); await browser.close(); }
